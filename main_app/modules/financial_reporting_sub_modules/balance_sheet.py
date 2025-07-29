@@ -18,7 +18,7 @@ def balance_sheet_ui():
     )
 
 
-def register_outputs(output):
+def register_outputs(output, selected_fund, selected_report_date):
     @output
     @data_frame
     def balance_sheet_table():

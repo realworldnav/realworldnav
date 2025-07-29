@@ -16,7 +16,7 @@ def income_statement_ui():
         )
     )
 
-def register_outputs(output):
+def register_outputs(output, selected_fund, selected_report_date):
     @output
     @data_frame
     def income_statement_table():

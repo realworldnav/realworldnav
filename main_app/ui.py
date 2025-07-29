@@ -1,15 +1,6 @@
 from shiny import ui as shiny_ui
 from .modules.financial_reporting import financial_reporting_ui
-
-def fund_accounting_ui():
-    return shiny_ui.page_fluid(
-        shiny_ui.layout_columns(
-            shiny_ui.card("Capital Summary", shiny_ui.output_text_verbatim("capital_summary")),
-            shiny_ui.card("NAV Snapshot", shiny_ui.output_text_verbatim("nav_snapshot")),
-            shiny_ui.card("Pending Alerts", shiny_ui.output_text_verbatim("alert_count"))
-        ),
-        shiny_ui.output_ui("alert_modal")
-    )
+from .modules.fund_accounting import fund_accounting_ui
 
 def inventory_ui():
     return shiny_ui.page_fluid(
@@ -31,7 +22,7 @@ universal_header = shiny_ui.layout_columns(
     shiny_ui.input_date("report_date", "Reporting Date")
 )
 
-ui = shiny_ui.page_fluid(
+app_ui = shiny_ui.page_fluid(
     shiny_ui.navset_bar(
         shiny_ui.nav_panel("Fund Accounting", fund_accounting_ui()),
         shiny_ui.nav_panel("Investments", inventory_ui()),

@@ -9,9 +9,9 @@ from .financial_reporting_sub_modules.income_statement import (
     register_outputs as is_register_outputs
 )
 
-def register_outputs(output):
-    bs_register_outputs(output),
-    is_register_outputs(output)
+def register_outputs(output, selected_fund, selected_report_date):
+    bs_register_outputs(output, selected_fund, selected_report_date)
+    is_register_outputs(output, selected_fund, selected_report_date)
 
     @output
     @render.data_frame
