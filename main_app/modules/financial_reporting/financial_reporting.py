@@ -1,10 +1,10 @@
 from shiny import ui as shiny_ui, render
-from ..s3_utils import load_tb_file
-from .financial_reporting_sub_modules.balance_sheet import (
+from ...s3_utils import load_tb_file
+from .balance_sheet import (
     balance_sheet_ui,
     register_outputs as bs_register_outputs
 )
-from .financial_reporting_sub_modules.income_statement import (
+from .income_statement import (
     income_statement_ui,
     register_outputs as is_register_outputs
 )

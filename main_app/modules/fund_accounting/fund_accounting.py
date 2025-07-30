@@ -3,7 +3,7 @@ from shinywidgets import output_widget, render_plotly
 from faicons import icon_svg
 import pandas as pd
 import plotly.graph_objects as go
-from ..s3_utils import load_tb_file
+from ...s3_utils import load_tb_file
 
 
 # === UI ===

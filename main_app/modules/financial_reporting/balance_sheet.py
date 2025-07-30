@@ -1,6 +1,6 @@
 from shiny import ui as shiny_ui, render
 import pandas as pd
-from ...s3_utils import load_tb_file, load_coa_file
+from ...s3_utils import load_tb_file, load_COA_file
 
 from shiny.render import DataGrid, data_frame
 def balance_sheet_ui():
