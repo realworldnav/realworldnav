@@ -50,7 +50,7 @@ def register_outputs(output, selected_fund, selected_report_date):
         df_tb["Balance"] = pd.to_numeric(df_tb["Balance"], errors="coerce").fillna(0.0).round(6)
 
         # COA
-        df_coa = load_coa_file()
+        df_coa = load_COA_file()
         df_coa["GL_Acct_Number"] = pd.to_numeric(df_coa["GL_Acct_Number"], errors="coerce").astype("Int64")
         coa_map = dict(zip(df_coa["GL_Acct_Number"], df_coa["GL_Acct_Name"]))
         df_tb["Label"] = df_tb["GL_Acct_Number"].map(coa_map).fillna("Unknown")

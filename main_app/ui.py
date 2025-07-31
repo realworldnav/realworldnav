@@ -4,7 +4,7 @@ print("DEBUG — main_app/ui.py loaded")
 
 from .modules.financial_reporting.financial_reporting import financial_reporting_ui
 from .modules.fund_accounting import fund_accounting_ui
-from .modules.general_ledger.general_ledger import general_ledger_ui
+from .modules.general_ledger.ui import general_ledger_ui
 
 def inventory_ui():
     print("DEBUG — inventory_ui() called")

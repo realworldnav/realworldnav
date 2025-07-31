@@ -47,24 +47,48 @@ def load_COA_file(key: str = COA_KEY) -> pd.DataFrame:
     df_coa["GL_Acct_Name"] = df_coa["GL_Acct_Name"].astype(str)
     return df_coa
 
-@lru_cache(maxsize=32)
-def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
-    """Load a TB file from S3 as a DataFrame."""
-    obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
-    content = obj["Body"].read()
-    if key.endswith(".parquet"):
-        return pd.read_parquet(BytesIO(content))
-    elif key.endswith(".xlsx"):
-        return pd.read_excel(BytesIO(content))
-    else:
-        raise ValueError(f"Unsupported file type for key: {key}")
+
     
-def save_GL_file(df: pd.DataFrame, key: str = GL_KEY) -> None:
-    """Save the updated GL DataFrame to S3 as a Parquet file."""
+def save_GL_file(df: pd.DataFrame, key: str = GL_KEY):
+    # Retrieve stored dtypes
+    original_dtypes = df.attrs.get("dtypes")
+    if original_dtypes:
+        for col, dtype in original_dtypes.items():
+            try:
+                df[col] = df[col].astype(dtype)
+            except Exception as e:
+                print(f"⚠️ Could not cast {col} to {dtype}: {e}")
+    else:
+        print("⚠️ No dtypes found in attrs — skipping conversion.")
+
+    # Save to Parquet
     buffer = BytesIO()
     df.to_parquet(buffer, index=False)
     buffer.seek(0)
-    s3.upload_fileobj(buffer, Bucket=BUCKET_NAME, Key=key)
+    s3.put_object(Bucket=BUCKET_NAME, Key=key, Body=buffer.getvalue())
+
+@lru_cache(maxsize=32)
+def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
+    """Load a GL file from S3 as a DataFrame and assign unique transaction IDs."""
+    obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+    content = obj["Body"].read()
+
+    if key.endswith(".parquet"):
+        df = pd.read_parquet(BytesIO(content))
+        df.attrs["dtypes"] = df.dtypes.to_dict()
+    elif key.endswith(".xlsx"):
+        df = pd.read_excel(BytesIO(content))
+    else:
+        raise ValueError(f"Unsupported file type for key: {key}")
+
+    # ✅ Assign unique transaction_id if not already present
+    if "transaction_id" not in df.columns:
+        df = df.reset_index(drop=True)
+        df["transaction_id"] = df.index.astype(str)
+        print("🆕 Assigned transaction_id to GL DataFrame")
+
+    return df
+
 
 def append_audit_log(changes_df: pd.DataFrame, key="drip_capital/gl_edit_log.csv"):
     """Append GL changes to a running audit log in S3."""
@@ -88,12 +112,3 @@ def load_WALLET_file(key: str = WALLET_KEY) -> pd.DataFrame:
     content = obj["Body"].read()
     if key.endswith(".xlsx"):
         return pd.read_excel(BytesIO(content))
-    
-def save_GL_file(df: pd.DataFrame, bucket_name="your-bucket", key="gl/general_ledger.parquet"):
-    buffer = io.BytesIO()
-    df.to_parquet(buffer, index=False)
-    buffer.seek(0)
-
-    s3 = boto3.client("s3")
-    s3.upload_fileobj(buffer, bucket_name, key)
-    print(f"✅ Uploaded GL to s3://{bucket_name}/{key}")

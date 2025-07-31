@@ -1,238 +1,256 @@
 from shiny import reactive, render, req, ui
 import pandas as pd
-from shinywidgets import render_plotly  # ← optional: force shinywidgets plugin
+from shinywidgets import render_plotly, output_widget
+from shiny.render import DataGrid
 from ...s3_utils import load_GL_file, load_WALLET_file, load_COA_file, save_GL_file
+from plotly.graph_objects import Table, Figure
 
-
+DEFAULT_COLUMNS = [
+    'transaction_id', "date", "transaction_type", "wallet_id", "cryptocurrency",
+    "account_name", "debit_crypto", "credit_crypto", "eth_usd_price",
+    "debit_USD", "credit_USD", "hash"
+]
 
 @reactive.calc
 def coa_choices():
-    print("DEBUG — Loading COA...")
+    print("🔃 Loading COA choices")
     df = load_COA_file()
-    choices = sorted(df["GL_Acct_Name"].dropna().astype(str).unique().tolist())
-    return ["All Accounts"] + choices
+    return ["All Accounts"] + sorted(df["GL_Acct_Name"].dropna().astype(str).unique())
 
 def register_outputs(output, input, session, selected_fund):
+    print("🚀 register_outputs() called")
+    edited_df_store = reactive.value(None)
+    selected_row_store = reactive.value(None)
+
     @reactive.calc
     def wallet_choices():
-        wallet_df = load_WALLET_file()
+        print("🔃 Loading wallet choices")
+        df = load_WALLET_file()
         fund_id = selected_fund()
-        print(f"DEBUG — wallet_choices for fund_id: {fund_id}")
-
-        wallet_df["wallet_address"] = wallet_df["wallet_address"].str.lower().str.strip()
-        wallet_df = wallet_df[wallet_df["fund_id"] == fund_id]
-
-        wallet_df["friendly_name"] = wallet_df["friendly_name"].fillna(wallet_df["wallet_address"])
-        choices = sorted(wallet_df["friendly_name"].dropna().unique().tolist())
-        return ["All Wallets"] + choices
-
-
+        df = df[df["fund_id"] == fund_id].copy()
+        df["wallet_address"] = df["wallet_address"].str.lower().str.strip()
+        df["friendly_name"] = df["friendly_name"].fillna(df["wallet_address"])
+        return ["All Wallets"] + sorted(df["friendly_name"].dropna().unique())
     @reactive.calc
     def df_gl():
-        print("DEBUG — Loading GL and Wallet metadata...")
+        print("📦 Loading GL from S3")
+        df = load_GL_file()
+
+
+        print("🔍 Sample transaction_id values:\n", df["transaction_id"].head().tolist())
+        print("📦 Loading GL from S3")
         df = load_GL_file()
         wallet_df = load_WALLET_file()
         coa_df = load_COA_file()
-
-        # === Normalize and filter wallet_df by selected fund ===
         fund_id = selected_fund()
-        wallet_df["wallet_address"] = wallet_df["wallet_address"].str.lower().str.strip()
-        wallet_df = wallet_df[wallet_df["fund_id"] == fund_id]
 
+        wallet_df = wallet_df[wallet_df["fund_id"] == fund_id].copy()
+        wallet_df["wallet_address"] = wallet_df["wallet_address"].str.lower().str.strip()
         wallet_df["friendly_name"] = wallet_df["friendly_name"].fillna(wallet_df["wallet_address"])
 
-        # DEBUG
-        print(f"DEBUG — Fund {fund_id} has {len(wallet_df)} wallets")
-
-        # === Merge wallet metadata into GL ===
         df["wallet_id"] = df["wallet_id"].str.lower().str.strip()
         df = df.merge(wallet_df.rename(columns={"wallet_address": "wallet_id"}), on="wallet_id", how="inner")
-
-        # Always scope GL to fund's wallets (already done by merge)
         df["wallet_id"] = df["friendly_name"].fillna(df["wallet_id"])
         df.drop(columns=["friendly_name"], inplace=True)
+        if input.gl_account_filter() != "All Accounts":
+            print(f"🔍 Filtering by GL account: {input.gl_account_filter()}")
+            matching = coa_df[coa_df["GL_Acct_Name"] == input.gl_account_filter()]["account_name"].dropna().unique()
+            df = df[df["account_name"].isin(matching)] if len(matching) else df.iloc[0:0]
 
-        # === Apply GL Account Name Filter ===
-        gl_selected = input.gl_account_filter()
-        if gl_selected != "All Accounts":
-            matching_names = coa_df[coa_df["GL_Acct_Name"] == gl_selected]["account_name"].dropna().unique().tolist()
-            print(f"DEBUG — Matching GL accounts: {matching_names}")
-            if matching_names:
-                df = df[df["account_name"].isin(matching_names)]
-            else:
-                df = df.iloc[0:0]
+        if input.wallet_filter() != "All Wallets":
+            print(f"🔍 Filtering by wallet: {input.wallet_filter()}")
+            df = df[df["wallet_id"] == input.wallet_filter()]
 
-        # === Apply Wallet Filter ===
-        wallet_selected = input.wallet_filter()
-        if wallet_selected != "All Wallets":
-            df = df[df["wallet_id"] == wallet_selected]
-
+        print("✅ Final GL shape:", df.shape)
         return df
-    
-    original_df = reactive.value(None)
+
     @reactive.effect
     @reactive.event(df_gl)
     def cache_original():
-        df = df_gl().copy()
-        print("DEBUG — Caching original GL preview")
-        edited_df_store.set(df.head(100).copy())
-
-
-    DEFAULT_COLUMNS = ["date", "wallet_id", "account_name", "net_debit_credit_crypto"]
+        print("📤 Caching original GL DataFrame")
+        edited_df_store.set(df_gl().copy().head(100))
 
     @reactive.calc
     def selected_columns():
-        apply_clicks = input.apply_columns()
-        reset_clicks = input.reset_columns()
-
-        # Case 1: Reset button clicked more recently
-        if reset_clicks > apply_clicks:
-            print("DEBUG — Reset clicked, using default columns")
+        print("🔀 Resolving selected columns")
+        if input.reset_columns() > input.apply_columns():
             return DEFAULT_COLUMNS
-
-        # Case 2: First load (neither clicked yet)
-        if apply_clicks == 0 and reset_clicks == 0:
-            print("DEBUG — First load, applying default columns")
+        if input.apply_columns() == 0 and input.reset_columns() == 0:
             return DEFAULT_COLUMNS
+        return input.gl_column_selector() or DEFAULT_COLUMNS
 
-        # Case 3: Apply clicked
-        cols = input.gl_column_selector()
-        print(f"DEBUG — Apply clicked, using: {cols}")
-        return cols if cols else DEFAULT_COLUMNS
-    
+    @output
+    @render_plotly
+    def gl_view_plotly():
+        print("📊 Rendering Plotly GL view")
+        df = edited_df_store.get()
+        if df is None or df.empty:
+            df = df_gl().copy().head(100)
+        df = df[list(selected_columns())].astype(str)
+
+        fig = Figure(
+            data=[Table(
+                columnwidth=[1] * len(df.columns),
+                header=dict(values=[f"<b>{col}</b>" for col in df.columns],
+                            fill_color="#f2f2f7", font=dict(color="#000", size=13), align="left"),
+                cells=dict(values=[df[col].tolist() for col in df.columns],
+                           fill_color="#fff", font=dict(color="#000", size=12), align="left")
+            )],
+            layout=dict(margin=dict(l=0, r=0, t=0, b=0), height=500)
+        )
+        return fig
+    @reactive.effect
+    def capture_selected_row():
+        selection = gl_view_editable.cell_selection()
+        print("📥 DataGrid selection:", selection)
+
+        if not isinstance(selection, dict) or "rows" not in selection or not selection["rows"]:
+            selected_row_store.set(None)
+            print("⚠️ No row selected")
+            return
+
+        row_idx = selection["rows"][0]
+        df = edited_df_store.get()
+        if df is None or row_idx >= len(df):
+            selected_row_store.set(None)
+            print("⚠️ Invalid row index")
+            return
+
+        selected_row = df.iloc[row_idx].to_dict()
+        print("🧩 selected_row_data():", selected_row)
+        selected_row_store.set(selected_row)
+
+
     @output
     @render.data_frame
-    def gl_view():
+    def gl_view_editable():
+        print("🧾 Rendering DataGrid")
         df = edited_df_store.get()
+        if df is None or df.empty:
+            df = df_gl().copy().head(100)
+        df = df[list(selected_columns())].astype(str)
+        return DataGrid(df, editable=False, filters=True, selection_mode="row")
+    
+    @output
+    @render.ui
+    def selected_transaction_editor():
+        row = selected_row_store.get()
+        print("🧩 selected_row_data():", row)
+        if not row:
+            return ui.p("⚠️ Select a transaction to edit.")
 
-        # Fallback if reactive store is not yet set
-        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-            print("⚠️ edited_df_store is empty — falling back to df_gl()")
-            df = df_gl().copy()
-            if df.empty:
-                print("⚠️ df_gl() is also empty")
-                return pd.DataFrame(columns=DEFAULT_COLUMNS)
+        elements = []
+        for col, val in row.items():
+            input_id = f"edit_{col}"
+            val_str = str(val)
+            try:
+                if col.lower() in ("amount", "net_debit_credit_crypto") and val_str.replace(".", "", 1).isdigit():
+                    elements.append(ui.input_numeric(input_id, col, float(val)))
+                elif "date" in col.lower():
+                    # Don't strip the time — preserve full timestamp
+                    elements.append(ui.input_text(input_id, col, value=val_str))
 
-        # Get selected columns safely
-        cols_to_show = selected_columns()
-        if not isinstance(cols_to_show, (list, tuple)) or not all(isinstance(c, str) for c in cols_to_show):
-            cols_to_show = DEFAULT_COLUMNS
+                elif col.lower() == "account_name":
+                    choices = sorted(load_COA_file()["GL_Acct_Name"].dropna().unique())
+                    elements.append(ui.input_selectize(input_id, col, choices=choices, selected=val_str))
+                else:
+                    elements.append(ui.input_text(input_id, col, val_str))
+            except Exception as e:
+                print(f"❌ Failed rendering input for {col}:", e)
+                elements.append(ui.input_text(input_id, col, val_str))
 
-        cols_to_show = [col for col in cols_to_show if col in df.columns]
+        elements.append(ui.input_action_button("submit_edit", "✅ Save Edit", class_="btn-success mt-3"))
+        return ui.layout_column_wrap(*elements, width="400px")
 
-        # Ensure those columns are all strings for display
-        for col in cols_to_show:
-            df[col] = df[col].astype(str)
+    @reactive.effect
+    @reactive.event(input.submit_edit)
+    def on_save_edit():
+        print("💾 Save button clicked")
+        print("🔍 selected_row_store:", selected_row_store.get())   
+        df = edited_df_store.get()
+        selected = selected_row_store.get()
 
-        preview = df[cols_to_show].head(100)
+        if df is None or df.empty or not selected:
+            print("⚠️ Nothing to update.")
+            return
 
-        return render.DataGrid(
-            preview,
-            width="100%",
-            height="500px",
-            filters=True,
-            editable=True,
-            selection_mode="rows"
-        )
+        txn_id = selected.get("transaction_id")
+        if not txn_id:
+            print("❌ No transaction_id found in selected row")
+            return
+
+        match = df[df["transaction_id"] == txn_id]
+        if match.empty:
+            print(f"❌ No match for transaction_id {txn_id} in edited_df_store")
+            return
+
+        idx_match = df[df["transaction_id"] == txn_id]
+
+        if idx_match.empty:
+            print(f"❌ No match for transaction_id {txn_id}")
+            return
+
+        idx = idx_match.index[0]
+
+        
+        for col in selected:
+            shiny_id = f"edit_{col}"
+            if hasattr(input, shiny_id):
+                try:
+                    new_val = getattr(input, shiny_id)()
+                    df.at[idx, col] = new_val
+                    print(f"  🔧 {col} → {new_val}")
+                except Exception as e:
+                    print(f"❌ Failed updating {col}:", e)
+
+        edited_df_store.set(df.copy())
+        selected_row_store.set(None)
+        ui.notification_show("✅ Entry updated locally", duration=3000)
+
+
+    @reactive.effect
+    @reactive.event(input.save_gl_changes)
+    def save_changes_to_s3():
+        print("☁️ Uploading GL to S3")
+        try:
+            df = edited_df_store.get()
+            if df is not None and not df.empty:
+                save_GL_file(df)
+                ui.notification_show("✅ GL saved to S3", duration=3000)
+                print("✅ Saved to S3")
+            else:
+                print("⚠️ Nothing to save")
+                ui.notification_show("⚠️ Nothing to save", duration=3000)
+        except Exception as e:
+            print("❌ Failed to save:", e)
+            ui.notification_show(f"❌ Failed to save: {e}", duration=5000)
+
+    @output
+    @render.ui
+    def gl_view_router():
+        print("🔁 Routing GL view")
+        return ui.output_data_frame("gl_view_editable") if input.edit_mode() else output_widget("gl_view_plotly")
 
     @output
     @render.ui
     def update_gl_dropdown():
         return ui.update_selectize("gl_account_filter", choices=coa_choices())
+
     @output
     @render.ui
     def update_wallet_dropdown():
         return ui.update_selectize("wallet_filter", choices=wallet_choices())
+
     @output
     @render.ui
     def update_gl_column_selector():
         df = df_gl()
         req(df is not None and not df.empty)
-        all_cols = df.columns.tolist()
-        current_selection = selected_columns()
-        return ui.update_selectize(
-            "gl_column_selector",
-            choices=all_cols,
-            selected=current_selection
-        )
-    
-    edited_df_store = reactive.value(None)
-    
-    @reactive.effect
-    @reactive.event(input.save_gl_changes)
-    def save_gl_edits():
-        print("🟡 Save button clicked")
-        edited_rows = input.gl_view()
-        print(f"DEBUG — edited_rows type: {type(edited_rows)}")
-
-        if not edited_rows or not isinstance(edited_rows, list):
-            print("⚠️ Nothing to save — grid is empty or invalid")
-            return
-
-        df_edited = pd.DataFrame(edited_rows)
-        print(f"✅ Edited DataFrame shape: {df_edited.shape}")
-        print(df_edited.head(3))
-
-        save_GL_file(df_edited)
-
-        ui.notification_show("✅ General Ledger saved to S3!", duration=4000, type="message")
+        return ui.update_selectize("gl_column_selector", choices=df.columns.tolist(), selected=selected_columns())
 
     @reactive.effect
     @reactive.event(input.undo_gl_changes)
     def undo_changes():
-        df = df_gl().copy()
-        print("🔁 Reverting GL to original snapshot")
-        edited_df_store.set(df.head(100).copy())
+        print("↩️ Undoing GL edits")
+        edited_df_store.set(df_gl().copy().head(100))
         ui.notification_show("↩️ Changes reverted", duration=3000)
-
-# === UI ===
-def general_ledger_ui():
-    print("DEBUG — general_ledger_ui() function called")
-
-    return ui.page_fluid(
-        ui.h2("📘 General Ledger", class_="mt-3"),
-
-        # --- Filters: Account & Wallet ---
-        ui.layout_columns(
-            ui.input_selectize(
-                "gl_account_filter",
-                "Filter by GL Account Name",
-                choices=[],
-                selected="All Accounts"
-            ),
-            ui.input_selectize(
-                "wallet_filter",
-                "Filter by Wallet",
-                choices=[],
-                selected="All Wallets"
-            ),
-        ),
-
-        # --- Column Selector + Buttons ---
-        ui.layout_columns(
-            ui.input_selectize(
-                "gl_column_selector",
-                "Show Columns",
-                choices=[],       # filled dynamically
-                selected=[],      # defaults set server-side
-                multiple=True
-            ),
-            ui.input_action_button("apply_columns", "Apply Columns", class_="mt-4"),
-            ui.input_action_button("reset_columns", "Reset Columns", class_="mt-4")
-        ),
-
-        # --- Dynamic Dropdown Injection ---
-        ui.output_ui("update_gl_dropdown"),
-        ui.output_ui("update_wallet_dropdown"),
-        ui.output_ui("update_gl_column_selector"),
-
-        # --- GL Table Output ---
-        ui.card(
-            ui.card_header("Preview of General Ledger"),
-            ui.output_data_frame("gl_view")
-        ),
-        ui.input_action_button("save_gl_changes", "💾 Save Changes", class_="mt-4 btn-success"),
-        ui.input_action_button("undo_gl_changes", "↩️ Undo Changes", class_="mt-4 btn-warning"),
-
-
-    )
