@@ -11,6 +11,11 @@ TB_KEY = "drip_capital/fund/holdings_class_B_ETH/master_tb/20241231_master_tb_fo
 GL_KEY = "drip_capital/all_posted_journal_entries.parquet"
 COA_KEY = "drip_capital/drip_capital_COA.csv"
 WALLET_KEY = "drip_capital/drip_capital_wallet_ID_mapping.xlsx"
+NFT_LEDGER_KEY = "drip_capital/master_nft_ledger_ETH.csv"
+LP_COMMITMENTS_KEY = "drip_capital/LP_commitments.csv"
+GP_INCENTIVE_AUDIT_KEY = "drip_capital/20240731_fund_i_class_B_ETH_GP_incentive_audit_trail.xlsx"
+APPROVED_TOKENS_KEY = "drip_capital/user_approved_tokens.csv"
+REJECTED_TOKENS_KEY = "drip_capital/user_rejected_tokens.csv"
 
 # -- Create a reusable S3 client
 s3 = boto3.client("s3")
@@ -47,7 +52,30 @@ def load_COA_file(key: str = COA_KEY) -> pd.DataFrame:
     df_coa["GL_Acct_Name"] = df_coa["GL_Acct_Name"].astype(str)
     return df_coa
 
-
+def save_COA_file(df: pd.DataFrame, key: str = COA_KEY) -> bool:
+    """Save COA DataFrame back to S3 as CSV."""
+    try:
+        # Convert DataFrame to CSV
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        
+        # Upload to S3
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
+        )
+        
+        # Clear the cache since we've updated the data
+        load_COA_file.cache_clear()
+        
+        return True
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return False
     
 def save_GL_file(df: pd.DataFrame, key: str = GL_KEY):
     # Retrieve stored dtypes
@@ -57,9 +85,11 @@ def save_GL_file(df: pd.DataFrame, key: str = GL_KEY):
             try:
                 df[col] = df[col].astype(dtype)
             except Exception as e:
-                print(f"⚠️ Could not cast {col} to {dtype}: {e}")
+                # Ignore casting errors
+                pass
     else:
-        print("⚠️ No dtypes found in attrs — skipping conversion.")
+        # No dtypes specified, skip conversion
+        pass
 
     # Save to Parquet
     buffer = BytesIO()
@@ -85,7 +115,6 @@ def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
     if "transaction_id" not in df.columns:
         df = df.reset_index(drop=True)
         df["transaction_id"] = df.index.astype(str)
-        print("🆕 Assigned transaction_id to GL DataFrame")
 
     return df
 
@@ -112,3 +141,262 @@ def load_WALLET_file(key: str = WALLET_KEY) -> pd.DataFrame:
     content = obj["Body"].read()
     if key.endswith(".xlsx"):
         return pd.read_excel(BytesIO(content))
+
+@lru_cache(maxsize=32)
+def load_NFT_LEDGER_file(key: str = NFT_LEDGER_KEY) -> pd.DataFrame:
+    """
+    Load the master NFT ledger from S3 and process it for current NFT holdings.
+    
+    The ledger contains NFT transaction history with columns:
+    ['fund_id', 'wallet_id', 'collateral_address', 'token_id', 'asset',
+     'date', 'hash_origination', 'hash_foreclosure', 'hash_monetize', 'hash',
+     'side', 'qty', 'unit_price_eth', 'proceeds_eth', 'cost_basis_sold_eth',
+     'realized_gain_loss_nft', 'remaining_qty', 'remaining_cost_basis_eth',
+     'account_name']
+    
+    Returns:
+        pd.DataFrame: Processed NFT ledger data with proper date handling
+    """
+    try:
+        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        content = obj["Body"].read()
+        
+        # Load the CSV file
+        df = pd.read_csv(BytesIO(content))
+        
+        
+        # Convert date column to datetime with UTC timezone awareness
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], utc=True, errors='coerce')
+        
+        # Convert numeric columns
+        numeric_columns = ['qty', 'unit_price_eth', 'proceeds_eth', 'cost_basis_sold_eth', 
+                          'realized_gain_loss_nft', 'remaining_qty', 'remaining_cost_basis_eth']
+        
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Clean string columns
+        string_columns = ['fund_id', 'wallet_id', 'collateral_address', 'token_id', 
+                         'asset', 'side', 'account_name']
+        
+        for col in string_columns:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip()
+        
+        # Sort by date to ensure proper chronological order
+        if 'date' in df.columns:
+            df = df.sort_values('date', ascending=True)
+        
+        return df
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
+
+def get_current_nft_holdings(fund_id: str = None) -> pd.DataFrame:
+    """
+    Get current NFT holdings by analyzing the NFT ledger.
+    
+    Logic: If remaining_qty > 0 for a token_id, we currently own that NFT.
+    Groups by token_id to get the current state of each NFT.
+    
+    Args:
+        fund_id (str, optional): Filter by specific fund_id
+    
+    Returns:
+        pd.DataFrame: Current NFT holdings with latest transaction info
+    """
+    try:
+        df = load_NFT_LEDGER_file()
+        
+        if df.empty:
+            return pd.DataFrame()
+        
+        # Filter by fund_id if specified
+        if fund_id:
+            df = df[df['fund_id'] == fund_id]
+        
+        # Filter for NFTs we currently own (remaining_qty > 0)
+        owned_nfts = df[df['remaining_qty'] > 0].copy()
+        
+        if owned_nfts.empty:
+            return pd.DataFrame()
+        
+        # Group by token_id and get the most recent transaction for each NFT
+        current_holdings = (
+            owned_nfts.sort_values('date', ascending=False)
+            .groupby(['collateral_address', 'token_id'])
+            .first()
+            .reset_index()
+        )
+        
+        
+        return current_holdings
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
+
+@lru_cache(maxsize=32)
+def load_LP_commitments_file(key: str = LP_COMMITMENTS_KEY) -> pd.DataFrame:
+    """Load LP commitments from S3 as a DataFrame."""
+    try:
+        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        content = obj["Body"].read()
+        
+        if key.endswith(".csv"):
+            df = pd.read_csv(BytesIO(content))
+        elif key.endswith(".xlsx"):
+            df = pd.read_excel(BytesIO(content))
+        else:
+            raise ValueError(f"Unsupported file type for key: {key}")
+        
+        # Clean column names
+        df.columns = df.columns.str.strip()
+        
+        
+        return df
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
+
+@lru_cache(maxsize=32)
+def load_GP_incentive_audit_file(key: str = GP_INCENTIVE_AUDIT_KEY) -> pd.DataFrame:
+    """Load GP incentive audit trail from S3 as a DataFrame."""
+    try:
+        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        content = obj["Body"].read()
+        
+        if key.endswith(".xlsx"):
+            df = pd.read_excel(BytesIO(content))
+        elif key.endswith(".csv"):
+            df = pd.read_csv(BytesIO(content))
+        else:
+            raise ValueError(f"Unsupported file type for key: {key}")
+        
+        # Clean column names
+        df.columns = df.columns.str.strip()
+        
+        
+        return df
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()
+
+# Token Classification Storage Functions
+
+@lru_cache(maxsize=8)
+def load_approved_tokens_file(key: str = APPROVED_TOKENS_KEY) -> set:
+    """Load user-approved tokens from S3 as a set of addresses."""
+    try:
+        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        content = obj["Body"].read()
+        df = pd.read_csv(BytesIO(content))
+        
+        # Return set of token addresses
+        return set(df['token_address'].dropna().astype(str))
+        
+    except s3.exceptions.NoSuchKey:
+        # File doesn't exist yet, return empty set
+        return set()
+    except Exception as e:
+        print(f"Warning: Failed to load approved tokens from S3: {e}")
+        return set()
+
+def save_approved_tokens_file(token_addresses: set, key: str = APPROVED_TOKENS_KEY) -> bool:
+    """Save user-approved tokens to S3 as CSV."""
+    try:
+        # Convert set to DataFrame with metadata
+        data = []
+        from datetime import datetime, timezone
+        current_time = datetime.now(timezone.utc).isoformat()
+        
+        for addr in token_addresses:
+            data.append({
+                'token_address': addr,
+                'decision_date': current_time,
+                'user_action': 'approved'
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Save to CSV
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
+        )
+        
+        # Clear cache since we've updated the data
+        load_approved_tokens_file.cache_clear()
+        return True
+        
+    except Exception as e:
+        print(f"Error saving approved tokens to S3: {e}")
+        return False
+
+@lru_cache(maxsize=8)
+def load_rejected_tokens_file(key: str = REJECTED_TOKENS_KEY) -> set:
+    """Load user-rejected tokens from S3 as a set of addresses."""
+    try:
+        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        content = obj["Body"].read()
+        df = pd.read_csv(BytesIO(content))
+        
+        # Return set of token addresses
+        return set(df['token_address'].dropna().astype(str))
+        
+    except s3.exceptions.NoSuchKey:
+        # File doesn't exist yet, return empty set
+        return set()
+    except Exception as e:
+        print(f"Warning: Failed to load rejected tokens from S3: {e}")
+        return set()
+
+def save_rejected_tokens_file(token_addresses: set, key: str = REJECTED_TOKENS_KEY) -> bool:
+    """Save user-rejected tokens to S3 as CSV."""
+    try:
+        # Convert set to DataFrame with metadata
+        data = []
+        from datetime import datetime, timezone
+        current_time = datetime.now(timezone.utc).isoformat()
+        
+        for addr in token_addresses:
+            data.append({
+                'token_address': addr,
+                'decision_date': current_time,
+                'user_action': 'rejected'
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Save to CSV
+        csv_buffer = StringIO()
+        df.to_csv(csv_buffer, index=False)
+        
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=csv_buffer.getvalue(),
+            ContentType='text/csv'
+        )
+        
+        # Clear cache since we've updated the data
+        load_rejected_tokens_file.cache_clear()
+        return True
+        
+    except Exception as e:
+        print(f"Error saving rejected tokens to S3: {e}")
+        return False

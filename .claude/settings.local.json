@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(rm:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd /c:*)",
+      "Bash(find:*)",
+      "Bash(mv:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(del crypto_tracker.py crypto_tracker_backup.py)",
+      "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\main_app\\modules\\general_ledger\\__pycache__\\crypto_tracker*.pyc\")"
+    ],
+    "deny": [],
+    "ask": [],
+    "defaultMode": "acceptEdits",
+    "additionalDirectories": [
+      "C:\\"
+    ]
+  }
+}

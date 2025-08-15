@@ -1,0 +1,195 @@
+/* === Inter Font Setup === */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100; src: local('Inter Thin'), url('Inter-Thin-BETA.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 100; src: local('Inter Thin Italic'), url('Inter-ThinItalic-BETA.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 200; src: local('Inter Extra Light'), url('Inter-ExtraLight-BETA.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 200; src: local('Inter Extra Light Italic'), url('Inter-ExtraLightItalic-BETA.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 300; src: local('Inter Light'), url('Inter-Light-BETA.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 300; src: local('Inter Light Italic'), url('Inter-LightItalic-BETA.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; src: local('Inter Regular'), url('Inter-Regular.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 400; src: local('Inter Italic'), url('Inter-Italic.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; src: local('Inter Medium'), url('Inter-Medium.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 500; src: local('Inter Medium Italic'), url('Inter-MediumItalic.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; src: local('Inter Semi Bold'), url('Inter-SemiBold.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 600; src: local('Inter Semi Bold Italic'), url('Inter-SemiBoldItalic.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; src: local('Inter Bold'), url('Inter-Bold.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 700; src: local('Inter Bold Italic'), url('Inter-BoldItalic.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 800; src: local('Inter Extra Bold'), url('Inter-ExtraBold.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 800; src: local('Inter Extra Bold Italic'), url('Inter-ExtraBoldItalic.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 900; src: local('Inter Black'), url('Inter-Black.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: italic; font-weight: 900; src: local('Inter Black Italic'), url('Inter-BlackItalic.woff') format('woff'); }
+/* === Inter Font Setup === */
+/* (unchanged) — keep all your @font-face definitions here... */
+
+/* === Root Variables === */
+:root {
+  --font-main: 'Inter', sans-serif;
+  --font-alt: 'Inter', sans-serif;
+  --text-color: #222;
+  --accent-color: #004aad;
+}
+
+/* === Global Styles === */
+body {
+  font-family: var(--font-main);
+  color: var(--text-color);
+  margin: 0;
+  padding: 1.5rem;
+  font-size: 9pt; /* Reduced from 10.5pt */
+  background-color: #fff;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-main);
+}
+
+h4 {
+  font-size: 10pt; /* Reduced */
+  margin-top: 1.25rem;
+  border-bottom: 1px solid #ccc;
+  padding-bottom: 0.15rem;
+}
+
+.container {
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+header h1 {
+  font-size: 17pt; /* Reduced */
+  margin-bottom: 0.2rem;
+}
+
+header h2 {
+  font-size: 12pt; /* Reduced */
+  margin-bottom: 0.1rem;
+}
+
+header h3 {
+  font-size: 9pt; /* Reduced */
+  font-style: italic;
+  color: #666;
+}
+
+.tight-header {
+  margin-bottom: 0.6rem;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.tight-header p {
+  margin: 0;
+  padding: 0;
+}
+
+.fund-name {
+  font-weight: bold;
+  font-size: 20pt; /* Reduced */
+}
+
+.report-title,
+.report-date {
+  font-size: 10pt; /* Reduced */
+}
+
+.report-date {
+  color: #000;
+  font-weight: bold;
+}
+
+footer {
+  font-family: var(--font-alt);
+  font-size: 7.5pt; /* Reduced */
+  text-align: center;
+  margin-top: 2rem;
+  color: #999;
+}
+
+/* === Section Spacing === */
+.capital-section,
+.summary-section,
+.metrics-section {
+  margin-top: 1.5rem;
+}
+
+/* === Table Styles === */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.4rem;
+  margin-bottom: 1rem;
+  font-size: 8.5pt; /* Reduced */
+}
+
+th,
+td {
+  padding: 0.35rem 0.5rem; /* Slightly tightened */
+  border-bottom: 1px solid #ddd;
+  vertical-align: top;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+}
+
+th:not(:first-child),
+td:not(:first-child),
+.amount {
+  text-align: right;
+  white-space: nowrap;
+  font-family: var(--font-alt);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+th {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background-color: #f9f9f9;
+  font-size: 8.8pt; /* Reduced */
+}
+
+/* === Ending Row Border === */
+.ending-row td {
+  font-weight: bold;
+  border-top: 2px solid #333;
+}
+
+/* === Page Settings === */
+@page {
+  size: A4;
+  margin: 0.25in 0.5in 0.5in 0.5in;
+
+  @bottom-center {
+    content: "Page " counter(page) " of " counter(pages);
+    font-size: 7.5pt; /* Reduced */
+    color: #999;
+  }
+}
+
+/* === Header with Logo === */
+.header-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.text-section {
+  max-width: 70%;
+}
+
+.logo-section {
+  max-width: 30%;
+  text-align: right;
+}
+
+.company-logo {
+  max-height: 100px; /* Slightly smaller logo */
+  width: auto;
+}

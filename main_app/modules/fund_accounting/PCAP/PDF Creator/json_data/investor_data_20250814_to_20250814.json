@@ -1,0 +1,107 @@
+{
+  "main_date": "2024-07-31",
+  "currency": "ETH",
+  "statement_of_changes": [
+    {
+      "label": "Beginning Balance",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Capital contributions",
+      "mtd": 427.7683156,
+      "qtd": 427.7683156,
+      "ytd": 427.7683156,
+      "itd": 427.7683156
+    },
+    {
+      "label": "Management fees",
+      "mtd": -0.126490628,
+      "qtd": -0.126490628,
+      "ytd": -0.126490628,
+      "itd": -0.126490628
+    },
+    {
+      "label": "Interest expense",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Capital distributions",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Other income",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Operating expenses",
+      "mtd": -0.3292689424739393,
+      "qtd": -0.3292689424739393,
+      "ytd": -0.3292689424739393,
+      "itd": -0.3292689424739393
+    },
+    {
+      "label": "Interest income",
+      "mtd": 0.0057023728009639,
+      "qtd": 0.0057023728009639,
+      "ytd": 0.0057023728009639,
+      "itd": 0.0057023728009639
+    },
+    {
+      "label": "Provision for bad debt",
+      "mtd": -0.0008553559201443999,
+      "qtd": -0.0008553559201443999,
+      "ytd": -0.0008553559201443999,
+      "itd": -0.0008553559201443999
+    },
+    {
+      "label": "Income allocated from investments",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Realized gain (loss)",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Change in unrealized gain (loss)",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Ending Capital",
+      "mtd": 427.31740304640687,
+      "qtd": 427.31740304640687,
+      "ytd": 427.31740304640687,
+      "itd": 427.31740304640687
+    }
+  ],
+  "commitment_summary": {
+    "Total commitments": "427.768316",
+    "Capital called": "427.768316",
+    "Remaining commitments": "-"
+  },
+  "performance_metrics": {
+    "Net IRR": "-3.37%",
+    "Gross MOIC": "0.998946",
+    "NAV per unit": "-"
+  }
+}

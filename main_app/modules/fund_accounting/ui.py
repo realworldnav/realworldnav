@@ -4,24 +4,28 @@ from faicons import icon_svg
 
 def fund_accounting_ui():
     return ui.page_fluid(
-        ui.h2("📈 NAV Dashboard", class_="mt-3"),
+        ui.h2("NAV Dashboard", class_="mt-3"),
 
-        ui.input_radio_buttons(
-            id="nav_range_mode",
-            label="Select NAV Range:",
-            choices={
-                "7D": "One Week Ago",
-                "MTD": "Month to Date",
-                "QTD": "Quarter to Date",
-                "YTD": "Year to Date",
-                "ITD": "Inception to Date",
-                "Custom": "Custom Range"
-            },
-            selected="MTD",
-            inline=True
+        # Date range selection with uniform styling
+        ui.card(
+            ui.card_header("Select NAV Range"),
+            ui.card_body(
+                ui.input_radio_buttons(
+                    id="nav_range_mode",
+                    label=None,
+                    choices={
+                        "MTD": "Month to Date",
+                        "QTD": "Quarter to Date",
+                        "YTD": "Year to Date",
+                        "ITD": "Inception to Date",
+                        "Custom": "Custom Range"
+                    },
+                    selected="MTD",
+                    inline=True
+                ),
+                ui.output_ui("custom_date_range_ui")
+            )
         ),
-
-        ui.input_date_range("nav_custom_range", "Custom date range", start=None, end=None),
 
         ui.layout_column_wrap(
             ui.value_box("Current NAV", ui.output_ui("nav_current"), showcase=icon_svg("sack-dollar")),
@@ -32,7 +36,6 @@ def fund_accounting_ui():
 
         ui.layout_columns(
             ui.card(
-                ui.card_header("NAV Over Time"),
                 output_widget("nav_chart"),
                 full_screen=True,
             ),
@@ -47,15 +50,92 @@ def fund_accounting_ui():
             ),
             col_widths=[9, 3]
         ),
-
+        
         ui.card(
-            ui.card_header("Net Income Over Time"),
             output_widget("net_income_chart"),
             full_screen=True,
         ),
 
+    )
+
+def pcap_ui():
+    return ui.page_fluid(
+        ui.h3("Statement of Changes in Partners' Capital", class_="mt-3"),
+        
+        # PCAP Controls
         ui.card(
-            ui.card_header("Melted TB Preview"),
-            ui.output_data_frame("tb_preview")
+            ui.card_header("PCAP Generation Controls"),
+            ui.card_body(
+                ui.row(
+                    ui.column(
+                        3,
+                        ui.output_ui("fund_selection")
+                    ),
+                    ui.column(
+                        3,
+                        ui.output_ui("lp_selection")
+                    ),
+                    ui.column(
+                        3,
+                        ui.output_ui("pcap_date_input")
+                    ),
+                    ui.column(
+                        3,
+                        ui.div(
+                            ui.input_select(
+                                "pcap_currency",
+                                "Currency",
+                                choices={"ETH": "ETH", "USD": "USD"},
+                                selected="ETH"
+                            ),
+                            class_="dropdown-with-arrow"
+                        )
+                    )
+                ),
+                ui.row(
+                    ui.column(
+                        6,
+                        ui.input_action_button(
+                            "generate_pcap",
+                            "Generate PCAP",
+                            class_="btn-secondary w-100 mt-3"
+                        )
+                    ),
+                    ui.column(
+                        6,
+                        ui.download_button(
+                            "export_pcap_pdf",
+                            "Export PDF",
+                            class_="btn-secondary w-100 mt-3"
+                        )
+                    )
+                )
+            )
         ),
+        
+        # Results Display Area
+        ui.div(
+            ui.output_ui("pcap_results_header"),
+            ui.output_ui("pcap_detailed_results"),
+            ui.output_ui("pcap_summary_charts"),
+            class_="mt-4"
+        ),
+        
+        # View Mode Selection - moved to bottom
+        ui.card(
+            ui.card_header("View Options"),
+            ui.card_body(
+                ui.input_select(
+                    "pcap_view_mode",
+                    "View Mode:",
+                    choices={
+                        "detailed": "Detailed Line Items",
+                        "summary": "Summary View",
+                        "comparison": "LP Comparison"
+                    },
+                    selected="detailed"
+                )
+            ),
+            class_="mt-4"
+        )
     )

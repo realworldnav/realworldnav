@@ -1,0 +1,139 @@
+# RealWorldNAV Theme Configuration
+default_theme: "light"
+
+themes:
+  light:
+    name: "Light"
+    description: "Clean, professional light theme with high contrast"
+    bootstrap_theme: "bootstrap"
+    
+    # CSS Variables
+    colors:
+      primary: "#2563eb"
+      primary_dark: "#1d4ed8"
+      primary_light: "#3b82f6"
+      success: "#059669"
+      success_dark: "#047857"
+      danger: "#dc2626"
+      danger_dark: "#b91c1c"
+      warning: "#d97706"
+      warning_dark: "#b45309"
+      secondary: "#64748b"
+      secondary_dark: "#475569"
+      
+      text_primary: "#0f172a"
+      text_secondary: "#475569"
+      text_muted: "#64748b"
+      background_primary: "#ffffff"
+      background_secondary: "#f8fafc"
+      surface_primary: "#ffffff"
+      surface_secondary: "#f1f5f9"
+      border_light: "#e2e8f0"
+      border_default: "#cbd5e1"
+      border_strong: "#94a3b8"
+    
+    # Component Styling
+    components:
+      sidebar:
+        background: "#f8fafc"
+        backdrop_filter: "none"
+        border: "1px solid #e2e8f0"
+        box_shadow: "none"
+        padding: "24px"
+        
+      cards:
+        background: "#ffffff"
+        border: "1px solid #e2e8f0"
+        border_radius: "6px"
+        box_shadow: "0 1px 3px rgba(0, 0, 0, 0.1)"
+        padding: "20px"
+        margin: "12px"
+        
+      buttons:
+        border_radius: "4px"
+        font_weight: "500"
+        box_shadow: "0 1px 2px rgba(0, 0, 0, 0.05)"
+        padding: "8px 16px"
+        
+      forms:
+        border_radius: "4px"
+        border: "1px solid #cbd5e1"
+        background: "#ffffff"
+        box_shadow: "0 1px 2px rgba(0, 0, 0, 0.05)"
+        padding: "8px 12px"
+
+  dark:
+    name: "Dark"
+    description: "Professional dark theme with high contrast"
+    bootstrap_theme: "slate"
+    
+    colors:
+      primary: "#3b82f6"
+      primary_dark: "#2563eb"
+      primary_light: "#60a5fa"
+      success: "#10b981"
+      success_dark: "#059669"
+      danger: "#f87171"
+      danger_dark: "#dc2626"
+      warning: "#fbbf24"
+      warning_dark: "#d97706"
+      secondary: "#94a3b8"
+      secondary_dark: "#64748b"
+      
+      text_primary: "#f8fafc"
+      text_secondary: "#cbd5e1"
+      text_muted: "#94a3b8"
+      background_primary: "#0f172a"
+      background_secondary: "#1e293b"
+      surface_primary: "#1e293b"
+      surface_secondary: "#334155"
+      border_light: "#334155"
+      border_default: "#475569"
+      border_strong: "#64748b"
+      
+    components:
+      sidebar:
+        background: "#1e293b"
+        backdrop_filter: "none"
+        border: "1px solid #334155"
+        box_shadow: "none"
+        padding: "24px"
+        
+      cards:
+        background: "#1e293b"
+        border: "1px solid #334155"
+        border_radius: "6px"
+        box_shadow: "0 1px 3px rgba(0, 0, 0, 0.3)"
+        padding: "20px"
+        margin: "12px"
+        
+      buttons:
+        border_radius: "4px"
+        font_weight: "500"
+        box_shadow: "0 1px 2px rgba(0, 0, 0, 0.2)"
+        padding: "8px 16px"
+        
+      forms:
+        border_radius: "4px"
+        border: "1px solid #475569"
+        background: "#1e293b"
+        box_shadow: "0 1px 2px rgba(0, 0, 0, 0.2)"
+        padding: "8px 12px"
+
+
+# Theme switching options
+theme_selector:
+  enabled: true
+  position: "sidebar"  # or "header"
+  label: "Theme"
+  show_preview: false
+
+# Custom CSS files (optional)
+custom_styles:
+  - "assets/custom-overrides.css"
+  
+# Animation settings
+animations:
+  enabled: true
+  duration: "0.3s"
+  timing_function: "cubic-bezier(0.4, 0.0, 0.2, 1)"

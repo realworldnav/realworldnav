@@ -1,0 +1,65 @@
+{
+  "main_date": "2024-12-31",
+  "currency": "ETH",
+  "statement_of_changes": [
+    {
+      "label": "Beginning Balance",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.0
+    },
+    {
+      "label": "Capital contributions",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 427.7683
+    },
+    {
+      "label": "Management fees",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": -0.138
+    },
+    {
+      "label": "Interest income",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 0.021
+    },
+    {
+      "label": "Operating expenses",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": -0.3345
+    },
+    {
+      "label": "Provision for bad debt",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": -0.0032
+    },
+    {
+      "label": "Ending Capital",
+      "mtd": 0.0,
+      "qtd": 0.0,
+      "ytd": 0.0,
+      "itd": 427.3136
+    }
+  ],
+  "commitment_summary": {
+    "Total commitments": "427.768316",
+    "Capital called": "427.768316",
+    "Remaining commitments": "-"
+  },
+  "performance_metrics": {
+    "Net IRR": "-3.37%",
+    "Gross MOIC": "1.000000",
+    "NAV per unit": "-"
+  }
+}

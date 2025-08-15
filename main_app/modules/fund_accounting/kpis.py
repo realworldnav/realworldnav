@@ -1,23 +1,32 @@
 from shiny import reactive, render
 import pandas as pd
 from faicons import icon_svg
-from .helpers import melted_tb
+from .helpers import daily_balances
 
 # === Shared reactive calculations ===
 def init_nav_reactives(input):
     @reactive.calc
     def nav_data():
-        df = melted_tb()
+        df = daily_balances()
+        if df.empty:
+            return pd.Series(dtype=float)
+            
         df["GL_Acct_Number"] = df["GL_Acct_Number"].astype(str).str.strip()
         df = df[df["GL_Acct_Number"].str.match(r"^\d")].copy()
         df["Type"] = df["GL_Acct_Number"].str[0].map({"1": "Asset", "2": "Liability"})
 
-        assets = df[df["Type"] == "Asset"].groupby("Report Date")["Balance"].sum()
-        liabs = df[df["Type"] == "Liability"].groupby("Report Date")["Balance"].sum()
+        # Group by date and sum balances
+        assets_by_date = df[df["Type"] == "Asset"].groupby("Report Date")["Balance"].sum()
+        liabs_by_date = df[df["Type"] == "Liability"].groupby("Report Date")["Balance"].sum()
 
+        # Get all unique dates and reindex
         all_dates = pd.to_datetime(sorted(df["Report Date"].unique()))
-        nav = assets.reindex(all_dates, fill_value=0) + liabs.reindex(all_dates, fill_value=0)
-        return nav.sort_index()
+        assets_by_date = assets_by_date.reindex(all_dates, fill_value=0)
+        liabs_by_date = liabs_by_date.reindex(all_dates, fill_value=0)
+
+        # NAV = Assets + Liabilities
+        nav_series = assets_by_date + liabs_by_date
+        return nav_series.sort_index()
 
     @reactive.calc
     def nav_delta():
@@ -89,14 +98,16 @@ def register_kpi_outputs(output, input):
 
     @reactive.calc
     def contributed_capital():
-        df = melted_tb()
+        df = daily_balances()
+        if df.empty:
+            return 0
         df["GL_Acct_Number"] = df["GL_Acct_Number"].astype(str)
         latest_date = df["Report Date"].max()
         cap_rows = df[
             (df["GL_Acct_Number"].str.startswith("3")) &
             (df["Report Date"] == latest_date)
         ]
-        return cap_rows["Balance"].sum() * -1
+        return cap_rows["Balance"].sum()
 
     @output
     @render.ui
@@ -107,7 +118,10 @@ def register_kpi_outputs(output, input):
     @output
     @render.data_frame
     def latest_summary():
-        df = melted_tb()
+        df = daily_balances()
+        if df.empty:
+            return pd.DataFrame({"Metric": ["No Data"], "Value": ["No GL data available"]})
+            
         latest_date = df["Report Date"].max()
         df["GL_Acct_Number"] = df["GL_Acct_Number"].astype(str)
         df["Type"] = df["GL_Acct_Number"].str[0].map({"1": "Asset", "2": "Liability"})

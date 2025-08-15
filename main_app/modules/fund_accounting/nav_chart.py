@@ -2,24 +2,30 @@ from shiny import reactive, render
 from shinywidgets import render_plotly
 import pandas as pd
 import plotly.graph_objects as go
-from .helpers import melted_tb
+from .helpers import daily_balances, apply_plotly_theme
 
 # === Shared reactive calculations ===
 def init_nav_reactives(input):
     @reactive.calc
     def nav_data():
-        df = melted_tb()
+        df = daily_balances()
+        if df.empty:
+            return pd.Series(dtype=float)
+            
         df["GL_Acct_Number"] = df["GL_Acct_Number"].astype(str).str.strip()
         df = df[df["GL_Acct_Number"].str.match(r"^\d")].copy()
         df["Type"] = df["GL_Acct_Number"].str[0].map({"1": "Asset", "2": "Liability"})
 
+        # Group by date and sum balances
         assets_by_date = df[df["Type"] == "Asset"].groupby("Report Date")["Balance"].sum()
         liabs_by_date = df[df["Type"] == "Liability"].groupby("Report Date")["Balance"].sum()
 
+        # Get all unique dates and reindex
         all_dates = pd.to_datetime(sorted(df["Report Date"].unique()))
         assets_by_date = assets_by_date.reindex(all_dates, fill_value=0)
         liabs_by_date = liabs_by_date.reindex(all_dates, fill_value=0)
 
+        # NAV = Assets + Liabilities 
         nav_series = assets_by_date + liabs_by_date
         return nav_series.sort_index()
 
@@ -106,13 +112,12 @@ def register_nav_outputs(output, input):
             line=dict(width=3),
         ))
 
+        # Apply unified theme
+        apply_plotly_theme(fig, "NAV Over Time")
         fig.update_layout(
-            title="NAV Over Time",
             xaxis_title="Date",
             yaxis_title="Net Asset Value",
-            hovermode="x unified",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            xaxis=dict(type="date", range=[x_vals[0], x_vals[-1]])
+            hovermode="x unified"
         )
+        fig.update_xaxes(type="date", range=[x_vals[0], x_vals[-1]])
         return fig
