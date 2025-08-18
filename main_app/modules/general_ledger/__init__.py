@@ -1,5 +1,4 @@
 from .ui import general_ledger_ui
 from .general_ledger import register_outputs
-from .crypto_token_tracker import register_crypto_token_tracker_outputs
 from .chart_of_accounts import register_chart_of_accounts_outputs
 from .gl_analytics import register_gl_analytics_outputs

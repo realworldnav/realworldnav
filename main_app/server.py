@@ -6,7 +6,7 @@ from .modules.fund_accounting import register_outputs as register_fund_accountin
 from .modules.financial_reporting.financial_reporting import register_outputs as register_financial_reporting_outputs
 from .modules.general_ledger.general_ledger import register_outputs as register_gl_outputs
 from .modules.general_ledger.chart_of_accounts import register_chart_of_accounts_outputs
-from .modules.general_ledger.crypto_token_tracker import register_crypto_token_tracker_outputs
+from .modules.general_ledger.crypto_tracker import register_crypto_tracker_outputs
 from .modules.general_ledger.gl_analytics import register_gl_analytics_outputs
 
 from .modules.investments.loan_portfolio import register_outputs as register_loan_portfolio_outputs
@@ -374,7 +374,8 @@ def server(input, output, session):
 
     register_chart_of_accounts_outputs(output, input, session, selected_fund)
     
-    register_crypto_token_tracker_outputs(output, input, session)
+    # Crypto tracker now includes token fetcher outputs
+    register_crypto_tracker_outputs(output, input, session)
     
     register_gl_analytics_outputs(output, input, session, selected_fund)
     

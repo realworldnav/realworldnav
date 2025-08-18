@@ -1,5 +1,12 @@
 from shiny import ui, reactive, render
 
+def crypto_tracker_tab_content():
+    """Crypto tracker interface with Overview, FIFO, and Fetcher tabs"""
+    # Import here to avoid circular imports
+    from .crypto_tracker import crypto_tracker_ui
+    
+    return crypto_tracker_ui()
+
 def general_ledger_ui():
     print("DEBUG — general_ledger_ui() function called")
 
@@ -11,6 +18,10 @@ def general_ledger_ui():
             ui.nav_panel(
                 ui.HTML('<i class="fas fa-book"></i> Journal Entries'),
                 journal_entries_content()
+            ),
+            ui.nav_panel(
+                ui.HTML('<i class="fas fa-coins"></i> Crypto Tracker'),
+                crypto_tracker_tab_content()
             ),
             ui.nav_panel(
                 ui.HTML('<i class="fas fa-chart-bar"></i> GL Analytics'), 
@@ -78,13 +89,6 @@ def journal_entries_content():
 
         # Apple-inspired CSS styling matching Chart of Accounts
     )
-
-def crypto_token_tracker_content():
-    """Crypto token tracker interface"""
-    # Import here to avoid circular imports
-    from .crypto_token_tracker import crypto_token_tracker_ui
-    
-    return crypto_token_tracker_ui()
 
 def gl_analytics_content():
     """GL Analytics and reporting interface"""

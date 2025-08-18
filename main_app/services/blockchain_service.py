@@ -36,6 +36,7 @@ from ..s3_utils import load_WALLET_file
 
 # Import token classifier
 from .token_classifier import TokenClassifier
+import requests
 
 
 class BlockchainService:
@@ -362,8 +363,9 @@ class BlockchainService:
             # Get transaction details
             tx = self.w3.eth.get_transaction(log['transactionHash'])
             
-            # Get token symbol
+            # Get token symbol and name
             token_symbol = self._get_token_symbol_from_address(token_address)
+            token_name = self._get_token_name_from_address(token_address)
             
             # Classify token for security filtering
             token_classification = self.token_classifier.classify_token(
@@ -412,21 +414,26 @@ class BlockchainService:
             # Format direction for display
             direction_display = "IN" if direction == "in" else "OUT"
             
+            # New structure with required fields: Date, Hash, Direction, Token Name, Amount (of token), Value (ETH), Value (USD), From, To
             return {
-                'tx_hash': log['transactionHash'].hex(),
-                'block_number': log['blockNumber'],
-                'log_index': log['logIndex'],
+                # Required fields in order
                 'date': block_time,
-                'event_type': event_type,
+                'tx_hash': log['transactionHash'].hex(),
                 'direction': direction_display,
-                'token_symbol': token_symbol,
-                'token_address': token_address,
-                'wallet_address': wallet_checksum,
-                'from_address': from_addr,
-                'to_address': to_addr,
+                'token_name': token_name,
                 'token_amount': float(token_amount),
                 'token_value_eth': float(token_value_eth),
                 'token_value_usd': float(token_value_usd),
+                'from_address': from_addr,
+                'to_address': to_addr,
+                
+                # Additional fields for compatibility and analysis
+                'block_number': log['blockNumber'],
+                'log_index': log['logIndex'],
+                'event_type': event_type,
+                'token_symbol': token_symbol,
+                'token_address': token_address,
+                'wallet_address': wallet_checksum,
                 'eth_price_usd': float(eth_price),
                 'gas_fee_eth': float(gas_fee_eth),
                 'gas_fee_usd': float(gas_fee_usd),
@@ -511,3 +518,33 @@ class BlockchainService:
         
         # Default to ETH price for unknown tokens
         return eth_price
+    
+    @lru_cache(maxsize=CACHE_SIZES["token_info"])
+    def _get_token_name_from_address(self, token_address: str) -> str:
+        """Get token name from contract address using CoinGecko API with fallback."""
+        try:
+            # Clean the address
+            address = token_address.lower().strip()
+            
+            # Check verified tokens first
+            for symbol, addr in VERIFIED_TOKENS.items():
+                if addr.lower() == address:
+                    return symbol
+            
+            # Try CoinGecko API
+            url = f"https://api.coingecko.com/api/v3/coins/ethereum/contract/{address}"
+            
+            import requests
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                token_name = data.get("name", "Unknown Token")
+                return token_name
+            else:
+                logger.warning(f"CoinGecko API returned status {response.status_code} for {address}")
+                
+        except Exception as e:
+            logger.error(f"Error fetching token name for {token_address}: {e}")
+        
+        # Fallback to truncated address
+        return f"Token {token_address[:6]}...{token_address[-4:]}"

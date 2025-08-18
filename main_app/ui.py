@@ -185,16 +185,11 @@ def enhanced_general_ledger_ui():
     """General Ledger with Dashboard + sub-navigation"""
     # Import here to avoid circular imports
     from .modules.general_ledger.chart_of_accounts import chart_of_accounts_ui
-    from .modules.general_ledger.crypto_token_tracker import crypto_token_tracker_ui
     
     return shiny_ui.navset_tab(
         shiny_ui.nav_panel("Dashboard", general_ledger_dashboard_ui()),
         shiny_ui.nav_panel("General Ledger", general_ledger_ui()),
         shiny_ui.nav_panel("Chart of Accounts", chart_of_accounts_ui()),
-        shiny_ui.nav_panel(
-            shiny_ui.HTML('<i class="fas fa-coins"></i> Crypto Tracker'), 
-            crypto_token_tracker_ui()
-        ),
         id="general_ledger_tabs"
     )
 
