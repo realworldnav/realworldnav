@@ -14,7 +14,8 @@
       "Bash(cp:*)",
       "Bash(del crypto_tracker.py crypto_tracker_backup.py)",
       "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\main_app\\modules\\general_ledger\\__pycache__\\crypto_tracker*.pyc\")",
-      "WebFetch(domain:shiny.posit.co)"
+      "WebFetch(domain:shiny.posit.co)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": [],

@@ -185,6 +185,8 @@ class FIFOTracker:
                 "realized_gain_usd": float(gain_usd),
                 # Position tracking
                 "remaining_token_amount": float(remaining_token_amount),
+                "remaining_eth_cost_basis": float(remaining_eth_value),
+                "remaining_usd_cost_basis": float(sum(lot[1] if len(lot) > 1 else Decimal("0") for lot in dq)),
                 "eth_usd_rate": float(eth_rate),
             })
     
@@ -230,7 +232,10 @@ class FIFOTracker:
             "cost_basis_usd": float(total_usd_value),  # Cost basis = current USD value of lots
             "average_price_eth": avg_eth_per_token,
             "average_price_usd": avg_usd_per_token,
-            "lot_count": len(dq)
+            "lot_count": len(dq),
+            "remaining_qty": float(total_token_amount),  # Same as token_amount for current positions
+            "remaining_cost_basis_eth": float(total_eth_value),  # Same as cost_basis_eth for current positions
+            "remaining_cost_basis_usd": float(total_usd_value)   # Same as cost_basis_usd for current positions
         }
     
     def get_all_positions(self) -> pd.DataFrame:

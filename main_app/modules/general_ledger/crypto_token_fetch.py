@@ -75,7 +75,7 @@ def crypto_token_tracker_ui():
         
         # Control Panel
         ui.card(
-            ui.card_header(ui.HTML('<i class="fas fa-filter"></i> Transaction Filters')),
+            ui.card_header(ui.HTML('<i class="bi bi-funnel"></i> Transaction Filters')),
             ui.card_body(
                 ui.row(
                     ui.column(
@@ -106,10 +106,10 @@ def crypto_token_tracker_ui():
                         ui.div(
                             ui.input_action_button(
                                 "fetch_token_transactions",
-                                ui.HTML('<i class="fas fa-download"></i> Fetch Transactions'),
+                                ui.HTML('<i class="bi bi-download"></i> Fetch Transactions'),
                                 class_="btn-primary mt-4"
                             ),
-                            ui.output_ui("fetch_progress_inline"),
+                            # Native Shiny progress will appear automatically during fetch
                             class_="d-grid gap-2"
                         )
                     )
@@ -127,14 +127,14 @@ def crypto_token_tracker_ui():
         # Results Tabs
         ui.navset_card_tab(
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-check-circle text-success"></i> Verified Tokens'),
+                ui.HTML('<i class="bi bi-check-circle text-success"></i> Verified Tokens'),
                 ui.div(
                     ui.p("Tokens from the verified whitelist (automatically approved)", class_="text-muted small"),
                     ui.output_data_frame("verified_tokens_table")
                 )
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-question-circle text-warning"></i> Unverified Tokens'),
+                ui.HTML('<i class="bi bi-question-circle text-warning"></i> Unverified Tokens'),
                 ui.div(
                     ui.p("Tokens requiring manual review and approval", class_="text-muted small"),
                     ui.output_ui("unverified_tokens_actions"),
@@ -142,7 +142,7 @@ def crypto_token_tracker_ui():
                 )
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-shield-alt text-info"></i> Approved Tokens'),
+                ui.HTML('<i class="bi bi-shield-check text-info"></i> Approved Tokens'),
                 ui.div(
                     ui.p("Previously approved tokens from manual review", class_="text-muted small"),
                     
@@ -160,7 +160,7 @@ def crypto_token_tracker_ui():
                                     ),
                                     ui.input_action_button(
                                         "add_approved_token",
-                                        ui.HTML('<i class="fas fa-plus"></i> Add Token'),
+                                        ui.HTML('<i class="bi bi-plus"></i> Add Token'),
                                         class_="btn-success btn-sm mt-2"
                                     )
                                 ),
@@ -170,7 +170,7 @@ def crypto_token_tracker_ui():
                                     ui.output_ui("remove_token_dropdown"),
                                     ui.input_action_button(
                                         "remove_selected_token",
-                                        ui.HTML('<i class="fas fa-trash"></i> Remove Selected Token'),
+                                        ui.HTML('<i class="bi bi-trash"></i> Remove Selected Token'),
                                         class_="btn-danger btn-sm mt-2"
                                     )
                                 )
@@ -182,20 +182,21 @@ def crypto_token_tracker_ui():
                 )
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-list"></i> All Transactions'),
+                ui.HTML('<i class="bi bi-list"></i> All Transactions'),
                 ui.div(
                     ui.p("Complete transaction history", class_="text-muted small"),
                     # Push to FIFO button and status
                     ui.div(
                         ui.input_action_button(
                             "push_to_fifo",
-                            ui.HTML('<i class="fas fa-arrow-right"></i> Push All Transactions to FIFO'),
+                            ui.HTML('<i class="bi bi-arrow-right"></i> Push All Transactions to FIFO'),
                             class_="btn-primary mb-3"
                         ),
                         ui.HTML('<small class="text-muted ms-3">This will stage all fetched transactions for FIFO processing</small>'),
                         class_="d-flex align-items-center mb-3"
                     ),
                     # Push status display
+                    # Native Shiny progress will appear automatically during push
                     ui.output_ui("push_status_display"),
                     ui.row(
                         ui.column(
@@ -240,6 +241,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
     # Track push to FIFO status
     push_status = reactive.value("")
     
+    # Progress tracking for long-running operations  
+    fetch_progress_percent = reactive.value(-1)  # -1 means no operation
+    push_progress_percent = reactive.value(-1)   # -1 means no operation
+    
     # Reactive trigger for staged transactions updates (for cross-module reactivity)
     staged_transactions_trigger = reactive.value(0)
     
@@ -261,7 +266,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if service is None:
             return ui.div(
                 ui.div(
-                    ui.HTML('<i class="fas fa-exclamation-triangle text-warning"></i> Blockchain service not initialized'),
+                    ui.HTML('<i class="bi bi-exclamation-triangle text-warning"></i> Blockchain service not initialized'),
                     class_="alert alert-warning"
                 )
             )
@@ -336,7 +341,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if is_fetching:
             print("📊 Showing inline progress!")
             return ui.div(
-                ui.HTML(f'<i class="fas fa-spinner fa-spin text-primary me-1"></i>{fetch_progress_message.get()}'),
+                ui.HTML(f'<i class="bi bi-arrow-clockwise text-primary me-1"></i>{fetch_progress_message.get()}'),
                 ui.div(
                     ui.div(
                         class_="progress-bar progress-bar-striped progress-bar-animated bg-primary",
@@ -354,7 +359,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
     # Fetch transactions from blockchain
     @reactive.effect
     @reactive.event(input.fetch_token_transactions)
-    def fetch_token_transactions():
+    async def fetch_token_transactions():
         print("🚀 FETCH TRANSACTIONS BUTTON CLICKED!")
         logger.info("Fetch transactions button clicked")
         
@@ -367,122 +372,148 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         print("✅ Blockchain service is ready")
         
-        try:
-            # Set progress flag
-            print("🟢 Setting fetch_in_progress to True")
-            fetch_in_progress.set(True)
-            fetch_progress_message.set("Preparing to fetch transactions...")
-            print("📝 Set progress message: Preparing to fetch transactions...")
-            
-            # Get selected parameters
-            fund_id = input.token_fund_select()
-            wallet_selection = input.token_wallet_select()
-            date_range = input.token_date_range()
-            
-            # Parse date range with timezone awareness
-            from datetime import timezone
-            start_date = datetime.combine(date_range[0], datetime.min.time()).replace(tzinfo=timezone.utc)
-            end_date = datetime.combine(date_range[1], datetime.max.time()).replace(tzinfo=timezone.utc)
-            
-            print(f"📅 Date range selected: {date_range[0]} to {date_range[1]}")
-            print(f"📅 Converted to datetime: {start_date} to {end_date}")
-            logger.info(f"Fetching transactions for fund: {fund_id}, wallets: {wallet_selection}, dates: {start_date} to {end_date}")
-            
-            # Prepare wallet addresses
-            wallet_addresses = None
-            if wallet_selection and "all" not in wallet_selection:
-                wallet_addresses = wallet_selection
-            
-            # Use fund_id only if not "all"
-            fund_param = None if fund_id == "all" else fund_id
-            
-            # Progress callback
-            def update_progress(current, total, tx_count):
-                fetch_progress_message.set(f"Processing wallet {current}/{total} - Found {tx_count} transactions...")
-            
-            # Fetch transactions using BlockchainService
-            fetch_progress_message.set("Fetching transactions from blockchain...")
-            
+        # Start native Shiny progress
+        with ui.Progress(min=0, max=100) as progress:
             try:
-                print(f"🚀 Starting blockchain fetch with parameters:")
-                print(f"   📅 Start date: {start_date}")
-                print(f"   📅 End date: {end_date}")
-                print(f"   💰 Fund: {fund_param}")
-                print(f"   👛 Wallets: {len(wallet_addresses) if wallet_addresses else 'All'}")
+                # Step 1: Initialize progress tracking
+                progress.set(5, message="Preparing to fetch transactions...", detail="Initializing blockchain service")
+                print("🟢 Started native Shiny progress tracking")
+                fetch_in_progress.set(True)
                 
-                df = service.fetch_transactions_for_period(
-                    start_date=start_date,
-                    end_date=end_date,
-                    fund_id=fund_param,
-                    wallet_addresses=wallet_addresses,
-                    progress_callback=update_progress
-                )
+                # Step 2: Parse parameters
+                progress.set(15, message="Parsing parameters...", detail="Getting fund, wallet, and date selections")
                 
-                print(f"📊 Raw fetch result: {len(df)} transactions")
-                if not df.empty:
-                    print(f"🔍 Raw columns: {list(df.columns)}")
-                    print(f"🔍 First transaction sample: {df.iloc[0].to_dict() if len(df) > 0 else 'None'}")
-            except Exception as blockchain_error:
-                if "429" in str(blockchain_error) or "Too Many Requests" in str(blockchain_error):
-                    fetch_progress_message.set("Rate limited by Infura. Please wait a few minutes and try again with a smaller date range.")
-                    logger.error(f"Rate limited by Infura: {blockchain_error}")
-                    return
-                else:
-                    raise  # Re-raise if not a rate limit error
-            
-            if df.empty:
-                fetch_progress_message.set("No transactions found for the selected criteria")
-                fetched_transactions.set(pd.DataFrame())
-            else:
-                # Process the fetched data - make outgoing amounts negative
-                processed_df = df.copy()
+                # Get selected parameters
+                fund_id = input.token_fund_select()
+                wallet_selection = input.token_wallet_select()
+                date_range = input.token_date_range()
                 
-                # Filter by date range to ensure we only get transactions in the selected range
-                if 'date' in processed_df.columns:
-                    print(f"📅 Before date filtering: {len(processed_df)} transactions")
-                    processed_df['date'] = pd.to_datetime(processed_df['date'])
-                    date_mask = (
-                        (processed_df['date'] >= start_date) & 
-                        (processed_df['date'] <= end_date)
+                # Parse date range with timezone awareness
+                from datetime import timezone
+                start_date = datetime.combine(date_range[0], datetime.min.time()).replace(tzinfo=timezone.utc)
+                end_date = datetime.combine(date_range[1], datetime.max.time()).replace(tzinfo=timezone.utc)
+                
+                print(f"📅 Date range selected: {date_range[0]} to {date_range[1]}")
+                print(f"📅 Converted to datetime: {start_date} to {end_date}")
+                logger.info(f"Fetching transactions for fund: {fund_id}, wallets: {wallet_selection}, dates: {start_date} to {end_date}")
+                
+                # Step 3: Prepare wallet addresses
+                progress.set(25, message="Preparing wallet addresses...", detail=f"Processing {len(wallet_selection) if wallet_selection and 'all' not in wallet_selection else 'all'} wallets")
+                
+                # Prepare wallet addresses
+                wallet_addresses = None
+                if wallet_selection and "all" not in wallet_selection:
+                    wallet_addresses = wallet_selection
+                
+                # Use fund_id only if not "all"
+                fund_param = None if fund_id == "all" else fund_id
+                
+                # Enhanced progress callback for blockchain service
+                def update_progress(current, total, tx_count):
+                    # Calculate percentage for blockchain fetching (25-70%)
+                    if total > 0:
+                        wallet_progress = (current / total) * 45  # 45% of progress for wallet processing
+                        overall_progress = 25 + wallet_progress
+                        progress.set(overall_progress, 
+                                   message=f"Fetching from blockchain...", 
+                                   detail=f"Processing wallet {current}/{total} - Found {tx_count} transactions")
+                
+                # Step 4: Start blockchain fetch
+                progress.set(30, message="Fetching transactions from blockchain...", 
+                           detail="This may take a few moments depending on date range")
+                
+                try:
+                    print(f"🚀 Starting blockchain fetch with parameters:")
+                    print(f"   📅 Start date: {start_date}")
+                    print(f"   📅 End date: {end_date}")
+                    print(f"   💰 Fund: {fund_param}")
+                    print(f"   👛 Wallets: {len(wallet_addresses) if wallet_addresses else 'All'}")
+                    
+                    df = service.fetch_transactions_for_period(
+                        start_date=start_date,
+                        end_date=end_date,
+                        fund_id=fund_param,
+                        wallet_addresses=wallet_addresses,
+                        progress_callback=update_progress
                     )
-                    processed_df = processed_df[date_mask].copy()
-                    print(f"📅 After date filtering: {len(processed_df)} transactions")
+                    
+                    print(f"📊 Raw fetch result: {len(df)} transactions")
+                    if not df.empty:
+                        print(f"🔍 Raw columns: {list(df.columns)}")
+                        print(f"🔍 First transaction sample: {df.iloc[0].to_dict() if len(df) > 0 else 'None'}")
+                except Exception as blockchain_error:
+                    if "429" in str(blockchain_error) or "Too Many Requests" in str(blockchain_error):
+                        fetch_progress_message.set("Rate limited by Infura. Please wait a few minutes and try again with a smaller date range.")
+                        logger.error(f"Rate limited by Infura: {blockchain_error}")
+                        return
+                    else:
+                        raise  # Re-raise if not a rate limit error
                 
-                # Note: Amount signing is now handled in blockchain_service based on side/qty
-                # The blockchain service already provides properly signed quantities in 'qty' field
-                print(f"🔍 Processing columns: {list(processed_df.columns)}")
+                # Step 5: Process fetched data
+                progress.set(75, message="Processing fetched data...", detail="Analyzing blockchain results")
                 
-                # Field normalization: Map qty → token_amount for display compatibility
-                if 'qty' in processed_df.columns:
-                    processed_df['token_amount'] = processed_df['qty'].abs()  # Use absolute value for display
-                    print(f"📊 Mapped 'qty' to 'token_amount' (absolute values for display)")
-                
-                # Quantity validation: Ensure proper signs are preserved for FIFO processing
-                if 'side' in processed_df.columns:
-                    print(f"📊 Side distribution: {processed_df['side'].value_counts().to_dict()}")
+                if df.empty:
+                    progress.set(100, message="No transactions found", detail="Try adjusting your search criteria")
+                    fetch_progress_message.set("No transactions found for the selected criteria")
+                    fetched_transactions.set(pd.DataFrame())
+                else:
+                    # Step 6: Start data processing
+                    progress.set(80, message="Processing transaction data...", detail=f"Processing {len(df)} transactions")
+                    
+                    # Process the fetched data - make outgoing amounts negative
+                    processed_df = df.copy()
+                    
+                    # Filter by date range to ensure we only get transactions in the selected range
+                    if 'date' in processed_df.columns:
+                        print(f"📅 Before date filtering: {len(processed_df)} transactions")
+                        processed_df['date'] = pd.to_datetime(processed_df['date'])
+                        date_mask = (
+                            (processed_df['date'] >= start_date) & 
+                            (processed_df['date'] <= end_date)
+                        )
+                        processed_df = processed_df[date_mask].copy()
+                        print(f"📅 After date filtering: {len(processed_df)} transactions")
+                    
+                    # Step 7: Field normalization
+                    progress.set(90, message="Normalizing transaction fields...", detail="Formatting data for display")
+                    
+                    # Note: Amount signing is now handled in blockchain_service based on side/qty
+                    # The blockchain service already provides properly signed quantities in 'qty' field
+                    print(f"🔍 Processing columns: {list(processed_df.columns)}")
+                    
+                    # Field normalization: Map qty → token_amount for display compatibility
                     if 'qty' in processed_df.columns:
-                        buy_qty_check = processed_df[processed_df['side'] == 'buy']['qty']
-                        sell_qty_check = processed_df[processed_df['side'] == 'sell']['qty']
-                        print(f"📊 Buy quantities (should be positive): {buy_qty_check.describe()}")
-                        print(f"📊 Sell quantities (should be negative): {sell_qty_check.describe()}")
+                        processed_df['token_amount'] = processed_df['qty'].abs()  # Use absolute value for display
+                        print(f"📊 Mapped 'qty' to 'token_amount' (absolute values for display)")
+                    
+                    # Quantity validation: Ensure proper signs are preserved for FIFO processing
+                    if 'side' in processed_df.columns:
+                        print(f"📊 Side distribution: {processed_df['side'].value_counts().to_dict()}")
+                        if 'qty' in processed_df.columns:
+                            buy_qty_check = processed_df[processed_df['side'] == 'buy']['qty']
+                            sell_qty_check = processed_df[processed_df['side'] == 'sell']['qty']
+                            print(f"📊 Buy quantities (should be positive): {buy_qty_check.describe()}")
+                            print(f"📊 Sell quantities (should be negative): {sell_qty_check.describe()}")
+                    
+                    # Step 8: Complete processing
+                    progress.set(100, message="Fetch completed successfully!", 
+                               detail=f"Successfully processed {len(processed_df)} transactions")
+                    
+                    logger.info(f"Fetched and processed {len(processed_df)} transactions")
+                    fetched_transactions.set(processed_df)
+                    fetch_progress_message.set(f"✅ Successfully fetched {len(processed_df)} transactions!")
                 
-                # Remove legacy direction-based negation to prevent double negatives
-                
-                logger.info(f"Fetched and processed {len(processed_df)} transactions")
-                fetched_transactions.set(processed_df)
-                fetch_progress_message.set(f"✅ Successfully fetched {len(processed_df)} transactions!")
+            except Exception as e:
+                logger.error(f"Error fetching transactions: {e}")
+                fetch_progress_message.set(f"Error: {str(e)}")
+                fetched_transactions.set(pd.DataFrame())
+                progress.set(0, message="Error occurred", detail=str(e))
+                raise e
             
-        except Exception as e:
-            logger.error(f"Error fetching transactions: {e}")
-            fetch_progress_message.set(f"Error: {str(e)}")
-            fetched_transactions.set(pd.DataFrame())
-        
-        finally:
-            # Keep progress visible for a moment so user can see it
-            import time
-            time.sleep(2)  # Show progress for 2 seconds after completion
-            print("🔴 Setting fetch_in_progress to False")
-            fetch_in_progress.set(False)
+            finally:
+                print("🔴 Setting fetch_in_progress to False")
+                fetch_in_progress.set(False)
+                # Progress bar will auto-close when the 'with' block exits
     
     # Show fetch status summary
     @output
@@ -794,7 +825,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if unverified_df.empty:
             return ui.div(
                 ui.div(
-                    ui.HTML('<i class="fas fa-check-circle text-success"></i> All tokens are either verified or approved!'),
+                    ui.HTML('<i class="bi bi-check-circle text-success"></i> All tokens are either verified or approved!'),
                     class_="alert alert-success"
                 )
             )
@@ -822,12 +853,12 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 ui.div(
                     ui.input_action_button(
                         "approve_selected_token",
-                        ui.HTML('<i class="fas fa-check"></i> Approve Selected Token'),
+                        ui.HTML('<i class="bi bi-check"></i> Approve Selected Token'),
                         class_="btn-success btn-sm me-2"
                     ),
                     ui.input_action_button(
                         "refresh_token_data",
-                        ui.HTML('<i class="fas fa-sync"></i> Refresh Tables'),
+                        ui.HTML('<i class="bi bi-arrow-clockwise"></i> Refresh Tables'),
                         class_="btn-secondary btn-sm"
                     ),
                     class_="mt-2"
@@ -1006,7 +1037,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if df.empty:
             return ui.div(
                 ui.div(
-                    ui.HTML('<i class="fas fa-info-circle text-muted"></i>'),
+                    ui.HTML('<i class="bi bi-info-circle text-muted"></i>'),
                     ui.p("No transactions available", class_="text-muted mb-0 ms-2"),
                     class_="d-flex align-items-center"
                 ),
@@ -1019,7 +1050,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if not selected_rows or len(selected_rows) == 0:
             return ui.div(
                 ui.div(
-                    ui.HTML('<i class="fas fa-hand-pointer text-primary"></i>'),
+                    ui.HTML('<i class="bi bi-hand-index text-primary"></i>'),
                     ui.p("Select a transaction", class_="text-primary mb-0 ms-2"),
                     class_="d-flex align-items-center"
                 ),
@@ -1056,7 +1087,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             return ui.div(
                 # Transaction header
                 ui.div(
-                    ui.HTML('<i class="fas fa-receipt text-success"></i>'),
+                    ui.HTML('<i class="bi bi-receipt text-success"></i>'),
                     ui.strong("Transaction Selected", class_="text-success ms-2"),
                     class_="d-flex align-items-center mb-3"
                 ),
@@ -1106,7 +1137,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 ui.hr(),
                 ui.div(
                     ui.HTML(f'<a href="{etherscan_url}" target="_blank" class="btn btn-primary w-100">'),
-                    ui.HTML('<i class="fas fa-external-link-alt me-2"></i>View on Etherscan'),
+                    ui.HTML('<i class="bi bi-box-arrow-up-right me-2"></i>View on Etherscan'),
                     ui.HTML('</a>'),
                     class_="text-center"
                 )
@@ -1114,7 +1145,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         return ui.div(
             ui.div(
-                ui.HTML('<i class="fas fa-exclamation-triangle text-warning"></i>'),
+                ui.HTML('<i class="bi bi-exclamation-triangle text-warning"></i>'),
                 ui.p("Invalid selection", class_="text-warning mb-0 ms-2"),
                 class_="d-flex align-items-center"
             ),
@@ -1124,80 +1155,100 @@ def register_crypto_token_tracker_outputs(output, input, session):
     # Push transactions to FIFO staging
     @reactive.effect
     @reactive.event(input.push_to_fifo)
-    def push_transactions_to_fifo():
+    async def push_transactions_to_fifo():
         """Push all fetched transactions to FIFO staging area"""
         print("🚀 PUSH TO FIFO BUTTON CLICKED!")
         logger.info("Push to FIFO button clicked")
         
-        try:
-            transactions_df = fetched_transactions.get()
-            print(f"📊 Fetched transactions: {len(transactions_df)} rows")
-            
-            if transactions_df.empty:
-                print("⚠️ No transactions available to push to FIFO")
-                logger.warning("No transactions available to push to FIFO")
-                return
-            
-            # Normalize data for FIFO processing and display compatibility
-            fifo_df = transactions_df.copy()
-            
-            # Ensure all required fields exist for FIFO processing
-            print(f"🔧 Normalizing transaction data for FIFO processing...")
-            print(f"   📋 Original columns: {list(fifo_df.columns)}")
-            
-            # Map asset → token_name if token_name is missing
-            if 'asset' in fifo_df.columns and 'token_name' not in fifo_df.columns:
-                fifo_df['token_name'] = fifo_df['asset']
-                print(f"   🔄 Mapped 'asset' → 'token_name'")
-            
-            # Ensure token_amount exists (should already be mapped from qty)
-            if 'token_amount' not in fifo_df.columns and 'qty' in fifo_df.columns:
-                fifo_df['token_amount'] = fifo_df['qty'].abs()
-                print(f"   🔄 Mapped 'qty' → 'token_amount' (absolute values)")
+        # Start native Shiny progress
+        with ui.Progress(min=0, max=100) as progress:
+            try:
+                # Step 1: Load and validate transactions
+                progress.set(10, message="Loading transactions...", detail="Validating fetched transaction data")
+                transactions_df = fetched_transactions.get()
+                print(f"📊 Fetched transactions: {len(transactions_df)} rows")
                 
-            # Ensure proper date format
-            if 'date' in fifo_df.columns:
-                fifo_df['date'] = pd.to_datetime(fifo_df['date'])
-                print(f"   🔄 Normalized date format")
-            
-            # Add any missing required fields with defaults
-            required_fields = ['wallet_id', 'side', 'token_name', 'token_amount', 'token_value_eth', 'token_value_usd', 'intercompany']
-            for field in required_fields:
-                if field not in fifo_df.columns:
-                    if field == 'intercompany':
-                        fifo_df[field] = False
-                    elif field in ['token_amount', 'token_value_eth', 'token_value_usd']:
-                        fifo_df[field] = 0.0
-                    else:
-                        fifo_df[field] = '-'
-                    print(f"   ⚠️  Added missing field '{field}' with default value")
-            
-            print(f"   ✅ Final columns: {list(fifo_df.columns)}")
-            print(f"   📊 Sample transaction: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
-            
-            # Store transactions for FIFO processing
-            staged_transactions.set(fifo_df.copy())
-            print(f"✅ Staged transactions locally: {len(fifo_df)} rows")
-            
-            # Also store globally for cross-module access
-            set_staged_transactions_global(fifo_df)
-            print(f"🌐 Staged transactions globally: {len(fifo_df)} rows")
-            
-            logger.info(f"Successfully staged {len(fifo_df)} transactions for FIFO processing")
-            print("🎉 Push to FIFO completed successfully!")
-            
-            # Update status
-            push_status.set(f"✅ Successfully staged {len(fifo_df)} transactions for FIFO processing")
-            
-            # Trigger reactive update for cross-module access
-            current_trigger = staged_transactions_trigger.get()
-            staged_transactions_trigger.set(current_trigger + 1)
-            print(f"🔄 Triggered reactive update for staged transactions (trigger: {current_trigger + 1})")
-            
-        except Exception as e:
-            print(f"❌ Error pushing transactions to FIFO: {e}")
-            logger.error(f"Error pushing transactions to FIFO: {e}")
-            push_status.set(f"❌ Error: {str(e)}")
+                if transactions_df.empty:
+                    progress.set(100, message="No transactions to process", detail="Please fetch transactions first")
+                    print("⚠️ No transactions available to push to FIFO")
+                    logger.warning("No transactions available to push to FIFO")
+                    return
+                
+                # Step 2: Start data normalization
+                progress.set(25, message="Normalizing transaction data...", detail="Preparing data for FIFO processing")
+                fifo_df = transactions_df.copy()
+                
+                # Ensure all required fields exist for FIFO processing
+                print(f"🔧 Normalizing transaction data for FIFO processing...")
+                print(f"   📋 Original columns: {list(fifo_df.columns)}")
+                
+                # Step 3: Map essential fields
+                progress.set(40, message="Mapping essential fields...", detail="Converting blockchain data to FIFO format")
+                
+                # Map asset → token_name if token_name is missing
+                if 'asset' in fifo_df.columns and 'token_name' not in fifo_df.columns:
+                    fifo_df['token_name'] = fifo_df['asset']
+                    print(f"   🔄 Mapped 'asset' → 'token_name'")
+                
+                # Ensure token_amount exists (should already be mapped from qty)
+                if 'token_amount' not in fifo_df.columns and 'qty' in fifo_df.columns:
+                    fifo_df['token_amount'] = fifo_df['qty'].abs()
+                    print(f"   🔄 Mapped 'qty' → 'token_amount' (absolute values)")
+                    
+                # Step 4: Format dates and add missing fields
+                progress.set(60, message="Formatting dates and fields...", detail="Ensuring all required fields are present")
+                
+                # Ensure proper date format
+                if 'date' in fifo_df.columns:
+                    fifo_df['date'] = pd.to_datetime(fifo_df['date'])
+                    print(f"   🔄 Normalized date format")
+                
+                # Add any missing required fields with defaults
+                required_fields = ['wallet_id', 'side', 'token_name', 'token_amount', 'token_value_eth', 'token_value_usd', 'intercompany']
+                for field in required_fields:
+                    if field not in fifo_df.columns:
+                        if field == 'intercompany':
+                            fifo_df[field] = False
+                        elif field in ['token_amount', 'token_value_eth', 'token_value_usd']:
+                            fifo_df[field] = 0.0
+                        else:
+                            fifo_df[field] = '-'
+                        print(f"   ⚠️  Added missing field '{field}' with default value")
+                
+                print(f"   ✅ Final columns: {list(fifo_df.columns)}")
+                print(f"   📊 Sample transaction: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
+                
+                # Step 5: Store transactions locally
+                progress.set(80, message="Staging transactions locally...", detail=f"Preparing {len(fifo_df)} transactions")
+                staged_transactions.set(fifo_df.copy())
+                print(f"✅ Staged transactions locally: {len(fifo_df)} rows")
+                
+                # Step 6: Store globally and complete
+                progress.set(90, message="Updating global state...", detail="Making transactions available to FIFO tracker")
+                set_staged_transactions_global(fifo_df)
+                print(f"🌐 Staged transactions globally: {len(fifo_df)} rows")
+                
+                # Trigger reactive update for cross-module access
+                current_trigger = staged_transactions_trigger.get()
+                staged_transactions_trigger.set(current_trigger + 1)
+                print(f"🔄 Triggered reactive update for staged transactions (trigger: {current_trigger + 1})")
+                
+                # Complete progress
+                progress.set(100, message="Push to FIFO completed!", 
+                           detail=f"Successfully staged {len(fifo_df)} transactions")
+                
+                logger.info(f"Successfully staged {len(fifo_df)} transactions for FIFO processing")
+                print("🎉 Push to FIFO completed successfully!")
+                
+                # Update status
+                push_status.set(f"✅ Successfully staged {len(fifo_df)} transactions for FIFO processing")
+                
+            except Exception as e:
+                print(f"❌ Error pushing transactions to FIFO: {e}")
+                logger.error(f"Error pushing transactions to FIFO: {e}")
+                push_status.set(f"❌ Error: {str(e)}")
+                progress.set(0, message="Error occurred", detail=str(e))
+                raise e
     
     # Display push status
     @output
@@ -1207,17 +1258,20 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if status:
             if "✅" in status:
                 return ui.div(
-                    ui.HTML(f'<i class="fas fa-check-circle text-success"></i>'),
+                    ui.HTML(f'<i class="bi bi-check-circle text-success"></i>'),
                     ui.span(status.replace("✅", ""), class_="text-success ms-2"),
                     class_="d-flex align-items-center mb-3 alert alert-success"
                 )
             elif "❌" in status:
                 return ui.div(
-                    ui.HTML(f'<i class="fas fa-exclamation-circle text-danger"></i>'),
+                    ui.HTML(f'<i class="bi bi-exclamation-circle text-danger"></i>'),
                     ui.span(status.replace("❌", ""), class_="text-danger ms-2"),
                     class_="d-flex align-items-center mb-3 alert alert-danger"
                 )
         return ui.div()
+    
+    # Note: Progress indicators are now handled by native Shiny ui.Progress
+    # The progress bars appear automatically during fetch and push operations
 
 
 # Integration functions for FIFO tracker
@@ -1318,6 +1372,39 @@ def set_staged_transactions_global(transactions_df: pd.DataFrame) -> None:
     _global_staged_transactions = transactions_df.copy()
     _global_staged_transactions_trigger += 1
     logger.info(f"Globally staged {len(transactions_df)} transactions for FIFO processing (trigger: {_global_staged_transactions_trigger})")
+
+def clear_staged_transactions_global() -> None:
+    """
+    Clear all globally staged transactions after FIFO processing.
+    This removes transactions from the "Transactions Ready" table.
+    """
+    global _global_staged_transactions, _global_staged_transactions_trigger
+    _global_staged_transactions = pd.DataFrame()
+    _global_staged_transactions_trigger += 1
+    logger.info(f"Cleared all staged transactions after FIFO processing (trigger: {_global_staged_transactions_trigger})")
+
+def remove_processed_transactions_global(processed_tx_hashes: list) -> None:
+    """
+    Remove specific transactions from global staging after they've been processed.
+    
+    Args:
+        processed_tx_hashes: List of transaction hashes that have been processed
+    """
+    global _global_staged_transactions, _global_staged_transactions_trigger
+    
+    if _global_staged_transactions.empty:
+        return
+    
+    # Filter out processed transactions
+    if 'tx_hash' in _global_staged_transactions.columns:
+        mask = ~_global_staged_transactions['tx_hash'].isin(processed_tx_hashes)
+        _global_staged_transactions = _global_staged_transactions[mask].copy()
+    elif 'hash' in _global_staged_transactions.columns:
+        mask = ~_global_staged_transactions['hash'].isin(processed_tx_hashes)
+        _global_staged_transactions = _global_staged_transactions[mask].copy()
+    
+    _global_staged_transactions_trigger += 1
+    logger.info(f"Removed {len(processed_tx_hashes)} processed transactions, {len(_global_staged_transactions)} remaining (trigger: {_global_staged_transactions_trigger})")
 
 def get_staged_transactions_trigger_global() -> int:
     """

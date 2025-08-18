@@ -40,15 +40,15 @@ def crypto_tracker_ui():
         # Three-tab navigation - now includes Token Fetcher
         ui.navset_card_tab(
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-chart-pie"></i> Overview'),
+                ui.HTML('<i class="bi bi-pie-chart"></i> Overview'),
                 crypto_overview_content()
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-calculator"></i> FIFO Tracker'),
+                ui.HTML('<i class="bi bi-calculator"></i> FIFO Tracker'),
                 fifo_tracker_content()
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-download"></i> Token Fetcher'),
+                ui.HTML('<i class="bi bi-download"></i> Token Fetcher'),
                 crypto_token_tracker_ui()
             ),
         )
@@ -150,19 +150,20 @@ def fifo_tracker_content():
                         ),
                         ui.input_action_button(
                             "calculate_fifo",
-                            ui.HTML('<i class="fas fa-calculator"></i> Calculate FIFO'),
+                            ui.HTML('<i class="bi bi-calculator"></i> Calculate FIFO'),
                             class_="btn-primary mt-3 w-100"
                         ),
+                        ui.output_ui("fifo_calculation_progress"),
                         ui.br(),
                         ui.input_action_button(
                             "generate_journal_entries",
-                            ui.HTML('<i class="fas fa-file-export"></i> Generate Journal Entries'),
+                            ui.HTML('<i class="bi bi-file-earmark-arrow-down"></i> Generate Journal Entries'),
                             class_="btn-success mt-2 w-100"
                         ),
                         ui.br(),
                         ui.input_action_button(
                             "export_fifo_csv",
-                            ui.HTML('<i class="fas fa-download"></i> Export CSV'),
+                            ui.HTML('<i class="bi bi-download"></i> Export CSV'),
                             class_="btn-secondary mt-2 w-100"
                         )
                     )
@@ -214,7 +215,29 @@ def fifo_tracker_content():
                     ),
                     ui.nav_panel(
                         "Current Positions",
-                        ui.output_data_frame("fifo_positions_table")
+                        ui.div(
+                            ui.row(
+                                ui.column(
+                                    6,
+                                    ui.input_date(
+                                        "positions_as_of_date",
+                                        "View positions as of:",
+                                        value=date.today(),
+                                        max=date.today()
+                                    )
+                                ),
+                                ui.column(
+                                    6,
+                                    ui.input_action_button(
+                                        "refresh_positions",
+                                        ui.HTML('<i class="bi bi-arrow-clockwise"></i> Refresh Positions'),
+                                        class_="btn-outline-secondary mt-4"
+                                    )
+                                )
+                            ),
+                            ui.hr(),
+                            ui.output_data_frame("fifo_positions_table")
+                        )
                     ),
                     ui.nav_panel(
                         "Journal Entries",
@@ -223,6 +246,28 @@ def fifo_tracker_content():
                     ui.nav_panel(
                         "Validation Report",
                         ui.output_ui("fifo_validation_report")
+                    ),
+                    ui.nav_panel(
+                        "Balance Verification",
+                        ui.div(
+                            ui.row(
+                                ui.column(
+                                    8,
+                                    ui.h5("FIFO Positions vs Etherscan Balances", class_="mb-3"),
+                                    ui.p("Compare calculated FIFO positions with actual blockchain balances", class_="text-muted small mb-3")
+                                ),
+                                ui.column(
+                                    4,
+                                    ui.input_action_button(
+                                        "verify_balances",
+                                        ui.HTML('<i class="bi bi-shield-check"></i> Verify Balances'),
+                                        class_="btn-primary mt-3 w-100"
+                                    )
+                                )
+                            ),
+                            ui.output_ui("balance_verification_status"),
+                            ui.output_data_frame("balance_verification_table")
+                        )
                     )
                 )
             )
@@ -332,7 +377,7 @@ def register_crypto_tracker_outputs(output, input, session):
         if fifo_df.empty:
             return ui.div(
                 ui.div(
-                    ui.HTML('<i class="fas fa-info-circle text-info"></i>'),
+                    ui.HTML('<i class="bi bi-info-circle text-info"></i>'),
                     ui.h5("FIFO Calculation Ready", class_="text-info ms-2"),
                     class_="d-flex align-items-center mb-3"
                 ),
@@ -355,11 +400,11 @@ def register_crypto_tracker_outputs(output, input, session):
         total_transactions = len(fifo_df)
         
         gain_color = "text-success" if total_realized_gain_eth >= 0 else "text-danger"
-        gain_icon = "fa-arrow-up" if total_realized_gain_eth >= 0 else "fa-arrow-down"
+        gain_icon = "bi-arrow-up" if total_realized_gain_eth >= 0 else "bi-arrow-down"
         
         return ui.div(
             ui.div(
-                ui.HTML('<i class="fas fa-chart-line text-success"></i>'),
+                ui.HTML('<i class="bi bi-graph-up text-success"></i>'),
                 ui.h5("FIFO Results", class_="text-success ms-2"),
                 class_="d-flex align-items-center mb-3"
             ),
@@ -374,7 +419,7 @@ def register_crypto_tracker_outputs(output, input, session):
                 )
             ),
             ui.div(
-                ui.HTML(f'<i class="fas {gain_icon} {gain_color}"></i>'),
+                ui.HTML(f'<i class="bi {gain_icon} {gain_color}"></i>'),
                 ui.h4(f"{total_realized_gain_eth:.8f} ETH", class_=f"{gain_color} ms-2"),
                 ui.HTML(f'<small class="text-muted ms-2">Realized Gain/Loss (${total_realized_gain_usd:,.2f})</small>'),
                 class_="d-flex align-items-center mt-3"
@@ -564,32 +609,44 @@ def register_crypto_tracker_outputs(output, input, session):
         
         if positions_df.empty:
             placeholder_df = pd.DataFrame({
-                'Asset': ['No positions'],
+                'Wallet': ['No positions'],
+                'Asset': ['-'],
                 'Token Amount': [0.0],
                 'ETH Value': [0.0],
                 'USD Value': [0.0],
                 'Cost Basis (ETH)': [0.0],
                 'Cost Basis (USD)': [0.0],
-                'Avg Price (ETH)': [0.0],
-                'Avg Price (USD)': [0.0],
+                'Remaining Qty': [0.0],
+                'Remaining Cost (ETH)': [0.0],
                 'Lot Count': [0]
             })
             return placeholder_df
         
         # Format positions for display
         display_df = positions_df.copy()
+        
+        # Format wallet address (shortened)
+        if 'wallet_address' in display_df.columns:
+            display_df['Wallet'] = display_df['wallet_address'].apply(
+                lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and str(x) else "-"
+            )
+        else:
+            display_df['Wallet'] = '-'
+        
         display_df['Asset'] = display_df['asset']
         display_df['Token Amount'] = display_df['token_amount'].round(6)
         display_df['ETH Value'] = display_df['eth_value'].round(8)
         display_df['USD Value'] = display_df['usd_value'].round(2)
         display_df['Cost Basis (ETH)'] = display_df['cost_basis_eth'].round(8)
         display_df['Cost Basis (USD)'] = display_df['cost_basis_usd'].round(2)
-        display_df['Avg Price (ETH)'] = display_df['average_price_eth'].round(8)
-        display_df['Avg Price (USD)'] = display_df['average_price_usd'].round(2)
+        
+        # Add remaining quantity and cost basis columns
+        display_df['Remaining Qty'] = display_df.get('remaining_qty', display_df['token_amount']).round(6)
+        display_df['Remaining Cost (ETH)'] = display_df.get('remaining_cost_basis_eth', display_df['cost_basis_eth']).round(8)
         display_df['Lot Count'] = display_df['lot_count']
         
-        return display_df[['Asset', 'Token Amount', 'ETH Value', 'USD Value', 'Cost Basis (ETH)', 'Cost Basis (USD)', 
-                          'Avg Price (ETH)', 'Avg Price (USD)', 'Lot Count']]
+        return display_df[['Wallet', 'Asset', 'Token Amount', 'ETH Value', 'USD Value', 'Cost Basis (ETH)', 'Cost Basis (USD)', 
+                          'Remaining Qty', 'Remaining Cost (ETH)', 'Lot Count']]
     
     @output
     @render.data_frame
@@ -636,12 +693,12 @@ def register_crypto_tracker_outputs(output, input, session):
         unbalanced_txs = validation.get('unbalanced_transactions', [])
         
         status_color = "text-success" if is_balanced else "text-danger"
-        status_icon = "fa-check-circle" if is_balanced else "fa-exclamation-triangle"
+        status_icon = "bi-check-circle" if is_balanced else "bi-exclamation-triangle"
         status_text = "Balanced" if is_balanced else "Unbalanced"
         
         content = [
             ui.div(
-                ui.HTML(f'<i class="fas {status_icon} {status_color}"></i>'),
+                ui.HTML(f'<i class="bi {status_icon} {status_color}"></i>'),
                 ui.h5(f"Journal Entries: {status_text}", class_=f"{status_color} ms-2"),
                 class_="d-flex align-items-center mb-3"
             ),
@@ -668,6 +725,135 @@ def register_crypto_tracker_outputs(output, input, session):
         
         return ui.div(*content)
     
+    # Balance verification outputs
+    balance_verification = reactive.Value(pd.DataFrame())
+    
+    @output
+    @render.ui
+    def balance_verification_status():
+        """Display balance verification status"""
+        verification_df = balance_verification.get()
+        
+        if verification_df.empty:
+            return ui.div(
+                ui.HTML('<small class="text-muted">Click "Verify Balances" to compare FIFO positions with Etherscan balances</small>'),
+                class_="mb-2"
+            )
+        
+        total_checks = len(verification_df)
+        matches = len(verification_df[verification_df['status'].str.contains('✅')])
+        mismatches = len(verification_df[verification_df['status'].str.contains('❌')])
+        minor_diffs = len(verification_df[verification_df['status'].str.contains('⚠️')])
+        
+        if matches == total_checks:
+            status_color = "success"
+            status_icon = "bi-check-circle"
+            status_text = f"All {total_checks} balances verified successfully!"
+        elif mismatches > 0:
+            status_color = "danger"
+            status_icon = "bi-exclamation-triangle"
+            status_text = f"{mismatches} mismatches found out of {total_checks} checks"
+        else:
+            status_color = "warning"
+            status_icon = "bi-info-circle"
+            status_text = f"{minor_diffs} minor differences found out of {total_checks} checks"
+        
+        return ui.div(
+            ui.HTML(f'<i class="bi {status_icon} text-{status_color}"></i>'),
+            ui.span(status_text, class_=f"text-{status_color} ms-2"),
+            class_="d-flex align-items-center mb-3"
+        )
+    
+    @output
+    @render.data_frame
+    def balance_verification_table():
+        """Display balance verification comparison table"""
+        verification_df = balance_verification.get()
+        
+        if verification_df.empty:
+            placeholder_df = pd.DataFrame({
+                'Status': ['No verification data'],
+                'Wallet': ['-'],
+                'Asset': ['-'],
+                'FIFO Balance': [0.0],
+                'Etherscan Balance': [0.0],
+                'Difference': [0.0],
+                'Diff %': [0.0]
+            })
+            return placeholder_df
+        
+        # Format verification results for display
+        display_df = verification_df.copy()
+        
+        # Format wallet address (shortened)
+        display_df['Wallet'] = display_df['wallet_address'].apply(
+            lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and str(x) else "-"
+        )
+        
+        display_df['Status'] = display_df['status']
+        display_df['Asset'] = display_df['asset']
+        display_df['FIFO Balance'] = display_df['fifo_balance'].round(6)
+        display_df['Etherscan Balance'] = display_df['etherscan_balance'].round(6)
+        display_df['Difference'] = display_df['difference'].round(6)
+        display_df['Diff %'] = display_df['difference_percent'].round(2)
+        display_df['Last Checked'] = pd.to_datetime(display_df['last_checked']).dt.strftime('%H:%M:%S')
+        
+        return display_df[['Status', 'Wallet', 'Asset', 'FIFO Balance', 'Etherscan Balance', 'Difference', 'Diff %', 'Last Checked']]
+    
+    # Handle balance verification
+    @reactive.effect
+    @reactive.event(input.verify_balances)
+    async def handle_balance_verification():
+        """Verify FIFO positions against Etherscan balances"""
+        logger.info("Balance verification requested")
+        
+        # Start native Shiny progress
+        with ui.Progress(min=0, max=100) as progress:
+            try:
+                progress.set(10, message="Loading FIFO positions...", detail="Getting current positions data")
+                
+                positions_df = fifo_positions.get()
+                
+                if positions_df.empty:
+                    progress.set(100, message="No positions to verify", detail="Calculate FIFO first")
+                    logger.warning("No FIFO positions available for verification. Calculate FIFO first.")
+                    return
+                
+                progress.set(30, message="Initializing Etherscan checker...", detail="Setting up API connection")
+                
+                # Import and initialize Etherscan checker
+                from ...services.etherscan_balance_checker import get_etherscan_checker
+                checker = get_etherscan_checker()
+                
+                progress.set(50, message="Fetching balances from Etherscan...", detail=f"Checking {len(positions_df)} positions")
+                
+                # Define common token contracts
+                token_contracts = {
+                    'USDC': {'address': '0xA0b86a33E6441644663FB5CDDFEF68e36E6c6C46', 'decimals': 6},
+                    'USDT': {'address': '0xdAC17F958D2ee523a2206206994597C13D831ec7', 'decimals': 6},
+                    'DAI': {'address': '0x6B175474E89094C44Da98b954EedeAC495271d0F', 'decimals': 18},
+                    'WETH': {'address': '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', 'decimals': 18},
+                }
+                
+                progress.set(70, message="Comparing balances...", detail="Calculating differences and status")
+                
+                # Perform verification
+                verification_df = checker.verify_wallet_balances(positions_df, token_contracts)
+                
+                progress.set(90, message="Processing results...", detail="Formatting verification data")
+                
+                # Store results
+                balance_verification.set(verification_df)
+                
+                progress.set(100, message="Balance verification completed!", 
+                           detail=f"Verified {len(verification_df)} positions")
+                
+                logger.info(f"Balance verification completed for {len(verification_df)} positions")
+                
+            except Exception as e:
+                logger.error(f"Error in balance verification: {e}")
+                progress.set(0, message="Verification failed", detail=str(e))
+    
     # Handle FIFO calculation
     @reactive.effect
     @reactive.event(input.calculate_fifo)
@@ -677,7 +863,7 @@ def register_crypto_tracker_outputs(output, input, session):
         
         try:
             # Get staged transaction data from crypto_fetch module
-            from .crypto_token_fetch import get_staged_transactions_global
+            from .crypto_token_fetch import get_staged_transactions_global, clear_staged_transactions_global
             transactions_df = get_staged_transactions_global()
             
             if transactions_df.empty:
@@ -752,7 +938,9 @@ def register_crypto_tracker_outputs(output, input, session):
             positions_df = tracker.get_all_positions()
             fifo_positions.set(positions_df)
             
-            logger.info(f"FIFO calculation completed. Processed {len(fifo_df)} transactions")
+            # Clear staged transactions after successful processing
+            clear_staged_transactions_global()
+            logger.info(f"FIFO calculation completed. Processed {len(fifo_df)} transactions and cleared staging area")
             
         except Exception as e:
             logger.error(f"Error in FIFO calculation: {e}")

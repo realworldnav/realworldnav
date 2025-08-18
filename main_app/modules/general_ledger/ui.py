@@ -16,15 +16,15 @@ def general_ledger_ui():
         # Navigation tabs for different GL modules
         ui.navset_card_tab(
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-book"></i> Journal Entries'),
+                ui.HTML('<i class="bi bi-journal-text"></i> Journal Entries'),
                 journal_entries_content()
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-coins"></i> Crypto Tracker'),
+                ui.HTML('<i class="bi bi-currency-bitcoin"></i> Crypto Tracker'),
                 crypto_tracker_tab_content()
             ),
             ui.nav_panel(
-                ui.HTML('<i class="fas fa-chart-bar"></i> GL Analytics'), 
+                ui.HTML('<i class="bi bi-bar-chart"></i> GL Analytics'), 
                 gl_analytics_content()
             )
         )

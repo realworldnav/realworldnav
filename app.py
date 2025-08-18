@@ -37,9 +37,7 @@ def main():
             print("[OK] main_app.ui imported successfully")
         except Exception as e:
             print(f"[ERROR] Failed to import main_app.ui: {e}")
-            import traceback1
-            traceback.print_exc()
-            return
+
         
         try:
             from main_app.server import server
