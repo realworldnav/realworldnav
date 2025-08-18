@@ -152,7 +152,7 @@ def crypto_token_tracker_ui():
                         ui.card_body(
                             ui.row(
                                 ui.column(
-                                    6,
+                                    4,
                                     ui.input_text(
                                         "new_approved_token_address",
                                         "Add Token Address:",
@@ -165,7 +165,7 @@ def crypto_token_tracker_ui():
                                     )
                                 ),
                                 ui.column(
-                                    6,
+                                    4,
                                     ui.p("Select a token from the dropdown, then click Remove:", class_="small text-muted"),
                                     ui.output_ui("remove_token_dropdown"),
                                     ui.input_action_button(
@@ -173,12 +173,44 @@ def crypto_token_tracker_ui():
                                         ui.HTML('<i class="bi bi-trash"></i> Remove Selected Token'),
                                         class_="btn-danger btn-sm mt-2"
                                     )
+                                ),
+                                ui.column(
+                                    4,
+                                    ui.p("Lookup token on Etherscan:", class_="small text-muted"),
+                                    ui.output_ui("etherscan_token_dropdown"),
+                                    ui.input_action_button(
+                                        "lookup_etherscan_token",
+                                        ui.HTML('<i class="bi bi-search"></i> View on Etherscan'),
+                                        class_="btn-info btn-sm mt-2"
+                                    )
                                 )
                             )
                         )
                     ),
                     
-                    ui.output_data_frame("approved_tokens_table")
+                    ui.output_data_frame("approved_tokens_table"),
+                    
+                    # Save changes section
+                    ui.div(
+                        ui.p("Edit any cell in the table above, then click Save to persist changes.", class_="text-muted small"),
+                        ui.div(
+                            ui.input_action_button(
+                                "save_table_changes",
+                                ui.HTML('<i class="bi bi-save"></i> Save All Table Changes'),
+                                class_="btn-primary me-2"
+                            ),
+                            ui.input_action_button(
+                                "debug_table_data",
+                                ui.HTML('<i class="bi bi-bug"></i> Debug Data'),
+                                class_="btn-secondary"
+                            ),
+                            class_="d-flex justify-content-center"
+                        ),
+                        ui.HTML('<small class="text-muted text-center d-block mt-2">Save edits or debug data access issues</small>'),
+                        class_="text-center mt-3 p-3 border rounded bg-light"
+                    ),
+                    
+                    ui.output_ui("save_status_message")
                 )
             ),
             ui.nav_panel(
@@ -234,6 +266,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
     
     # Track approved tokens changes for reactive updates
     approved_tokens_updated = reactive.value(0)
+    
+    # Track save status for user feedback
+    save_status_msg = reactive.value("")
     
     # Store transactions staged for FIFO processing
     staged_transactions = reactive.value(pd.DataFrame())
@@ -654,7 +689,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         return token_summary[['Symbol', 'Address', 'Transaction Count', 'Total Volume (USD)', 'Risk Level']]
     
-    # Approved tokens table
+    # Store edited table data
+    edited_table_data = reactive.value(pd.DataFrame())
+    
+    # Create the approved tokens table renderer with patch handling
     @output
     @render.data_frame
     def approved_tokens_table():
@@ -664,7 +702,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
         try:
             approved_tokens = load_approved_tokens_file()
             if not approved_tokens:
-                return pd.DataFrame(columns=['Token Name', 'Symbol', 'Token Address', 'Approval Status', 'Transaction Count'])
+                return render.DataGrid(
+                    pd.DataFrame(columns=['Token Name', 'Symbol', 'Token Address', 'Approval Status', 'Transaction Count']),
+                    editable=True,
+                    filters=True
+                )
             
             # Get transaction data for approved tokens
             df = fetched_transactions.get()
@@ -690,11 +732,50 @@ def register_crypto_token_tracker_outputs(output, input, session):
             approved_df = pd.DataFrame(approved_data)
             approved_df = approved_df.sort_values('Token Name') if not approved_df.empty else approved_df
             
-            return approved_df
+            # Store the current data for patch handling
+            edited_table_data.set(approved_df.copy())
+            
+            grid = render.DataGrid(
+                approved_df,
+                editable=True,
+                filters=True,
+                height="400px",
+                width="100%"
+            )
+            
+            return grid
             
         except Exception as e:
             logger.error(f"Error loading approved tokens: {e}")
-            return pd.DataFrame(columns=['Token Name', 'Symbol', 'Token Address', 'Approval Status', 'Transaction Count'])
+            empty_df = pd.DataFrame(columns=['Token Name', 'Symbol', 'Token Address', 'Approval Status', 'Transaction Count'])
+            edited_table_data.set(empty_df)
+            return render.DataGrid(empty_df, editable=True, filters=True)
+    
+    # Handle cell edits with patch function
+    @approved_tokens_table.set_patch_fn
+    def handle_cell_edit(patch):
+        """Handle individual cell edits"""
+        try:
+            current_data = edited_table_data.get().copy()
+            
+            # Apply the patch to our stored data
+            row_index = patch["row_index"]
+            column_index = patch["column_index"] 
+            new_value = patch["value"]
+            
+            logger.info(f"Cell edit: row {row_index}, col {column_index}, value '{new_value}'")
+            
+            if row_index < len(current_data) and column_index < len(current_data.columns):
+                column_name = current_data.columns[column_index]
+                current_data.iloc[row_index, column_index] = new_value
+                edited_table_data.set(current_data)
+                logger.info(f"Updated {column_name} in row {row_index} to '{new_value}'")
+            
+            return new_value
+            
+        except Exception as e:
+            logger.error(f"Error handling cell edit: {e}")
+            return patch["value"]
     
     # All transactions table with selection support
     @output
@@ -949,6 +1030,71 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 choices={"": "Error loading tokens"}
             )
     
+    # Dynamic dropdown for Etherscan token lookup
+    @output
+    @render.ui
+    def etherscan_token_dropdown():
+        # Watch for changes in approved tokens
+        approved_tokens_updated.get()
+        
+        try:
+            approved_tokens = load_approved_tokens_file()
+            if not approved_tokens:
+                return ui.input_select(
+                    "token_to_lookup_select",
+                    "Select Token:",
+                    choices={"": "No tokens available"}
+                )
+            
+            # Create dropdown choices with token info
+            choices = {"": "Select token to lookup..."}
+            for token_addr in approved_tokens:
+                token_info = get_token_info_from_address(token_addr)
+                display_name = f"{token_info['name']} ({token_info['symbol']})"
+                choices[token_addr] = display_name
+            
+            return ui.input_select(
+                "token_to_lookup_select",
+                "Select Token:",
+                choices=choices
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating etherscan token dropdown: {e}")
+            return ui.input_select(
+                "token_to_lookup_select",
+                "Select Token:",
+                choices={"": "Error loading tokens"}
+            )
+    
+    # Save status message display
+    @output
+    @render.ui
+    def save_status_message():
+        message = save_status_msg.get()
+        if not message:
+            return ui.div()
+        
+        # Determine message type based on content
+        if "successfully" in message.lower() or "saved" in message.lower():
+            return ui.div(
+                ui.HTML(f'<i class="bi bi-check-circle text-success"></i>'),
+                ui.span(message, class_="text-success ms-2"),
+                class_="mt-2 d-flex align-items-center"
+            )
+        elif "error" in message.lower() or "failed" in message.lower():
+            return ui.div(
+                ui.HTML(f'<i class="bi bi-exclamation-triangle text-danger"></i>'),
+                ui.span(message, class_="text-danger ms-2"),
+                class_="mt-2 d-flex align-items-center"
+            )
+        else:
+            return ui.div(
+                ui.HTML(f'<i class="bi bi-info-circle text-info"></i>'),
+                ui.span(message, class_="text-info ms-2"),
+                class_="mt-2 d-flex align-items-center"
+            )
+    
     # Add approved token
     @reactive.effect
     @reactive.event(input.add_approved_token)
@@ -1027,6 +1173,138 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
         except Exception as e:
             logger.error(f"Error removing approved token: {e}")
+    
+    # Lookup selected token on Etherscan
+    @reactive.effect
+    @reactive.event(input.lookup_etherscan_token)
+    def lookup_etherscan_token():
+        try:
+            token_to_lookup = input.token_to_lookup_select()
+            if not token_to_lookup:
+                logger.warning("No token selected for Etherscan lookup")
+                return
+            
+            # Generate Etherscan token URL
+            etherscan_url = f"https://etherscan.io/token/{token_to_lookup}"
+            
+            # Get token info for logging
+            token_info = get_token_info_from_address(token_to_lookup)
+            logger.info(f"Opening Etherscan for token: {token_info['name']} ({token_to_lookup}) at {etherscan_url}")
+            
+            # Open in new window/tab using JavaScript
+            from shiny import ui
+            ui.insert_ui(
+                ui.tags.script(f'window.open("{etherscan_url}", "_blank");'),
+                selector="body",
+                where="afterEnd"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error looking up token on Etherscan: {e}")
+    
+    # Save all table changes
+    @reactive.effect
+    @reactive.event(input.save_table_changes)
+    def save_table_changes():
+        try:
+            # Get the edited data from our reactive store
+            edited_data = edited_table_data.get()
+            
+            logger.info(f"Getting edited data from reactive store")
+            logger.info(f"Edited data type: {type(edited_data)}")
+            logger.info(f"Edited data shape: {edited_data.shape if hasattr(edited_data, 'shape') else 'N/A'}")
+            
+            if edited_data is None or len(edited_data) == 0:
+                save_status_msg.set("⚠️ No data to save - table appears empty")
+                logger.warning("No edited data in reactive store")
+                return
+            
+            # Convert to DataFrame if needed
+            if not isinstance(edited_data, pd.DataFrame):
+                edited_df = pd.DataFrame(edited_data)
+            else:
+                edited_df = edited_data.copy()
+            
+            logger.info(f"Saving edited table data with {len(edited_df)} rows")
+            logger.info(f"Columns: {list(edited_df.columns)}")
+            
+            # Validate required columns exist
+            required_columns = ['Token Name', 'Symbol', 'Token Address', 'Approval Status']
+            missing_columns = [col for col in required_columns if col not in edited_df.columns]
+            if missing_columns:
+                save_status_msg.set(f"❌ Missing required columns: {missing_columns}")
+                return
+            
+            # Extract approved token addresses from the edited data
+            approved_addresses = set()
+            for _, row in edited_df.iterrows():
+                token_address = str(row.get('Token Address', '')).strip()
+                approval_status = str(row.get('Approval Status', '')).strip()
+                token_name = str(row.get('Token Name', 'Unknown'))
+                
+                # Validate token address format
+                if token_address and token_address.startswith('0x') and len(token_address) == 42:
+                    # Check if token should be approved based on status
+                    if approval_status.lower() in ['approved', 'approve', 'yes', 'true']:
+                        approved_addresses.add(token_address)
+                        logger.info(f"Keeping approved: {token_name} ({token_address})")
+                    else:
+                        logger.info(f"Removing (status: {approval_status}): {token_name} ({token_address})")
+                else:
+                    logger.warning(f"Invalid token address: {token_address}")
+            
+            # Save the updated approved tokens list to S3
+            save_approved_tokens_file(approved_addresses)
+            
+            # Trigger reactive updates to refresh all components
+            approved_tokens_updated.set(approved_tokens_updated.get() + 1)
+            
+            # Set success message
+            save_status_msg.set(f"✅ Successfully saved {len(approved_addresses)} approved tokens")
+            
+            logger.info(f"Successfully saved {len(approved_addresses)} approved tokens to S3")
+            
+        except Exception as e:
+            logger.error(f"Error saving table changes: {e}")
+            save_status_msg.set(f"❌ Error saving: {str(e)}")
+    
+    # Debug table data access
+    @reactive.effect
+    @reactive.event(input.debug_table_data)
+    def debug_table_data():
+        try:
+            logger.info("=== DEBUG: Table Data Access ===")
+            
+            # Try all available input methods
+            available_methods = []
+            
+            # Check what input methods are available
+            input_attrs = [attr for attr in dir(input) if 'approved_tokens_table' in attr]
+            logger.info(f"Available input attributes: {input_attrs}")
+            
+            for attr in input_attrs:
+                try:
+                    method = getattr(input, attr)
+                    if callable(method):
+                        result = method()
+                        available_methods.append(f"{attr}: {type(result)} (len={len(result) if hasattr(result, '__len__') else 'N/A'})")
+                        logger.info(f"{attr}(): {type(result)} with length {len(result) if hasattr(result, '__len__') else 'N/A'}")
+                        if hasattr(result, 'columns'):
+                            logger.info(f"  Columns: {list(result.columns)}")
+                    else:
+                        available_methods.append(f"{attr}: {type(method)} (not callable)")
+                except Exception as e:
+                    available_methods.append(f"{attr}: ERROR - {e}")
+                    logger.warning(f"Error calling {attr}: {e}")
+            
+            # Set debug message
+            debug_msg = f"🐛 Debug Info:\n" + "\n".join(available_methods)
+            save_status_msg.set(debug_msg)
+            logger.info("=== END DEBUG ===")
+            
+        except Exception as e:
+            logger.error(f"Error during debug: {e}")
+            save_status_msg.set(f"🐛 Debug error: {str(e)}")
     
     # Show transaction details card with inline Etherscan link
     @output
