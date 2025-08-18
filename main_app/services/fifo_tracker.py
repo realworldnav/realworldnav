@@ -67,6 +67,11 @@ class FIFOTracker:
         # Get or create deque for this combination
         dq = self.lots.setdefault(key, deque())
         
+        # Debug logging for FIFO processing
+        logger.debug(f"FIFO Processing: {side} {token_qty} {asset} for wallet {wallet} in fund {fund_id}")
+        logger.debug(f"  ETH value: {eth_val}, USD value: {usd_val}")
+        logger.debug(f"  Current lots for key {key}: {len(dq)} lots")
+        
         # Initialize tracking variables (ETH values for cost basis)
         proceeds_eth = cost_basis_eth = gain_eth = Decimal("0")
         proceeds_usd = cost_basis_usd = gain_usd = Decimal("0")
@@ -371,8 +376,18 @@ def convert_crypto_fetch_to_fifo_format(df_transactions: pd.DataFrame) -> pd.Dat
         print(f"  Direction values: {df_transactions['direction'].tolist()}")
         raise
     
-    # Token quantities (for display and reference)
-    fifo_df['qty'] = df_transactions['token_amount'].abs()  # Ensure positive
+    # Token quantities (signed for proper FIFO processing)
+    if 'qty' in df_transactions.columns:
+        # Use the signed qty field from blockchain service (positive for buys, negative for sells)
+        fifo_df['qty'] = df_transactions['qty']
+        print(f"  Using signed qty field for FIFO processing")
+    else:
+        # Fallback: calculate signed qty from token_amount and side
+        print(f"  Calculating signed qty from token_amount and side")
+        fifo_df['qty'] = df_transactions.apply(
+            lambda row: float(row['token_amount']) if str(row['side']).lower() == 'buy' 
+            else -float(row['token_amount']), axis=1
+        )
     
     # ETH-based cost basis calculation
     # We now calculate ETH value per token for consistent FIFO processing

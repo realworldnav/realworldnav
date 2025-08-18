@@ -187,7 +187,24 @@ def fifo_tracker_content():
                     ui.nav_panel(
                         "Transactions Ready",
                         ui.div(
-                            ui.p("Transactions staged for FIFO processing", class_="text-muted small mb-3"),
+                            ui.row(
+                                ui.column(
+                                    8,
+                                    ui.p("Transactions staged for FIFO processing", class_="text-muted small mb-3"),
+                                ),
+                                ui.column(
+                                    4,
+                                    ui.div(
+                                        ui.input_action_button(
+                                            "refresh_staged_transactions",
+                                            "Refresh",
+                                            class_="btn-outline-secondary btn-sm"
+                                        ),
+                                        class_="text-end"
+                                    )
+                                )
+                            ),
+                            ui.output_ui("staged_transactions_status"),
                             ui.output_data_frame("transactions_ready_table")
                         )
                     ),
@@ -369,50 +386,129 @@ def register_crypto_tracker_outputs(output, input, session):
     def transactions_ready_table():
         """Display transactions staged for FIFO processing"""
         try:
-            from .crypto_token_fetch import get_staged_transactions_global
+            from .crypto_token_fetch import get_staged_transactions_global, get_staged_transactions_trigger_global
+            
+            # Create reactive dependency on the trigger to ensure updates
+            trigger_value = get_staged_transactions_trigger_global()
+            print(f"🔄 Transactions ready table triggered with value: {trigger_value}")
+            
             staged_df = get_staged_transactions_global()
+            print(f"📊 Retrieved staged transactions: {len(staged_df)} rows")
+            
+            if not staged_df.empty:
+                print(f"📋 Staged transaction columns: {list(staged_df.columns)}")
+                print(f"📋 Sample staged transaction: {staged_df.iloc[0].to_dict() if len(staged_df) > 0 else 'None'}")
             
             if staged_df.empty:
                 # Placeholder data
                 placeholder_df = pd.DataFrame({
-                    'Status': ['No transactions staged'],
+                    'Status': ['No transactions staged for FIFO processing'],
                     'Date': ['-'],
+                    'Wallet ID': ['-'],
                     'Token': ['-'],
-                    'Direction': ['-'],
+                    'Side': ['-'],
                     'Amount': [0.0],
                     'ETH Value': [0.0],
-                    'USD Value': [0.0]
+                    'USD Value': [0.0],
+                    'Intercompany': ['-']
                 })
+                print("📋 Displaying empty state for transactions ready table")
                 return placeholder_df
             
             # Format staged transactions for display
             display_df = staged_df.copy()
             display_df['Status'] = 'Ready for FIFO'
-            # Handle timezone-aware dates for display
+            print(f"📋 Displaying {len(display_df)} staged transactions in ready table")
+            # Handle timezone-aware dates for display (preserve full timestamp)
             date_col = pd.to_datetime(display_df['date'])
             if date_col.dt.tz is not None:
                 date_col = date_col.dt.tz_localize(None)
-            display_df['Date'] = date_col.dt.strftime('%Y-%m-%d')
-            display_df['Token'] = display_df['token_name']
-            display_df['Direction'] = display_df['direction']
-            display_df['Amount'] = display_df['token_amount'].round(6)
-            display_df['ETH Value'] = display_df['token_value_eth'].round(6)
-            display_df['USD Value'] = display_df['token_value_usd'].round(2)
+            display_df['Date'] = date_col.dt.strftime('%Y-%m-%d %H:%M:%S')
             
-            return display_df[['Status', 'Date', 'Token', 'Direction', 'Amount', 'ETH Value', 'USD Value']]
+            # Format wallet_id (shortened)
+            if 'wallet_id' in display_df.columns:
+                display_df['Wallet ID'] = display_df['wallet_id'].apply(
+                    lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and str(x) else "-"
+                )
+            else:
+                display_df['Wallet ID'] = '-'
+            
+            display_df['Token'] = display_df.get('token_name', display_df.get('asset', '-'))
+            display_df['Side'] = display_df.get('side', display_df.get('direction', '-'))
+            display_df['Amount'] = display_df.get('token_amount', 0.0).round(6)
+            display_df['ETH Value'] = display_df.get('token_value_eth', 0.0).round(6)
+            display_df['USD Value'] = display_df.get('token_value_usd', 0.0).round(2)
+            
+            # Intercompany flag
+            if 'intercompany' in display_df.columns:
+                display_df['Intercompany'] = display_df['intercompany'].apply(lambda x: 'Yes' if x else 'No')
+            else:
+                display_df['Intercompany'] = 'No'
+            
+            return display_df[['Status', 'Date', 'Wallet ID', 'Token', 'Side', 'Amount', 'ETH Value', 'USD Value', 'Intercompany']]
             
         except Exception as e:
             logger.error(f"Error loading staged transactions: {e}")
             error_df = pd.DataFrame({
                 'Status': ['Error loading'],
                 'Date': ['-'],
+                'Wallet ID': ['-'],
                 'Token': ['-'],
-                'Direction': ['-'],
+                'Side': ['-'],
                 'Amount': [0.0],
                 'ETH Value': [0.0],
-                'USD Value': [0.0]
+                'USD Value': [0.0],
+                'Intercompany': ['-']
             })
             return error_df
+    
+    @output
+    @render.ui
+    def staged_transactions_status():
+        """Display status information about staged transactions"""
+        try:
+            from .crypto_token_fetch import get_staged_transactions_global, get_staged_transactions_trigger_global
+            from datetime import datetime
+            
+            trigger_value = get_staged_transactions_trigger_global()
+            staged_df = get_staged_transactions_global()
+            
+            if staged_df.empty:
+                return ui.div(
+                    ui.HTML('<small class="text-muted">No transactions currently staged. Use the Token Fetcher tab to load and stage transactions.</small>'),
+                    class_="mb-2"
+                )
+            else:
+                current_time = datetime.now().strftime("%H:%M:%S")
+                return ui.div(
+                    ui.HTML(f'<small class="text-success">✓ {len(staged_df)} transactions ready for FIFO processing (Last updated: {current_time})</small>'),
+                    class_="mb-2"
+                )
+        except Exception as e:
+            return ui.div(
+                ui.HTML('<small class="text-danger">Error loading staging status</small>'),
+                class_="mb-2"
+            )
+    
+    @reactive.effect
+    @reactive.event(input.refresh_staged_transactions)
+    def refresh_staged_transactions_handler():
+        """Handle refresh button click for staged transactions"""
+        try:
+            from .crypto_token_fetch import get_staged_transactions_trigger_global
+            
+            # Force a reactive invalidation by calling the trigger function
+            # This will cause the transactions_ready_table to re-render
+            trigger_value = get_staged_transactions_trigger_global()
+            print(f"🔄 Manual refresh triggered for staged transactions (trigger: {trigger_value})")
+            
+            # Note: In a more robust implementation, we might want to:
+            # 1. Clear and reload from S3 storage
+            # 2. Validate staged transaction integrity
+            # 3. Show loading state during refresh
+            
+        except Exception as e:
+            logger.error(f"Error during staged transactions refresh: {e}")
     
     @output
     @render.data_frame
@@ -423,7 +519,7 @@ def register_crypto_tracker_outputs(output, input, session):
         if fifo_df.empty:
             # Placeholder data
             placeholder_df = pd.DataFrame({
-                'Date': [datetime.now().strftime('%Y-%m-%d')],
+                'Date': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
                 'Side': ['buy'],
                 'Token': ['ETH'],
                 'Quantity': [1.0],
@@ -437,7 +533,7 @@ def register_crypto_tracker_outputs(output, input, session):
         
         # Format FIFO results for display
         display_df = fifo_df.copy()
-        display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d')
+        display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
         display_df['Side'] = display_df['side']
         display_df['Token'] = display_df['asset']
         # Token amounts (for display)
@@ -513,7 +609,7 @@ def register_crypto_tracker_outputs(output, input, session):
         
         # Format journal entries for display
         display_df = journal_df.copy()
-        display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d')
+        display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
         display_df['Account'] = display_df['account']
         display_df['Debit'] = display_df['debit_USD'].round(2)
         display_df['Credit'] = display_df['credit_USD'].round(2)

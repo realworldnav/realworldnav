@@ -240,6 +240,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
     # Track push to FIFO status
     push_status = reactive.value("")
     
+    # Reactive trigger for staged transactions updates (for cross-module reactivity)
+    staged_transactions_trigger = reactive.value(0)
+    
     # Initialize blockchain service on startup
     @reactive.effect
     def init_blockchain_service():
@@ -401,6 +404,12 @@ def register_crypto_token_tracker_outputs(output, input, session):
             fetch_progress_message.set("Fetching transactions from blockchain...")
             
             try:
+                print(f"🚀 Starting blockchain fetch with parameters:")
+                print(f"   📅 Start date: {start_date}")
+                print(f"   📅 End date: {end_date}")
+                print(f"   💰 Fund: {fund_param}")
+                print(f"   👛 Wallets: {len(wallet_addresses) if wallet_addresses else 'All'}")
+                
                 df = service.fetch_transactions_for_period(
                     start_date=start_date,
                     end_date=end_date,
@@ -408,6 +417,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     wallet_addresses=wallet_addresses,
                     progress_callback=update_progress
                 )
+                
+                print(f"📊 Raw fetch result: {len(df)} transactions")
+                if not df.empty:
+                    print(f"🔍 Raw columns: {list(df.columns)}")
+                    print(f"🔍 First transaction sample: {df.iloc[0].to_dict() if len(df) > 0 else 'None'}")
             except Exception as blockchain_error:
                 if "429" in str(blockchain_error) or "Too Many Requests" in str(blockchain_error):
                     fetch_progress_message.set("Rate limited by Infura. Please wait a few minutes and try again with a smaller date range.")
@@ -434,20 +448,25 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     processed_df = processed_df[date_mask].copy()
                     print(f"📅 After date filtering: {len(processed_df)} transactions")
                 
-                if 'token_amount' in processed_df.columns and 'direction' in processed_df.columns:
-                    # Make outgoing amounts negative
-                    outgoing_mask = processed_df['direction'] == 'OUT'
-                    processed_df.loc[outgoing_mask, 'token_amount'] = -abs(processed_df.loc[outgoing_mask, 'token_amount'])
-                    
-                if 'token_value_usd' in processed_df.columns and 'direction' in processed_df.columns:
-                    # Make outgoing USD values negative
-                    outgoing_mask = processed_df['direction'] == 'OUT'
-                    processed_df.loc[outgoing_mask, 'token_value_usd'] = -abs(processed_df.loc[outgoing_mask, 'token_value_usd'])
+                # Note: Amount signing is now handled in blockchain_service based on side/qty
+                # The blockchain service already provides properly signed quantities in 'qty' field
+                print(f"🔍 Processing columns: {list(processed_df.columns)}")
                 
-                if 'token_value_eth' in processed_df.columns and 'direction' in processed_df.columns:
-                    # Make outgoing ETH values negative
-                    outgoing_mask = processed_df['direction'] == 'OUT'
-                    processed_df.loc[outgoing_mask, 'token_value_eth'] = -abs(processed_df.loc[outgoing_mask, 'token_value_eth'])
+                # Field normalization: Map qty → token_amount for display compatibility
+                if 'qty' in processed_df.columns:
+                    processed_df['token_amount'] = processed_df['qty'].abs()  # Use absolute value for display
+                    print(f"📊 Mapped 'qty' to 'token_amount' (absolute values for display)")
+                
+                # Quantity validation: Ensure proper signs are preserved for FIFO processing
+                if 'side' in processed_df.columns:
+                    print(f"📊 Side distribution: {processed_df['side'].value_counts().to_dict()}")
+                    if 'qty' in processed_df.columns:
+                        buy_qty_check = processed_df[processed_df['side'] == 'buy']['qty']
+                        sell_qty_check = processed_df[processed_df['side'] == 'sell']['qty']
+                        print(f"📊 Buy quantities (should be positive): {buy_qty_check.describe()}")
+                        print(f"📊 Sell quantities (should be negative): {sell_qty_check.describe()}")
+                
+                # Remove legacy direction-based negation to prevent double negatives
                 
                 logger.info(f"Fetched and processed {len(processed_df)} transactions")
                 fetched_transactions.set(processed_df)
@@ -652,7 +671,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
     def all_transactions_table():
         df = fetched_transactions.get()
         if df.empty:
-            return pd.DataFrame(columns=['Date', 'Hash', 'Direction', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'From', 'To'])
+            return pd.DataFrame(columns=['Date', 'Hash', 'Wallet ID', 'Side', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'Intercompany', 'From', 'To'])
         
         # Prepare display dataframe - NEW STRUCTURE
         formatted_data = []
@@ -673,14 +692,24 @@ def register_crypto_token_tracker_outputs(output, input, session):
             else:
                 formatted_row['Hash'] = ""
             
-            # Direction
-            formatted_row['Direction'] = row.get('direction', "")
+            # Wallet ID (shortened)
+            if 'wallet_id' in row and row['wallet_id']:
+                wallet_id = str(row['wallet_id'])
+                formatted_row['Wallet ID'] = f"{wallet_id[:6]}...{wallet_id[-4:]}"
+            else:
+                formatted_row['Wallet ID'] = ""
+            
+            # Side (buy/sell)
+            formatted_row['Side'] = row.get('side', "")
             
             # Token Name (using new field)
-            formatted_row['Token Name'] = row.get('token_name', row.get('token_symbol', 'Unknown'))
+            formatted_row['Token Name'] = row.get('token_name', row.get('token_symbol', row.get('asset', 'Unknown')))
             
-            # Amount (of token)
-            if 'token_amount' in row and pd.notna(row['token_amount']):
+            # Amount (of token) - use signed qty for proper buy/sell display
+            if 'qty' in row and pd.notna(row['qty']):
+                formatted_row['Amount (of token)'] = f"{float(row['qty']):,.6f}"
+            elif 'token_amount' in row and pd.notna(row['token_amount']):
+                # Fallback to token_amount if qty not available
                 formatted_row['Amount (of token)'] = f"{float(row['token_amount']):,.6f}"
             else:
                 formatted_row['Amount (of token)'] = "0"
@@ -696,6 +725,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 formatted_row['Value (USD)'] = f"${float(row['token_value_usd']):,.2f}"
             else:
                 formatted_row['Value (USD)'] = "$0.00"
+            
+            # Intercompany flag
+            intercompany = row.get('intercompany', False)
+            formatted_row['Intercompany'] = "Yes" if intercompany else "No"
             
             # From (shortened address)
             if 'from_address' in row and row['from_address']:
@@ -715,7 +748,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         # Create final dataframe with exact column order
         final_df = pd.DataFrame(formatted_data)
-        column_order = ['Date', 'Hash', 'Direction', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'From', 'To']
+        column_order = ['Date', 'Hash', 'Wallet ID', 'Side', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'Intercompany', 'From', 'To']
         
         # Ensure all columns exist
         for col in column_order:
@@ -1105,19 +1138,61 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 logger.warning("No transactions available to push to FIFO")
                 return
             
+            # Normalize data for FIFO processing and display compatibility
+            fifo_df = transactions_df.copy()
+            
+            # Ensure all required fields exist for FIFO processing
+            print(f"🔧 Normalizing transaction data for FIFO processing...")
+            print(f"   📋 Original columns: {list(fifo_df.columns)}")
+            
+            # Map asset → token_name if token_name is missing
+            if 'asset' in fifo_df.columns and 'token_name' not in fifo_df.columns:
+                fifo_df['token_name'] = fifo_df['asset']
+                print(f"   🔄 Mapped 'asset' → 'token_name'")
+            
+            # Ensure token_amount exists (should already be mapped from qty)
+            if 'token_amount' not in fifo_df.columns and 'qty' in fifo_df.columns:
+                fifo_df['token_amount'] = fifo_df['qty'].abs()
+                print(f"   🔄 Mapped 'qty' → 'token_amount' (absolute values)")
+                
+            # Ensure proper date format
+            if 'date' in fifo_df.columns:
+                fifo_df['date'] = pd.to_datetime(fifo_df['date'])
+                print(f"   🔄 Normalized date format")
+            
+            # Add any missing required fields with defaults
+            required_fields = ['wallet_id', 'side', 'token_name', 'token_amount', 'token_value_eth', 'token_value_usd', 'intercompany']
+            for field in required_fields:
+                if field not in fifo_df.columns:
+                    if field == 'intercompany':
+                        fifo_df[field] = False
+                    elif field in ['token_amount', 'token_value_eth', 'token_value_usd']:
+                        fifo_df[field] = 0.0
+                    else:
+                        fifo_df[field] = '-'
+                    print(f"   ⚠️  Added missing field '{field}' with default value")
+            
+            print(f"   ✅ Final columns: {list(fifo_df.columns)}")
+            print(f"   📊 Sample transaction: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
+            
             # Store transactions for FIFO processing
-            staged_transactions.set(transactions_df.copy())
-            print(f"✅ Staged transactions locally: {len(transactions_df)} rows")
+            staged_transactions.set(fifo_df.copy())
+            print(f"✅ Staged transactions locally: {len(fifo_df)} rows")
             
             # Also store globally for cross-module access
-            set_staged_transactions_global(transactions_df)
-            print(f"🌐 Staged transactions globally: {len(transactions_df)} rows")
+            set_staged_transactions_global(fifo_df)
+            print(f"🌐 Staged transactions globally: {len(fifo_df)} rows")
             
-            logger.info(f"Successfully staged {len(transactions_df)} transactions for FIFO processing")
+            logger.info(f"Successfully staged {len(fifo_df)} transactions for FIFO processing")
             print("🎉 Push to FIFO completed successfully!")
             
             # Update status
-            push_status.set(f"✅ Successfully staged {len(transactions_df)} transactions for FIFO processing")
+            push_status.set(f"✅ Successfully staged {len(fifo_df)} transactions for FIFO processing")
+            
+            # Trigger reactive update for cross-module access
+            current_trigger = staged_transactions_trigger.get()
+            staged_transactions_trigger.set(current_trigger + 1)
+            print(f"🔄 Triggered reactive update for staged transactions (trigger: {current_trigger + 1})")
             
         except Exception as e:
             print(f"❌ Error pushing transactions to FIFO: {e}")
@@ -1219,6 +1294,7 @@ def store_transactions_data(transactions_df: pd.DataFrame) -> bool:
 
 # Global storage for staged transactions (for cross-module access)
 _global_staged_transactions = pd.DataFrame()
+_global_staged_transactions_trigger = 0
 
 def get_staged_transactions_global() -> pd.DataFrame:
     """
@@ -1238,7 +1314,19 @@ def set_staged_transactions_global(transactions_df: pd.DataFrame) -> None:
     Args:
         transactions_df: DataFrame with transaction data to stage
     """
-    global _global_staged_transactions
+    global _global_staged_transactions, _global_staged_transactions_trigger
     _global_staged_transactions = transactions_df.copy()
-    logger.info(f"Globally staged {len(transactions_df)} transactions for FIFO processing")
+    _global_staged_transactions_trigger += 1
+    logger.info(f"Globally staged {len(transactions_df)} transactions for FIFO processing (trigger: {_global_staged_transactions_trigger})")
+
+def get_staged_transactions_trigger_global() -> int:
+    """
+    Get the global staged transactions trigger value.
+    This is used for reactive invalidation across modules.
+    
+    Returns:
+        Current trigger value
+    """
+    global _global_staged_transactions_trigger
+    return _global_staged_transactions_trigger
     

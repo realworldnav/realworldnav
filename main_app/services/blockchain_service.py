@@ -234,6 +234,10 @@ class BlockchainService:
             df = pd.DataFrame(all_transactions)
             # Remove duplicates based on tx_hash and log_index
             df = df.drop_duplicates(subset=['tx_hash', 'log_index'])
+            
+            # Apply internal transaction splitting (following master_fifo.py rules)
+            df = self._split_internal_transactions(df)
+            
             return df
         
         return pd.DataFrame()
@@ -411,19 +415,53 @@ class BlockchainService:
             token_value_usd = token_amount * unit_price_usd
             token_value_eth = token_value_usd / eth_price if eth_price > 0 else Decimal("0")
             
-            # Format direction for display
+            # Get fund wallets for internal transaction detection
+            fund_wallets = self._get_all_fund_wallets()
+            
+            # Classify transaction as internal (intercompany) or external
+            is_internal = False
+            try:
+                if from_addr and to_addr and fund_wallets:
+                    is_internal = (
+                        from_addr.lower() in fund_wallets and 
+                        to_addr.lower() in fund_wallets
+                    )
+            except Exception as e:
+                logger.warning(f"Error in intercompany detection for tx {log.get('transactionHash', 'unknown')}: {e}")
+                is_internal = False
+            
+            # Determine wallet_id and quantity sign for FIFO processing
+            if direction == "in":
+                wallet_id = wallet_checksum
+                qty = float(token_amount)  # Positive for incoming
+            else:  # direction == "out"
+                wallet_id = wallet_checksum  
+                qty = -float(token_amount)  # Negative for outgoing
+            
+            # Determine side (buy/sell) based on quantity sign
+            side = "buy" if qty > 0 else "sell"
+            
+            # Format direction for display (keeping for backward compatibility)
             direction_display = "IN" if direction == "in" else "OUT"
             
-            # New structure with required fields: Date, Hash, Direction, Token Name, Amount (of token), Value (ETH), Value (USD), From, To
+            # New structure with required fields following master_fifo.py format
             return {
-                # Required fields in order
+                # Core FIFO fields (matching master_fifo.py)
                 'date': block_time,
                 'tx_hash': log['transactionHash'].hex(),
-                'direction': direction_display,
-                'token_name': token_name,
-                'token_amount': float(token_amount),
+                'wallet_id': wallet_id,
+                'fund_id': self._get_fund_id_for_wallet(wallet_checksum),
+                'asset': token_symbol,  # Using asset instead of token_name for FIFO compatibility
+                'side': side,
+                'qty': qty,
+                'token_amount': abs(float(token_amount)),  # Always positive token amount for display
                 'token_value_eth': float(token_value_eth),
                 'token_value_usd': float(token_value_usd),
+                'intercompany': is_internal,
+                
+                # Display fields (for UI)
+                'direction': direction_display,
+                'token_name': token_name,
                 'from_address': from_addr,
                 'to_address': to_addr,
                 
@@ -492,6 +530,72 @@ class BlockchainService:
             return matching_rows.iloc[0].get('fund_id')
         
         return None
+    
+    @lru_cache(maxsize=1)  # Cache with size 1 since this doesn't change often
+    def _get_all_fund_wallets(self) -> set:
+        """Get set of all fund wallet addresses for internal transaction detection."""
+        if self.wallet_mapping.empty:
+            return set()
+        
+        # Get all wallet addresses and normalize to lowercase for comparison
+        fund_wallets = set()
+        for _, row in self.wallet_mapping.iterrows():
+            wallet_addr = row.get('wallet_address', '')
+            if wallet_addr:
+                fund_wallets.add(wallet_addr.lower())
+        
+        logger.debug(f"Loaded {len(fund_wallets)} fund wallets for internal transaction detection")
+        return fund_wallets
+    
+    def _split_internal_transactions(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Split internal (intercompany) transactions into two legs following master_fifo.py rules.
+        
+        For internal transactions:
+        - Create sell leg: from wallet, side='sell', qty=negative
+        - Create buy leg: to wallet, side='buy', qty=positive
+        
+        Args:
+            df: DataFrame with transactions
+            
+        Returns:
+            DataFrame with internal transactions split into two legs
+        """
+        if df.empty:
+            return df
+        
+        # Ensure intercompany column has proper boolean values (handle None/NaN)
+        df['intercompany'] = df['intercompany'].fillna(False).infer_objects(copy=False).astype(bool)
+        
+        # Separate external and internal transactions
+        external_df = df[~df['intercompany']].copy()
+        internal_df = df[df['intercompany']].copy()
+        
+        if internal_df.empty:
+            return external_df
+        
+        logger.info(f"Splitting {len(internal_df)} internal transactions into two legs each")
+        
+        # Create sell legs (from the 'from_address' wallet)
+        sell_legs = internal_df.copy()
+        sell_legs['wallet_id'] = sell_legs['from_address']
+        sell_legs['side'] = 'sell'
+        sell_legs['qty'] = -sell_legs['token_amount']  # Negative quantity for sell
+        sell_legs['fund_id'] = sell_legs['wallet_id'].apply(lambda w: self._get_fund_id_for_wallet(w))
+        
+        # Create buy legs (into the 'to_address' wallet) 
+        buy_legs = internal_df.copy()
+        buy_legs['wallet_id'] = buy_legs['to_address']
+        buy_legs['side'] = 'buy'
+        buy_legs['qty'] = buy_legs['token_amount']  # Positive quantity for buy
+        buy_legs['fund_id'] = buy_legs['wallet_id'].apply(lambda w: self._get_fund_id_for_wallet(w))
+        
+        # Concatenate all transactions
+        result = pd.concat([external_df, sell_legs, buy_legs], ignore_index=True)
+        
+        logger.info(f"Transaction split complete: {len(external_df)} external + {len(sell_legs)} sell legs + {len(buy_legs)} buy legs = {len(result)} total")
+        
+        return result
     
     def get_token_decimals(self, token_symbol: str) -> int:
         """Get decimal places for token."""
