@@ -392,12 +392,19 @@ def register_crypto_tracker_outputs(output, input, session):
         total_realized_gain_eth = fifo_df['realized_gain_eth'].sum()
         total_proceeds_eth = fifo_df['proceeds_eth'].sum()
         total_cost_basis_eth = fifo_df['cost_basis_sold_eth'].sum()
-        # USD equivalents for reference
-        total_realized_gain_usd = fifo_df['realized_gain_usd'].sum()
-        total_proceeds_usd = fifo_df['proceeds_usd'].sum()
-        total_cost_basis_usd = fifo_df['cost_basis_sold_usd'].sum()
         unique_assets = fifo_df['asset'].nunique()
         total_transactions = len(fifo_df)
+        
+        # Calculate USD equivalents if price_eth is available
+        if 'price_eth' in fifo_df.columns and fifo_df['price_eth'].sum() > 0:
+            avg_eth_price = fifo_df['price_eth'].mean()
+            total_realized_gain_usd = total_realized_gain_eth * avg_eth_price
+            total_proceeds_usd = total_proceeds_eth * avg_eth_price
+            total_cost_basis_usd = total_cost_basis_eth * avg_eth_price
+        else:
+            total_realized_gain_usd = 0
+            total_proceeds_usd = 0
+            total_cost_basis_usd = 0
         
         gain_color = "text-success" if total_realized_gain_eth >= 0 else "text-danger"
         gain_icon = "bi-arrow-up" if total_realized_gain_eth >= 0 else "bi-arrow-down"
@@ -576,29 +583,29 @@ def register_crypto_tracker_outputs(output, input, session):
             })
             return placeholder_df
         
-        # Format FIFO results for display
+        # Format FIFO results for display with new columns
         display_df = fifo_df.copy()
         display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
         display_df['Side'] = display_df['side']
         display_df['Token'] = display_df['asset']
-        # Token amounts (for display)
-        display_df['Token Amount'] = display_df['token_amount'].round(6)
-        display_df['ETH Value'] = display_df['eth_value'].round(8)
-        # Show ETH-based cost basis (primary)
+        display_df['Qty'] = display_df['qty'].round(6)
+        display_df['Total ETH'] = display_df['total_eth'].round(8)
+        display_df['Unit Price (ETH)'] = display_df['unit_price_eth'].round(8)
         display_df['Proceeds (ETH)'] = display_df['proceeds_eth'].round(8)
         display_df['Cost Basis (ETH)'] = display_df['cost_basis_sold_eth'].round(8)
-        display_df['Gain (ETH)'] = display_df['realized_gain_eth'].round(8)
-        display_df['Remaining ETH'] = display_df['remaining_eth_value'].round(8)
-        # Also show USD equivalents
-        display_df['Proceeds (USD)'] = display_df['proceeds_usd'].round(2)
-        display_df['Cost Basis (USD)'] = display_df['cost_basis_sold_usd'].round(2)
-        display_df['Gain (USD)'] = display_df['realized_gain_usd'].round(2)
-        display_df['Remaining Tokens'] = display_df['remaining_token_amount'].round(6)
+        display_df['Remaining Qty'] = display_df['remaining_qty'].round(6)
+        display_df['Remaining Cost (ETH)'] = display_df['remaining_cost_basis_eth'].round(8)
+        
+        # Add ETH/USD price if available
+        if 'price_eth' in display_df.columns:
+            display_df['ETH/USD Price'] = display_df['price_eth'].round(2)
+        else:
+            display_df['ETH/USD Price'] = 0
         
         return display_df[[
-            'Date', 'Side', 'Token', 'Token Amount', 'ETH Value', 
-            'Proceeds (ETH)', 'Cost Basis (ETH)', 'Gain (ETH)', 'Remaining ETH',
-            'Proceeds (USD)', 'Cost Basis (USD)', 'Gain (USD)', 'Remaining Tokens'
+            'Date', 'Side', 'Token', 'Qty', 'Total ETH', 'Unit Price (ETH)',
+            'Proceeds (ETH)', 'Cost Basis (ETH)', 
+            'Remaining Qty', 'Remaining Cost (ETH)', 'ETH/USD Price'
         ]]
     
     @output
@@ -634,19 +641,18 @@ def register_crypto_tracker_outputs(output, input, session):
             display_df['Wallet'] = '-'
         
         display_df['Asset'] = display_df['asset']
-        display_df['Token Amount'] = display_df['token_amount'].round(6)
-        display_df['ETH Value'] = display_df['eth_value'].round(8)
-        display_df['USD Value'] = display_df['usd_value'].round(2)
+        display_df['Qty'] = display_df['qty'].round(6)
         display_df['Cost Basis (ETH)'] = display_df['cost_basis_eth'].round(8)
-        display_df['Cost Basis (USD)'] = display_df['cost_basis_usd'].round(2)
-        
-        # Add remaining quantity and cost basis columns
-        display_df['Remaining Qty'] = display_df.get('remaining_qty', display_df['token_amount']).round(6)
-        display_df['Remaining Cost (ETH)'] = display_df.get('remaining_cost_basis_eth', display_df['cost_basis_eth']).round(8)
+        display_df['Avg Unit Price (ETH)'] = display_df['avg_unit_price_eth'].round(8)
         display_df['Lot Count'] = display_df['lot_count']
         
-        return display_df[['Wallet', 'Asset', 'Token Amount', 'ETH Value', 'USD Value', 'Cost Basis (ETH)', 'Cost Basis (USD)', 
-                          'Remaining Qty', 'Remaining Cost (ETH)', 'Lot Count']]
+        # Calculate USD value if we have ETH price
+        if 'price_eth' in positions_df.columns:
+            display_df['Cost Basis (USD)'] = (display_df['cost_basis_eth'] * positions_df.get('price_eth', 3200)).round(2)
+        else:
+            display_df['Cost Basis (USD)'] = 0
+        
+        return display_df[['Wallet', 'Asset', 'Qty', 'Cost Basis (ETH)', 'Avg Unit Price (ETH)', 'Cost Basis (USD)', 'Lot Count']]
     
     @output
     @render.data_frame
@@ -907,32 +913,28 @@ def register_crypto_tracker_outputs(output, input, session):
             fifo_input_df = convert_crypto_fetch_to_fifo_format(transactions_df)
             logger.info(f"FIFO input format: {len(fifo_input_df)} rows, columns: {list(fifo_input_df.columns)}")
             
-            # Process through FIFO
-            logger.info("Processing transactions through FIFO...")
+            # Process through FIFO with new ETH-based approach
+            logger.info("Processing transactions through FIFO with ETH-based cost basis...")
             fifo_df = build_fifo_ledger(fifo_input_df)
             logger.info(f"FIFO processing complete: {len(fifo_df)} result rows")
+            logger.info(f"FIFO output columns: {list(fifo_df.columns)}")
             fifo_results.set(fifo_df)
             
-            # Get current positions
+            # Get current positions using the new simplified tracker
             tracker = FIFOTracker()
             for _, row in fifo_input_df.iterrows():
-                # Calculate ETH value for this transaction
-                token_qty = row['qty']
-                price_eth = row['price_eth']
-                eth_value = token_qty * price_eth
-                
+                # Use unit_price_eth from the converted data
                 tracker.process(
                     fund_id=row['fund_id'],
                     wallet=row['wallet_address'],
                     asset=row['asset'],
                     side=row['side'],
-                    token_amount=token_qty,    # Token amount for display
-                    eth_value=eth_value,       # ETH value for FIFO cost basis
+                    qty=abs(row['qty']),  # Use absolute value
+                    unit_price_eth=row.get('unit_price_eth', 0),
                     date=row['date'],
                     tx_hash=row['hash'],
-                    log=False,  # Don't log for position calculation
-                    price_usd=row['price_usd'],
-                    eth_usd_rate=row['eth_usd_rate']
+                    price_eth=row.get('price_eth', 0),
+                    log=False  # Don't log for position calculation
                 )
             
             positions_df = tracker.get_all_positions()
