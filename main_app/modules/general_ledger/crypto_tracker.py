@@ -23,6 +23,14 @@ from ...services.gl_journal_builder import (
     validate_journal_entries,
     create_summary_report
 )
+from ...services.portfolio_valuation import get_valuation_engine, refresh_portfolio_valuation
+from ...services.price_service import get_price_service
+from ...services.performance_metrics import get_performance_reporter
+from ...services.export_service import get_export_service
+from ...services.alert_service import get_alert_engine, create_price_alert, AlertPriority
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -37,11 +45,15 @@ def crypto_tracker_ui():
         ui.h2("Cryptocurrency Tracker", class_="mt-3"),
         ui.p("Comprehensive token portfolio tracking and cost basis management", class_="text-muted mb-4"),
         
-        # Three-tab navigation - now includes Token Fetcher
+        # Four-tab navigation - enhanced with Transaction History
         ui.navset_card_tab(
             ui.nav_panel(
                 ui.HTML('<i class="bi bi-pie-chart"></i> Overview'),
                 crypto_overview_content()
+            ),
+            ui.nav_panel(
+                ui.HTML('<i class="bi bi-clock-history"></i> Transaction History'),
+                transaction_history_content()
             ),
             ui.nav_panel(
                 ui.HTML('<i class="bi bi-calculator"></i> FIFO Tracker'),
@@ -52,6 +64,96 @@ def crypto_tracker_ui():
                 crypto_token_tracker_ui()
             ),
         )
+    )
+
+
+def transaction_history_content():
+    """Transaction history and analytics tab"""
+    return ui.div(
+        ui.row(
+            ui.column(
+                12,
+                ui.h3("Transaction History", class_="mb-3"),
+                ui.p("Comprehensive transaction tracking and analytics", class_="text-muted")
+            )
+        ),
+        
+        # Transaction Filters
+        ui.row(
+            ui.column(
+                3,
+                ui.card(
+                    ui.card_header("Filters"),
+                    ui.card_body(
+                        ui.input_select(
+                            "history_token_filter",
+                            "Token:",
+                            choices={"all": "All Tokens"},
+                            selected="all"
+                        ),
+                        ui.input_select(
+                            "history_type_filter",
+                            "Transaction Type:",
+                            choices={
+                                "all": "All Types",
+                                "buy": "Buys Only", 
+                                "sell": "Sells Only",
+                                "transfer": "Transfers Only"
+                            },
+                            selected="all"
+                        ),
+                        ui.input_date_range(
+                            "history_date_range",
+                            "Date Range:",
+                            start=date(2024, 1, 1),
+                            end=date.today()
+                        ),
+                        ui.input_action_button(
+                            "apply_history_filters",
+                            ui.HTML('<i class="bi bi-funnel"></i> Apply Filters'),
+                            class_="btn-primary mt-3 w-100"
+                        )
+                    )
+                )
+            ),
+            ui.column(
+                9,
+                ui.card(
+                    ui.card_header("Transaction Analytics"),
+                    ui.card_body(
+                        ui.row(
+                            ui.column(3, ui.output_ui("tx_count_metric")),
+                            ui.column(3, ui.output_ui("tx_volume_metric")),
+                            ui.column(3, ui.output_ui("tx_fees_metric")),
+                            ui.column(3, ui.output_ui("avg_tx_size_metric"))
+                        )
+                    )
+                )
+            )
+        ),
+        
+        # Transaction History Table
+        ui.row(
+            ui.column(
+                12,
+                ui.card(
+                    ui.card_header("Transaction History"),
+                    ui.card_body(
+                        ui.div(
+                            ui.input_action_button(
+                                "export_transactions",
+                                ui.HTML('<i class="bi bi-download"></i> Export CSV'),
+                                class_="btn-outline-secondary btn-sm mb-3"
+                            ),
+                            class_="text-end"
+                        ),
+                        ui.output_data_frame("transaction_history_table")
+                    )
+                )
+            )
+        ),
+        
+        class_="mt-3"
     )
 
 
@@ -106,6 +208,28 @@ def crypto_overview_content():
             )
         ),
         
+        # Portfolio Visualizations
+        ui.row(
+            ui.column(
+                6,
+                ui.card(
+                    ui.card_header("Portfolio Allocation"),
+                    ui.card_body(
+                        ui.output_ui("portfolio_allocation_chart")
+                    )
+                )
+            ),
+            ui.column(
+                6,
+                ui.card(
+                    ui.card_header("Performance Chart"),
+                    ui.card_body(
+                        ui.output_ui("portfolio_performance_chart")
+                    )
+                )
+            )
+        ),
+        
         # Portfolio Holdings Table
         ui.row(
             ui.column(
@@ -113,6 +237,24 @@ def crypto_overview_content():
                 ui.card(
                     ui.card_header("Token Holdings"),
                     ui.card_body(
+                        ui.div(
+                            ui.input_action_button(
+                                "refresh_portfolio",
+                                ui.HTML('<i class="bi bi-arrow-clockwise"></i> Refresh'),
+                                class_="btn-outline-primary btn-sm mb-3 me-2"
+                            ),
+                            ui.input_action_button(
+                                "export_portfolio_csv",
+                                ui.HTML('<i class="bi bi-file-earmark-spreadsheet"></i> Export CSV'),
+                                class_="btn-outline-success btn-sm mb-3 me-2"
+                            ),
+                            ui.input_action_button(
+                                "export_portfolio_pdf",
+                                ui.HTML('<i class="bi bi-file-earmark-pdf"></i> Export PDF'),
+                                class_="btn-outline-danger btn-sm mb-3"
+                            ),
+                            class_="text-end"
+                        ),
                         ui.output_data_frame("portfolio_holdings_table")
                     )
                 )
@@ -290,49 +432,549 @@ def register_crypto_tracker_outputs(output, input, session):
     @output
     @render.ui
     def portfolio_total_value():
-        return ui.div(
-            ui.h2("$0.00", class_="text-success mb-0"),
-            ui.HTML('<small class="text-muted">Coming Soon</small>')
-        )
+        try:
+            # Get portfolio valuation
+            engine = get_valuation_engine()
+            
+            # Try to load positions from staged transactions or FIFO data
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                
+                if not staged_df.empty:
+                    engine.load_positions_from_staged_transactions(staged_df)
+                    engine.update_market_values()
+                    
+                    total_value = engine.metrics.total_value_usd
+                    if total_value > 0:
+                        return ui.div(
+                            ui.h2(f"${total_value:,.2f}", class_="text-success mb-0"),
+                            ui.HTML('<small class="text-muted">Portfolio Value</small>')
+                        )
+            except Exception as e:
+                logger.debug(f"Could not load portfolio data: {e}")
+            
+            return ui.div(
+                ui.h2("$0.00", class_="text-secondary mb-0"),
+                ui.HTML('<small class="text-muted">No positions loaded</small>')
+            )
+        except Exception as e:
+            logger.error(f"Error calculating portfolio value: {e}")
+            return ui.div(
+                ui.h2("Error", class_="text-danger mb-0"),
+                ui.HTML('<small class="text-muted">Calculation failed</small>')
+            )
     
     @output
     @render.ui
     def portfolio_token_count():
-        return ui.div(
-            ui.h2("0", class_="text-primary mb-0"),
-            ui.HTML('<small class="text-muted">Tokens</small>')
-        )
+        try:
+            engine = get_valuation_engine()
+            
+            # Refresh data if needed
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                
+                if not staged_df.empty:
+                    engine.load_positions_from_staged_transactions(staged_df)
+                    token_count = engine.metrics.token_count
+                    
+                    return ui.div(
+                        ui.h2(str(token_count), class_="text-primary mb-0"),
+                        ui.HTML('<small class="text-muted">Unique Tokens</small>')
+                    )
+            except Exception as e:
+                logger.debug(f"Could not load token count: {e}")
+            
+            return ui.div(
+                ui.h2("0", class_="text-secondary mb-0"),
+                ui.HTML('<small class="text-muted">Tokens</small>')
+            )
+        except Exception as e:
+            logger.error(f"Error calculating token count: {e}")
+            return ui.div(
+                ui.h2("Error", class_="text-danger mb-0"),
+                ui.HTML('<small class="text-muted">Count failed</small>')
+            )
     
     @output
     @render.ui
     def portfolio_daily_pnl():
-        return ui.div(
-            ui.h2("$0.00", class_="text-secondary mb-0"),
-            ui.HTML('<small class="text-muted">+0.00%</small>')
-        )
+        try:
+            engine = get_valuation_engine()
+            
+            # Refresh data if needed
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                
+                if not staged_df.empty:
+                    engine.load_positions_from_staged_transactions(staged_df)
+                    engine.update_market_values()
+                    
+                    daily_change_usd = engine.metrics.daily_change_usd
+                    daily_change_pct = engine.metrics.daily_change_pct
+                    
+                    # Determine color based on performance
+                    color_class = "text-success" if daily_change_usd >= 0 else "text-danger"
+                    sign = "+" if daily_change_usd >= 0 else ""
+                    
+                    return ui.div(
+                        ui.h2(f"${sign}{daily_change_usd:,.2f}", class_=f"{color_class} mb-0"),
+                        ui.HTML(f'<small class="text-muted">{sign}{daily_change_pct:.2f}% (24h)</small>')
+                    )
+            except Exception as e:
+                logger.debug(f"Could not load daily P&L: {e}")
+            
+            return ui.div(
+                ui.h2("$0.00", class_="text-secondary mb-0"),
+                ui.HTML('<small class="text-muted">+0.00%</small>')
+            )
+        except Exception as e:
+            logger.error(f"Error calculating daily P&L: {e}")
+            return ui.div(
+                ui.h2("Error", class_="text-danger mb-0"),
+                ui.HTML('<small class="text-muted">P&L failed</small>')
+            )
     
     @output
     @render.ui
     def portfolio_total_pnl():
-        return ui.div(
-            ui.h2("$0.00", class_="text-secondary mb-0"),
-            ui.HTML('<small class="text-muted">+0.00%</small>')
-        )
+        try:
+            engine = get_valuation_engine()
+            
+            # Refresh data if needed
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                
+                if not staged_df.empty:
+                    engine.load_positions_from_staged_transactions(staged_df)
+                    engine.update_market_values()
+                    
+                    total_pnl_usd = engine.metrics.total_unrealized_pnl_usd
+                    total_pnl_pct = engine.metrics.total_unrealized_pnl_pct
+                    
+                    # Determine color based on performance
+                    color_class = "text-success" if total_pnl_usd >= 0 else "text-danger"
+                    sign = "+" if total_pnl_usd >= 0 else ""
+                    
+                    return ui.div(
+                        ui.h2(f"${sign}{total_pnl_usd:,.2f}", class_=f"{color_class} mb-0"),
+                        ui.HTML(f'<small class="text-muted">{sign}{total_pnl_pct:.2f}% Total</small>')
+                    )
+            except Exception as e:
+                logger.debug(f"Could not load total P&L: {e}")
+            
+            return ui.div(
+                ui.h2("$0.00", class_="text-secondary mb-0"),
+                ui.HTML('<small class="text-muted">+0.00%</small>')
+            )
+        except Exception as e:
+            logger.error(f"Error calculating total P&L: {e}")
+            return ui.div(
+                ui.h2("Error", class_="text-danger mb-0"),
+                ui.HTML('<small class="text-muted">P&L failed</small>')
+            )
     
     @output
     @render.data_frame
     def portfolio_holdings_table():
-        # Placeholder data structure for portfolio holdings
-        placeholder_df = pd.DataFrame({
-            'Token': ['Coming Soon'],
-            'Symbol': ['-'],
-            'Balance': [0.0],
-            'Value (USD)': ['$0.00'],
-            'Price': ['$0.00'],
-            '24h Change': ['0.00%'],
-            'P&L': ['$0.00']
-        })
-        return placeholder_df
+        try:
+            engine = get_valuation_engine()
+            
+            # Refresh data if needed
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                
+                if not staged_df.empty:
+                    engine.load_positions_from_staged_transactions(staged_df)
+                    engine.update_market_values()
+                    
+                    # Get position summary
+                    positions_df = engine.get_position_summary()
+                    
+                    if not positions_df.empty:
+                        # Format for display
+                        display_df = positions_df.copy()
+                        
+                        # Create display columns
+                        result_df = pd.DataFrame({
+                            'Token': display_df['symbol'],
+                            'Balance': display_df['quantity'].round(6),
+                            'Price (USD)': display_df['current_price_usd'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00"),
+                            'Value (USD)': display_df['market_value_usd'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00"),
+                            'Avg Cost (USD)': display_df['avg_cost_usd'].apply(lambda x: f"${x:,.2f}" if x > 0 else "$0.00"),
+                            '24h Change': display_df['change_24h_pct'].apply(lambda x: f"{x:+.2f}%" if abs(x) > 0 else "0.00%"),
+                            'Unrealized P&L': display_df.apply(
+                                lambda row: f"${row['unrealized_pnl_usd']:+,.2f} ({row['unrealized_pnl_pct']:+.2f}%)" 
+                                if abs(row['unrealized_pnl_usd']) > 0 else "$0.00 (0.00%)", axis=1
+                            )
+                        })
+                        
+                        return result_df
+                        
+            except Exception as e:
+                logger.debug(f"Could not load portfolio holdings: {e}")
+            
+            # Fallback to placeholder
+            placeholder_df = pd.DataFrame({
+                'Token': ['No positions loaded'],
+                'Balance': [0.0],
+                'Price (USD)': ['$0.00'],
+                'Value (USD)': ['$0.00'], 
+                'Avg Cost (USD)': ['$0.00'],
+                '24h Change': ['0.00%'],
+                'Unrealized P&L': ['$0.00 (0.00%)']
+            })
+            return placeholder_df
+            
+        except Exception as e:
+            logger.error(f"Error creating portfolio holdings table: {e}")
+            error_df = pd.DataFrame({
+                'Token': ['Error'],
+                'Balance': [0.0],
+                'Price (USD)': ['Error'],
+                'Value (USD)': ['Error'],
+                'Avg Cost (USD)': ['Error'],
+                '24h Change': ['Error'],
+                'Unrealized P&L': ['Error']
+            })
+            return error_df
+    
+    @output
+    @render.ui
+    def portfolio_allocation_chart():
+        """Portfolio allocation pie chart"""
+        try:
+            engine = get_valuation_engine()
+            
+            # Get current positions
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                
+                if not staged_df.empty:
+                    engine.load_positions_from_staged_transactions(staged_df)
+                    engine.update_market_values()
+                    
+                    allocation_data = engine.get_allocation_data()
+                    
+                    if allocation_data:
+                        # Create pie chart
+                        fig = go.Figure(data=[
+                            go.Pie(
+                                labels=[item['symbol'] for item in allocation_data],
+                                values=[item['value'] for item in allocation_data],
+                                hovertemplate='<b>%{label}</b><br>' +
+                                             'Value: $%{value:,.2f}<br>' +
+                                             'Percentage: %{percent}<br>' +
+                                             '<extra></extra>',
+                                textinfo='label+percent',
+                                textposition='auto',
+                                marker=dict(
+                                    colors=[item['color'] for item in allocation_data],
+                                    line=dict(color='#FFFFFF', width=2)
+                                )
+                            )
+                        ])
+                        
+                        fig.update_layout(
+                            height=300,
+                            margin=dict(t=20, b=20, l=20, r=20),
+                            showlegend=True,
+                            legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05),
+                            font=dict(size=12)
+                        )
+                        
+                        return ui.HTML(fig.to_html(include_plotlyjs="cdn"))
+                    
+            except Exception as e:
+                logger.debug(f"Could not create allocation chart: {e}")
+            
+            # Fallback message
+            return ui.div(
+                ui.HTML('<div class="text-center text-muted p-4">'),
+                ui.HTML('<i class="bi bi-pie-chart" style="font-size: 3rem; opacity: 0.3;"></i>'),
+                ui.HTML('<p class="mt-2">No portfolio data available</p>'),
+                ui.HTML('<small>Load transactions to view allocation</small>'),
+                ui.HTML('</div>')
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating allocation chart: {e}")
+            return ui.div(
+                ui.HTML('<div class="text-center text-danger p-4">'),
+                ui.HTML('<i class="bi bi-exclamation-triangle" style="font-size: 2rem;"></i>'),
+                ui.HTML('<p class="mt-2">Chart Error</p>'),
+                ui.HTML('</div>')
+            )
+    
+    @output
+    @render.ui
+    def portfolio_performance_chart():
+        """Portfolio performance over time"""
+        try:
+            # Get price service to create a sample performance chart
+            price_service = get_price_service()
+            
+            # For now, create a sample chart showing ETH price trend
+            # In a full implementation, this would show portfolio value over time
+            try:
+                eth_history = price_service.get_historical_prices('ETH', 30)
+                
+                if not eth_history.empty:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Scatter(
+                        x=eth_history.index,
+                        y=eth_history['price_usd'],
+                        mode='lines',
+                        name='ETH Price',
+                        line=dict(color='#627EEA', width=2),
+                        hovertemplate='<b>ETH Price</b><br>' +
+                                     'Date: %{x}<br>' +
+                                     'Price: $%{y:,.2f}<br>' +
+                                     '<extra></extra>'
+                    ))
+                    
+                    fig.update_layout(
+                        height=300,
+                        margin=dict(t=20, b=20, l=20, r=20),
+                        xaxis_title='Date',
+                        yaxis_title='Price (USD)',
+                        showlegend=False,
+                        xaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)'),
+                        yaxis=dict(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)'),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        font=dict(size=12)
+                    )
+                    
+                    return ui.HTML(fig.to_html(include_plotlyjs="cdn"))
+                    
+            except Exception as e:
+                logger.debug(f"Could not create performance chart: {e}")
+            
+            # Fallback message
+            return ui.div(
+                ui.HTML('<div class="text-center text-muted p-4">'),
+                ui.HTML('<i class="bi bi-graph-up" style="font-size: 3rem; opacity: 0.3;"></i>'),
+                ui.HTML('<p class="mt-2">Performance chart coming soon</p>'),
+                ui.HTML('<small>Portfolio history will be tracked over time</small>'),
+                ui.HTML('</div>')
+            )
+            
+        except Exception as e:
+            logger.error(f"Error creating performance chart: {e}")
+            return ui.div(
+                ui.HTML('<div class="text-center text-danger p-4">'),
+                ui.HTML('<i class="bi bi-exclamation-triangle" style="font-size: 2rem;"></i>'),
+                ui.HTML('<p class="mt-2">Chart Error</p>'),
+                ui.HTML('</div>')
+            )
+    
+    # Portfolio refresh handler
+    @reactive.effect
+    @reactive.event(input.refresh_portfolio)
+    def handle_portfolio_refresh():
+        """Handle portfolio refresh button click"""
+        try:
+            # Clear price service cache to force fresh data
+            price_service = get_price_service()
+            price_service.clear_cache()
+            
+            # Clear valuation engine positions to force recalculation
+            engine = get_valuation_engine()
+            engine.clear_positions()
+            
+            logger.info("Portfolio data refreshed - cache cleared")
+            
+        except Exception as e:
+            logger.error(f"Error refreshing portfolio: {e}")
+    
+    # Portfolio export handlers
+    @reactive.effect
+    @reactive.event(input.export_portfolio_csv)
+    def handle_portfolio_csv_export():
+        """Handle portfolio CSV export"""
+        try:
+            export_service = get_export_service()
+            file_path = export_service.export_portfolio_summary('csv')
+            logger.info(f"Portfolio CSV exported to {file_path}")
+        except Exception as e:
+            logger.error(f"Error exporting portfolio CSV: {e}")
+    
+    @reactive.effect
+    @reactive.event(input.export_portfolio_pdf) 
+    def handle_portfolio_pdf_export():
+        """Handle portfolio PDF export"""
+        try:
+            export_service = get_export_service()
+            file_path = export_service.export_portfolio_summary('pdf')
+            logger.info(f"Portfolio PDF exported to {file_path}")
+        except Exception as e:
+            logger.error(f"Error exporting portfolio PDF: {e}")
+    
+    @reactive.effect
+    @reactive.event(input.export_transactions)
+    def handle_transaction_export():
+        """Handle transaction history export"""
+        try:
+            export_service = get_export_service()
+            file_path = export_service.export_transaction_history('csv')
+            logger.info(f"Transaction history exported to {file_path}")
+        except Exception as e:
+            logger.error(f"Error exporting transactions: {e}")
+    
+    # Transaction History Tab Outputs
+    
+    @output
+    @render.ui
+    def tx_count_metric():
+        """Transaction count metric"""
+        try:
+            from .crypto_token_fetch import get_staged_transactions_global
+            staged_df = get_staged_transactions_global()
+            
+            if not staged_df.empty:
+                count = len(staged_df)
+                return ui.div(
+                    ui.h4(str(count), class_="text-primary mb-0"),
+                    ui.HTML('<small class="text-muted">Total Transactions</small>')
+                )
+        except:
+            pass
+        
+        return ui.div(
+            ui.h4("0", class_="text-secondary mb-0"),
+            ui.HTML('<small class="text-muted">Transactions</small>')
+        )
+    
+    @output
+    @render.ui  
+    def tx_volume_metric():
+        """Transaction volume metric"""
+        try:
+            from .crypto_token_fetch import get_staged_transactions_global
+            staged_df = get_staged_transactions_global()
+            
+            if not staged_df.empty:
+                total_volume = staged_df.get('token_value_usd', staged_df.get('token_value_eth', pd.Series([0]))).sum()
+                return ui.div(
+                    ui.h4(f"${total_volume:,.0f}", class_="text-success mb-0"),
+                    ui.HTML('<small class="text-muted">Total Volume</small>')
+                )
+        except:
+            pass
+        
+        return ui.div(
+            ui.h4("$0", class_="text-secondary mb-0"),
+            ui.HTML('<small class="text-muted">Volume</small>')
+        )
+    
+    @output
+    @render.ui
+    def tx_fees_metric():
+        """Transaction fees metric"""
+        return ui.div(
+            ui.h4("$0", class_="text-warning mb-0"),
+            ui.HTML('<small class="text-muted">Fees Tracked</small>')
+        )
+    
+    @output
+    @render.ui
+    def avg_tx_size_metric():
+        """Average transaction size metric"""
+        try:
+            from .crypto_token_fetch import get_staged_transactions_global
+            staged_df = get_staged_transactions_global()
+            
+            if not staged_df.empty:
+                volumes = staged_df.get('token_value_usd', staged_df.get('token_value_eth', pd.Series([0])))
+                avg_size = volumes.mean() if len(volumes) > 0 else 0
+                return ui.div(
+                    ui.h4(f"${avg_size:,.0f}", class_="text-info mb-0"),
+                    ui.HTML('<small class="text-muted">Avg Size</small>')
+                )
+        except:
+            pass
+        
+        return ui.div(
+            ui.h4("$0", class_="text-secondary mb-0"),
+            ui.HTML('<small class="text-muted">Average</small>')
+        )
+    
+    @output
+    @render.data_frame
+    def transaction_history_table():
+        """Transaction history table with filtering"""
+        try:
+            from .crypto_token_fetch import get_staged_transactions_global
+            staged_df = get_staged_transactions_global()
+            
+            if staged_df.empty:
+                placeholder_df = pd.DataFrame({
+                    'Date': ['No transactions available'],
+                    'Token': ['-'],
+                    'Type': ['-'],
+                    'Amount': [0.0],
+                    'Value (USD)': ['$0.00'],
+                    'Wallet': ['-'],
+                    'Hash': ['-']
+                })
+                return placeholder_df
+            
+            # Create display DataFrame
+            display_df = staged_df.copy()
+            
+            # Format columns for display
+            display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+            display_df['Token'] = display_df.get('token_name', display_df.get('asset', 'Unknown'))
+            display_df['Type'] = display_df.get('side', 'Unknown').str.title()
+            display_df['Amount'] = display_df.get('token_amount', 0.0).round(6)
+            
+            # Format values
+            usd_values = display_df.get('token_value_usd', display_df.get('token_value_eth', pd.Series([0])))
+            display_df['Value (USD)'] = usd_values.apply(lambda x: f"${x:,.2f}" if pd.notna(x) and x > 0 else "$0.00")
+            
+            # Format wallet addresses
+            if 'wallet_id' in display_df.columns:
+                display_df['Wallet'] = display_df['wallet_id'].apply(
+                    lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and str(x) else "-"
+                )
+            else:
+                display_df['Wallet'] = '-'
+            
+            # Format transaction hashes
+            if 'hash' in display_df.columns:
+                display_df['Hash'] = display_df['hash'].apply(
+                    lambda x: f"{str(x)[:8]}...{str(x)[-6:]}" if pd.notna(x) and str(x) else "-"
+                )
+            else:
+                display_df['Hash'] = '-'
+            
+            # Select and return display columns
+            result_df = display_df[['Date', 'Token', 'Type', 'Amount', 'Value (USD)', 'Wallet', 'Hash']].copy()
+            
+            # Sort by date (newest first)
+            result_df = result_df.sort_values('Date', ascending=False)
+            
+            return result_df
+            
+        except Exception as e:
+            logger.error(f"Error creating transaction history table: {e}")
+            error_df = pd.DataFrame({
+                'Date': ['Error'],
+                'Token': ['Error'],
+                'Type': ['Error'],
+                'Amount': [0.0],
+                'Value (USD)': ['Error'],
+                'Wallet': ['Error'],
+                'Hash': ['Error']
+            })
+            return error_df
     
     # FIFO Tab Outputs
     
@@ -574,12 +1216,15 @@ def register_crypto_tracker_outputs(output, input, session):
                 'Date': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
                 'Side': ['buy'],
                 'Token': ['ETH'],
-                'Quantity': [1.0],
-                'Price (USD)': [3200.00],
-                'Proceeds': [0.0],
-                'Cost Basis': [0.0],
-                'Realized Gain': [0.0],
-                'Remaining Qty': [1.0]
+                'Wallet': ['-'],
+                'Qty': [1.0],
+                'Total ETH': [1.0],
+                'Unit Price (ETH)': [1.0],
+                'Proceeds (ETH)': [0.0],
+                'Cost Basis (ETH)': [0.0],
+                'Remaining Qty': [1.0],
+                'Remaining Cost (ETH)': [1.0],
+                'ETH/USD Price': [3200.00]
             })
             return placeholder_df
         
@@ -588,6 +1233,15 @@ def register_crypto_tracker_outputs(output, input, session):
         display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
         display_df['Side'] = display_df['side']
         display_df['Token'] = display_df['asset']
+        
+        # Format wallet address (shortened)
+        if 'wallet_address' in display_df.columns:
+            display_df['Wallet'] = display_df['wallet_address'].apply(
+                lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and str(x) else "-"
+            )
+        else:
+            display_df['Wallet'] = '-'
+            
         display_df['Qty'] = display_df['qty'].round(6)
         display_df['Total ETH'] = display_df['total_eth'].round(8)
         display_df['Unit Price (ETH)'] = display_df['unit_price_eth'].round(8)
@@ -603,7 +1257,7 @@ def register_crypto_tracker_outputs(output, input, session):
             display_df['ETH/USD Price'] = 0
         
         return display_df[[
-            'Date', 'Side', 'Token', 'Qty', 'Total ETH', 'Unit Price (ETH)',
+            'Date', 'Side', 'Token', 'Wallet', 'Qty', 'Total ETH', 'Unit Price (ETH)',
             'Proceeds (ETH)', 'Cost Basis (ETH)', 
             'Remaining Qty', 'Remaining Cost (ETH)', 'ETH/USD Price'
         ]]
