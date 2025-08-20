@@ -1921,10 +1921,36 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 ui.p("Please fetch transactions first.", class_="small text-muted mt-2")
             )
         
-        # Get selected rows from the data grid
-        selected_rows = input.review_transactions_table_selected_rows()
+        # Get selected rows from either review or ready table
+        try:
+            # Check current_selection first (this tracks both tables)
+            selection_info = current_selection.get()
+            print(f"DEBUG transaction_details_card: current_selection = {selection_info}")
+            
+            has_selection = selection_info["table"] is not None and len(selection_info["rows"]) > 0
+            selected_rows = selection_info["rows"]
+            selected_table = selection_info["table"]
+            
+            # Fallback to input-based approach for review table
+            if not has_selection:
+                try:
+                    cell_selection_input = input.review_transactions_table_cell_selection()
+                    selected_rows = list(cell_selection_input.get("rows", [])) if cell_selection_input else []
+                    has_selection = len(selected_rows) > 0
+                    selected_table = "review" if has_selection else None
+                    print(f"DEBUG transaction_details_card: fallback input cell_selection = {cell_selection_input}")
+                except:
+                    pass
+            
+            print(f"DEBUG transaction_details_card: has_selection = {has_selection}, selected_table = {selected_table}, selected_rows = {selected_rows}")
+            
+        except Exception as e:
+            print(f"DEBUG: Error getting selection: {e}")
+            has_selection = False
+            selected_rows = []
+            selected_table = None
         
-        if not selected_rows or len(selected_rows) == 0:
+        if not has_selection:
             return ui.div(
                 ui.div(
                     ui.HTML('<i class="bi bi-hand-index text-primary"></i>'),
@@ -1934,62 +1960,67 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 ui.p("Click on a transaction row to view details and access Etherscan.", class_="small text-muted mt-2")
             )
         
-        # Get the first selected row index
-        selected_idx = selected_rows[0]
-        
-        # We need to reconstruct the formatted data to match what's displayed in review_transactions_table
-        # since the table is sorted and the row indices don't match the original dataframe
-        
-        # Get verified and approved addresses
-        verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
-        try:
-            approved_tokens = load_approved_tokens_file()
-            approved_addresses = {addr.lower() for addr in approved_tokens}
-        except:
-            approved_addresses = set()
-        
-        # Recreate the formatted data (same logic as review_transactions_table)
-        formatted_data = []
-        for _, row in df.iterrows():
-            token_addr = str(row.get('token_address', ''))
+        # Get the selected transaction data
+        if has_selection and len(selected_rows) > 0:
+            # Fallback to manual reconstruction if using cell_selection
+            selected_idx = selected_rows[0]
             
-            # Determine status
-            if token_addr.lower() in verified_addresses:
-                status = "✅ Verified"
-                status_class = "text-success"
-            elif token_addr.lower() in approved_addresses:
-                status = "☑️ Approved" 
-                status_class = "text-info"
+            # We need to reconstruct the formatted data to match what's displayed in review_transactions_table
+            # Get verified and approved addresses
+            verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
+            try:
+                approved_tokens = load_approved_tokens_file()
+                approved_addresses = {addr.lower() for addr in approved_tokens}
+            except:
+                approved_addresses = set()
+            
+            # Recreate the formatted data (same logic as review_transactions_table)
+            formatted_data = []
+            for _, row in df.iterrows():
+                token_addr = str(row.get('token_address', ''))
+                
+                # Determine status
+                if token_addr.lower() in verified_addresses:
+                    status = "✅ Verified"
+                elif token_addr.lower() in approved_addresses:
+                    status = "☑️ Approved" 
+                else:
+                    status = "⚠️ Needs Review"
+                
+                formatted_row = {
+                    'tx_hash': row.get('tx_hash', ''),
+                    'date': row.get('date', ''),
+                    'token_name': row.get('token_name', row.get('token_symbol', 'Unknown')),
+                    'token_amount': row.get('token_amount', 0),
+                    'token_value_usd': row.get('token_value_usd', 0),
+                    'token_value_eth': row.get('token_value_eth', 0),
+                    'direction': row.get('direction', 'Unknown'),
+                    'from_address': row.get('from_address', ''),
+                    'to_address': row.get('to_address', ''),
+                    'status': status,
+                    '_sort_priority': 0 if status == "⚠️ Needs Review" else (1 if status == "☑️ Approved" else 2)
+                }
+                formatted_data.append(formatted_row)
+            
+            # Sort the same way as review_transactions_table
+            formatted_df = pd.DataFrame(formatted_data)
+            if not formatted_df.empty:
+                formatted_df = formatted_df.sort_values(['_sort_priority', 'date'], ascending=[True, False])
+                formatted_df = formatted_df.head(100)  # Same limit as table
+            
+            # Now get the correct row
+            if selected_idx < len(formatted_df):
+                tx_row = formatted_df.iloc[selected_idx]
+                tx_hash = tx_row['tx_hash']
+                etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
             else:
-                status = "⚠️ Needs Review"
-                status_class = "text-warning"
-            
-            formatted_row = {
-                'tx_hash': row.get('tx_hash', ''),
-                'date': row.get('date', ''),
-                'token_name': row.get('token_name', row.get('token_symbol', 'Unknown')),
-                'token_amount': row.get('token_amount', 0),
-                'token_value_usd': row.get('token_value_usd', 0),
-                'token_value_eth': row.get('token_value_eth', 0),
-                'direction': row.get('direction', 'Unknown'),
-                'from_address': row.get('from_address', ''),
-                'to_address': row.get('to_address', ''),
-                'status': status,
-                '_sort_priority': 0 if status == "⚠️ Needs Review" else (1 if status == "☑️ Approved" else 2)
-            }
-            formatted_data.append(formatted_row)
+                tx_hash = ""
+                etherscan_url = ""
+        else:
+            tx_hash = ""
+            etherscan_url = ""
         
-        # Sort the same way as review_transactions_table
-        formatted_df = pd.DataFrame(formatted_data)
-        if not formatted_df.empty:
-            formatted_df = formatted_df.sort_values(['_sort_priority', 'date'], ascending=[True, False])
-            formatted_df = formatted_df.head(100)  # Same limit as table
-        
-        # Now get the correct row
-        if selected_idx < len(formatted_df):
-            tx_row = formatted_df.iloc[selected_idx]
-            tx_hash = tx_row['tx_hash']
-            etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
+        if tx_hash:
             
             # Get additional transaction details for display
             date_str = tx_row.get('date', 'Unknown')
@@ -2077,15 +2108,49 @@ def register_crypto_token_tracker_outputs(output, input, session):
             ui.p("Unable to retrieve transaction details. Please try selecting a different transaction.", class_="small text-muted mt-2")
         )
     
+    # Create a reactive value to track selection changes
+    current_selection = reactive.value({"table": None, "rows": []})
+    
     # Handle transaction selection from review and ready tables
     @reactive.effect
-    @reactive.event(input.review_transactions_table_selected_rows, input.ready_transactions_table_selected_rows)
     def handle_transaction_selection():
-        """Handle transaction selection from either table"""
+        """Handle transaction selection from either table using proper Shiny approach"""
         try:
-            # Check which table has selection
-            review_selection = getattr(input, 'review_transactions_table_selected_rows', lambda: [])()
-            ready_selection = getattr(input, 'ready_transactions_table_selected_rows', lambda: [])()
+            # Check which table has selection using proper cell_selection method
+            review_selection = []
+            ready_selection = []
+            
+            try:
+                # Try accessing cell_selection through input instead
+                review_cell_selection_input = input.review_transactions_table_cell_selection()
+                review_selection = list(review_cell_selection_input.get("rows", [])) if review_cell_selection_input else []
+                print(f"DEBUG handle_transaction_selection: review_selection (via input) = {review_selection}")
+            except Exception as e:
+                print(f"DEBUG handle_transaction_selection: review input error = {e}")
+                try:
+                    # Fallback to direct method
+                    review_cell_selection = review_transactions_table.cell_selection()
+                    review_selection = list(review_cell_selection.get("rows", [])) if review_cell_selection else []
+                    print(f"DEBUG handle_transaction_selection: review_selection (direct) = {review_selection}")
+                except Exception as e2:
+                    print(f"DEBUG handle_transaction_selection: review direct error = {e2}")
+                    review_selection = []
+            
+            try:
+                # Try accessing cell_selection through input instead
+                ready_cell_selection_input = input.ready_transactions_table_cell_selection()
+                ready_selection = list(ready_cell_selection_input.get("rows", [])) if ready_cell_selection_input else []
+                print(f"DEBUG handle_transaction_selection: ready_selection (via input) = {ready_selection}")
+            except Exception as e:
+                print(f"DEBUG handle_transaction_selection: ready input error = {e}")
+                try:
+                    # Fallback to direct method
+                    ready_cell_selection = ready_transactions_table.cell_selection()
+                    ready_selection = list(ready_cell_selection.get("rows", [])) if ready_cell_selection else []
+                    print(f"DEBUG handle_transaction_selection: ready_selection (direct) = {ready_selection}")
+                except Exception as e2:
+                    print(f"DEBUG handle_transaction_selection: ready direct error = {e2}")
+                    ready_selection = []
             
             df = fetched_transactions.get()
             if df.empty:
@@ -2095,13 +2160,19 @@ def register_crypto_token_tracker_outputs(output, input, session):
             if review_selection:
                 selected_row_index = review_selection[0]
                 table_type = "review"
+                current_selection.set({"table": "review", "rows": review_selection})
+                print(f"DEBUG: Set current_selection to review: {review_selection}")
             elif ready_selection:
                 selected_row_index = ready_selection[0]
                 table_type = "ready"
+                current_selection.set({"table": "ready", "rows": ready_selection})
+                print(f"DEBUG: Set current_selection to ready: {ready_selection}")
             else:
                 # No selection
                 selected_transaction.set(None)
                 selected_transaction_hash.set(None)
+                current_selection.set({"table": None, "rows": []})
+                print("DEBUG: No selection - cleared current_selection")
                 return
             
             # Get the selected transaction data

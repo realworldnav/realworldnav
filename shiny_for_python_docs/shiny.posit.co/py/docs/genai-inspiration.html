@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.7.23">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Get inspired – Shiny for Python</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<link href="genai-chatbots.html" rel="next">
+<link href="user-interfaces.html" rel="prev">
+<link href="../favicon.png" rel="icon" type="image/png">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-888ef42a095209a13a17dbfda2cb877d.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-06a6b8726800c70458725a52052b40c7.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="../site_libs/quarto-contrib/videojs/video.min.js"></script>
+<link href="../site_libs/quarto-contrib/videojs/video-js.css" rel="stylesheet">
+<script src="../site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="../site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet">
+<link href="../site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<script>
+  // Redirect URLs like https://shiny.posit.co/py to
+  // https://shiny.posit.co/py/ (with trailing slash). This is needed for
+  // relative paths to work correctly. Unfortunately, Netlify cannot have a
+  // redirect that adds or removes a trailing slash.
+  if (
+    !window.location.pathname.endsWith(".html") &&
+    !window.location.pathname.endsWith("/")
+  ) {
+    window.location.replace(window.location.href + "/");
+  }
+</script>
+
+<!-- Google Tag Manager -->
+<script>
+  // prettier-ignore
+  (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start': new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-KHBDBW7');
+</script>
+<!-- End Google Tag Manager -->
+
+<!-- Add rel="noopener noreferrer" to each target="_blank" -->
+<script type="text/javascript">
+  window.addEventListener("load", () =>
+    [...document.querySelectorAll("a[target=_blank]")].forEach((lnk) =>
+      lnk.setAttribute("rel", "noopener noreferrer")
+    )
+  );
+</script>
+<!-- End Add rel="noopener noreferrer" to each target="_blank" -->
+
+<script type="text/javascript">
+  (function () {
+    function addShinyliveEditLinks() {
+      const codeWithLink = document.querySelectorAll(
+        ".sourceCode[data-shinylive]"
+      );
+      codeWithLink.forEach((el) => {
+        el.classList.add("code-with-shinylive-link");
+        const url = el.dataset.shinylive;
+
+        // <a class="edit-shinylive-button btn btn-link" href="https://shiny.posit.co/py/docs/&lt;%=&#32;app.shinylive&#32;%&gt;" data-bs-toggle="tooltip" data-bs-title="Edit in Shinylive" data-bs-placement="bottom">
+        //  <i class="bi bi-lightning-fill"></i> <span class="visually-hidden">Edit in Shinylive</span>
+        // </a>
+
+        const link = document.createElement("a");
+        link.classList.add("edit-shinylive-button", "btn", "btn-link");
+        link.href = url;
+        link.dataset.bsToggle = "tooltip";
+        link.dataset.bsTitle = "Edit in Shinylive";
+        link.dataset.bsPlacement = "bottom";
+
+        const icon = document.createElement("i");
+        icon.classList.add("bi", "bi-lightning-fill");
+        link.appendChild(icon);
+
+        const span = document.createElement("span");
+        span.classList.add("visually-hidden");
+        span.innerText = "Edit in Shinylive";
+        link.appendChild(span);
+
+        const btnCopy = el.querySelector(".code-copy-button");
+        if (btnCopy) {
+          btnCopy.parentElement.appendChild(link);
+        } else {
+          if (el.matches("pre")) {
+            el.appendChild(link);
+          } else {
+            el.querySelector("pre").appendChild(link);
+          }
+        }
+
+        if (window.bootstrap?.Tooltip) {
+          new bootstrap.Tooltip(link);
+        }
+        el.removeAttribute("data-shinylive");
+      });
+    }
+
+    function addWhatsShinyExpressTooltip() {
+      const tooltipContents = `<p><strong>Shiny Express</strong> is a new, streamlined way to write a Shiny app.</p>
+    <p><strong>Shiny Core</strong> refers to the original, functional Shiny syntax, which is still a great way to write Shiny apps.</p>
+    <p class="fw-600" style="font-size:0.85em;"><a href="https://shiny.posit.co/blog/posts/shiny-express/">Read more <i class="bi bi-chevron-right align-text-top"></i></a></p>`;
+
+      const tooltipDisplay = `<i class="bi bi-question-circle-fill d-inline d-sm-none"></i><span class="d-none d-sm-inline">What's this?</span>`;
+
+      document
+        .querySelectorAll(".panel-tabset.shiny-mode-tabset")
+        .forEach(function (tabset) {
+          const trigger = document.createElement("div");
+          trigger.classList.add("what-shiny-express", "text-white");
+          trigger.tabIndex = 0;
+          trigger.innerHTML = tooltipDisplay;
+          tabset.appendChild(trigger);
+
+          if (!window.bootstrap?.Popover) {
+            return;
+          }
+
+          new window.bootstrap.Popover(trigger, {
+            html: true,
+            title: "Express vs Core",
+            content: tooltipContents,
+            placement: "auto",
+            trigger: "focus",
+            container: tabset,
+          });
+        });
+    }
+
+    function handlePanelVariants() {
+      document.querySelectorAll(".panel-pills > .nav").forEach((x) => {
+        x.classList.remove("nav-tabs");
+        x.classList.add("nav-pills");
+      });
+      document.querySelectorAll(".panel-underline > .nav").forEach((x) => {
+        x.classList.remove("nav-tabs");
+        x.classList.add("nav-underline");
+      });
+      document.querySelectorAll(".shiny-mode-tabset > .nav").forEach((x) => {
+        x.classList.remove("nav-tabs");
+        x.classList.add("nav-underline");
+      });
+    }
+
+    function onLoad() {
+      addShinyliveEditLinks();
+      addWhatsShinyExpressTooltip();
+      handlePanelVariants();
+    }
+
+    document.readyState === "loading"
+      ? document.addEventListener("DOMContentLoaded", onLoad)
+      : onLoad();
+  })();
+</script>
+
+<!-- <div
+  class="alert alert-primary text-center mb-0 border-0"
+  style="padding: 0.6rem"
+  role="alert"
+>
+  <p class="d-md-inline my-0 me-md-4 p-90">
+    <strong>🎉 Introducing Shiny Express</strong>
+  </p>
+  <p class="d-md-inline my-0 p-90 me-md-4">
+    A simpler way to write and learn Shiny.
+  </p>
+  <p class="d-md-inline my-0 p-90 me-md-4">
+    <a
+      href="https://shiny.posit.co/blog/posts/shiny-express/"
+      target="_blank"
+      style="color: #00314e"
+      >Learn more</a
+    >.
+  </p>
+</div> -->
+
+
+<meta property="og:title" content="Get inspired – Shiny for Python">
+<meta property="og:description" content="Build interactive web applications easily with the power of Python’s data and scientific stack.">
+<meta property="og:image" content="https://shiny.posit.co/py/images/shiny-for-python.jpg">
+<meta property="og:site_name" content="Shiny for Python">
+<meta property="og:locale" content="es_ES">
+<meta name="twitter:title" content="Shiny for Python">
+<meta name="twitter:description" content="Build interactive web applications easily with the power of Python’s data and scientific stack.">
+<meta name="twitter:image" content="https://shiny.posit.co/py/images/shiny-for-python.jpg">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+
+<body class="nav-sidebar floating nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../shiny-for-python.svg" alt="The logo for Shiny for Python" class="navbar-logo">
+    </a>
+    <a class="navbar-brand" href="../index.html">
+    <span class="navbar-title">Shiny for Python</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../get-started/index.html"> 
+<span class="menu-text">Get Started</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link active" href="overview.html" aria-current="page"> 
+<span class="menu-text">Concepts</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="genai-inspiration.html#" id="nav-menu-components" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Components</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-components">    
+        <li>
+    <a class="dropdown-item" href="../components/index.html"><i class="bi bi-sliders" role="img">
+</i> 
+ <span class="dropdown-text">Components</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../layouts/index.html"><i class="bi bi-layout-text-window-reverse" role="img">
+</i> 
+ <span class="dropdown-text">Layouts</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../templates/index.html"><i class="bi bi-code-square" role="img">
+</i> 
+ <span class="dropdown-text">Templates</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="../gallery/index.html"> 
+<span class="menu-text">Gallery</span></a>
+  </li>  
+  <li class="nav-item">
+    <a class="nav-link" href="https://shinylive.io/py/examples/" target="_blank"> 
+<span class="menu-text">Playground</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="genai-inspiration.html#" id="nav-menu-reference" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Reference</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-reference">    
+        <li>
+    <a class="dropdown-item" href="../api/express/index.html">
+ <span class="dropdown-text">Shiny Express</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../api/core/index.html">
+ <span class="dropdown-text">Shiny Core</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../api/testing/index.html">
+ <span class="dropdown-text">Testing</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+    <a href="https://discord.gg/yMGCamUMnS" title="" class="quarto-navigation-tool px-1" aria-label="Shiny Discord"><i class="bi bi-discord"></i></a>
+    <a href="https://github.com/posit-dev/py-shiny/" title="" class="quarto-navigation-tool px-1" aria-label="Shiny for Python Github"><i class="bi bi-github"></i></a>
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="genai-inspiration.html"><span class="emoji-icon">🤖</span> <strong>Generative AI</strong></a></li><li class="breadcrumb-item"><a href="genai-inspiration.html">Get inspired</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation floating overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">📌</span> <strong>Essentials</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="overview.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Overview</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="user-interfaces.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">User interfaces</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">🤖</span> <strong>Generative AI</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="genai-inspiration.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Get inspired</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="genai-chatbots.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Chatbots</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="genai-stream.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Streaming</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="genai-tools.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Tool calling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="genai-structured-data.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Structured data</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="genai-rag.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">RAG</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">🎨</span> <strong>User interfaces</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="ui-overview.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Overview</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="jupyter-widgets.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Jupyter Widgets</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="ui-dynamic.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Dynamic UI</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="ui-html.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">UI as HTML</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="ui-customize.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Customizing UI</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">⚡</span> <strong>Reactivity</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="reactive-foundations.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Foundations</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="reactive-patterns.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Patterns</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="reactive-mutable.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Mutable objects</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">📝</span> <strong>Syntax modes</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="express-vs-core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Express vs.&nbsp;Core</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="express-or-core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Choosing a syntax</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="express-in-depth.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Express in depth</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="express-to-core.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Transition to Core</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">📦</span> <strong>Modules</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="modules.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Shiny Modules</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="module-communication.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Module Communication</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">🧪</span> <strong>Testing</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-7" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-7" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="unit-testing.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Unit testing</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="end-to-end-testing.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">End-to-End Testing Your App</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-8" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">🏗️</span> <strong>Extending</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-8" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-8" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="custom-component-one-off.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Custom JavaScript component</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="custom-components-pkg.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Custom components package</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-9" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">📊</span> <strong>Comparisons</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-9" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-9" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="comp-streamlit.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Streamlit</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="comp-r-shiny.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Shiny for R</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-10" role="navigation" aria-expanded="true">
+ <span class="menu-text"><span class="emoji-icon">🧩</span> <strong>Miscellaneous</strong></span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-10" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-10" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="nonblocking.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Non-blocking operations</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="routing.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Routing</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="genai-inspiration.html#chatbots" id="toc-chatbots" class="nav-link active" data-scroll-target="#chatbots">Chatbots</a>
+  <ul class="collapse">
+  <li><a href="genai-inspiration.html#coding-assistant" id="toc-coding-assistant" class="nav-link" data-scroll-target="#coding-assistant">Coding assistant 👩‍💻</a></li>
+  <li><a href="genai-inspiration.html#enhanced-dashboards" id="toc-enhanced-dashboards" class="nav-link" data-scroll-target="#enhanced-dashboards">Enhanced dashboards 📊</a></li>
+  <li><a href="genai-inspiration.html#guided-exploration" id="toc-guided-exploration" class="nav-link" data-scroll-target="#guided-exploration">Guided exploration 🧭</a></li>
+  </ul></li>
+  <li><a href="genai-inspiration.html#streaming-markdown" id="toc-streaming-markdown" class="nav-link" data-scroll-target="#streaming-markdown">Streaming markdown</a>
+  <ul class="collapse">
+  <li><a href="genai-inspiration.html#workout-plan-generator" id="toc-workout-plan-generator" class="nav-link" data-scroll-target="#workout-plan-generator">Workout plan generator 💪</a></li>
+  <li><a href="genai-inspiration.html#image-describer" id="toc-image-describer" class="nav-link" data-scroll-target="#image-describer">Image describer 🖼️</a></li>
+  </ul></li>
+  </ul>
+<div class="toc-actions"><ul><li><a href="https://github.com/posit-dev/py-shiny-site/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li><li><a href="https://github.com/posit-dev/py-shiny-site/edit/main/docs/genai-inspiration.qmd" class="toc-action"><i class="bi empty"></i>Edit this page</a></li></ul></div></nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+<!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-KHBDBW7" height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) -->
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="genai-inspiration.html"><span class="emoji-icon">🤖</span> <strong>Generative AI</strong></a></li><li class="breadcrumb-item"><a href="genai-inspiration.html">Get inspired</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Get inspired</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<p>Before jumping into tools and techniques for building Generative AI apps, it’s helpful to see some inspiring examples of what’s possible. In this article, we’ll highlight a few apps that leverage Gen AI in useful ways, from streaming chatbots to more bespoke interfaces. Make sure to also check out the <a href="../templates/index.html">templates</a> for more examples of Shiny + AI.</p>
+<div class="callout callout-style-simple callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Responsible use
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Generative AI is a powerful tool. When used responsibly, it offers some incredible opportunities for enhancing user experiences and productivity. However, when Gen AI outcomes lack reliability, transparency, and reproducibility, it can lead to worse, not better, outcomes. This is especially true when data analysis is involved and accuracy is paramount. Thankfully, LLMs have some useful techniques for increasing verifiability in outcomes, such as <a href="genai-tools.html">tool calling</a> where you can effectively equip the LLM with the reproducible tools to accomplish certain tasks, and allow the user to verify the methodology and results.</p>
+<p>In this article, we’ll highlight some of these techniques, and how they can be used to build more reliable and reproducible applications.</p>
+</div>
+</div>
+<section id="chatbots" class="level2">
+<h2 class="anchored" data-anchor-id="chatbots">Chatbots</h2>
+<p>In <a href="genai-chatbots.html">chatbots</a>, we’ll cover the ins and outs of building a chatbot with <code>Chat()</code>. Chatbots are the most familiar interface to Generative AI, and can be used for a wide variety of tasks, from coding assistants to enhancing interactive dashboards.</p>
+<section id="coding-assistant" class="level3">
+<h3 class="anchored" data-anchor-id="coding-assistant">Coding assistant 👩‍💻</h3>
+<p>LLMs excel when they are instructed to focus on particular task(s), and provided the context necessary to complete them accurately. This is especially true for coding assistants, such as the <a href="https://shiny.posit.co/blog/posts/shiny-assistant/">Shiny Assistant</a> which leverages an LLM to help you build Shiny apps faster. Just describe the app you want to build, and Shiny Assistant does its best to give you a complete working example that runs in your browser.</p>
+<div class="quarto-video"><video id="video_shortcode_videojs_video1" class="video-js vjs-default-skin vjs-fluid" controls="" preload="auto" data-setup="{}" title="Building a mortgage calculator with Shiny Assistant"><source src="https://shiny.posit.co/blog/posts/shiny-assistant/mortgage-calculator-1.mp4"></video></div>
+<p>Although a “standard” chat interface like ChatGPT can help you write Shiny code, there are two main things that make Shiny Assistant a better experience:</p>
+<ol type="1">
+<li><strong>Context</strong>: Shiny Assistant is <a href="https://github.com/posit-dev/shiny-assistant/blob/main/shinyapp/app_prompt_python.md">provided instructions</a> and up-to-date knowledge about Shiny, which allows it to generate more accurate code and better looking results.</li>
+<li><strong>Playground</strong>: Shiny Assistant takes the generated code and runs the app in your browser via <a href="https://shinylive.io/py/examples/">shinylive</a>, allowing you to iterate on the app and see the results in real-time.</li>
+</ol>
+<p>Although the playground aspect of Shiny Assistant is an impressive technical feat, it’s not strictly necessary to make your own useful coding/learning assistant with context important to your domain. In fact, we’ve found that creating a simple chatbot that is simply instructed to focus on helping you learn about a new package, and providing the documentation for that package, to be surprisingly effective. One such example includes the <a href="https://github.com/cpsievert/chatlas-assistant">chatlas assistant</a>, which helps users learn about the <code>chatlas</code> package (our recommended way of programming with LLMs) by providing documentation and examples.</p>
+</section>
+<section id="enhanced-dashboards" class="level3">
+<h3 class="anchored" data-anchor-id="enhanced-dashboards">Enhanced dashboards 📊</h3>
+<p>LLMs are also very good at extracting <a href="genai-structured-data.html">structured data</a> from unstructured text, which is useful for a wide variety of tasks. One interesting application is translating a user’s natural language query into a SQL query. Combining this ability with <a href="genai-tools.html">tools</a> to actually run the SQL query on the data and <a href="reactive-foundations.html">reactively</a> update relevant views makes for a powerful way to “drill down” into your data. Moreover, by making the SQL query accessible to the user, you can enhance the verifiability and reproducibility of the LLM’s response.</p>
+<section id="query-chat" class="level4">
+<h4 class="anchored" data-anchor-id="query-chat">Query chat</h4>
+<p>The <a href="https://github.com/posit-dev/querychat"><code>querychat</code> package</a> provides tools to help you more easily leverage this idea in your own Shiny apps. A straightforward use of querychat is shown below, where the user can ask a natural language question about the <code>titanic</code> dataset, and the LLM generates a SQL query that can be run on the data:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-querychat.png" class="lightbox" data-gallery="quarto-lightbox-gallery-1" title="Screenshot of the “querychat” app, which leverages LLMs to generate SQL queries that match a user’s natural language query."><img src="../images/genai-querychat.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the “querychat” app, which leverages LLMs to generate SQL queries that match a user’s natural language query."></a></p>
+<figcaption>Screenshot of the “querychat” app, which leverages LLMs to generate SQL queries that match a user’s natural language query.</figcaption>
+</figure>
+</div>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>The app above is available as a <a href="../templates/querychat/index.html">template</a>:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="genai-inspiration.html#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shiny</span> create <span class="at">--template</span> querychat <span class="dt">\</span></span>
+<span id="cb1-2"><a href="genai-inspiration.html#cb1-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">--github</span> posit-dev/py-shiny-templates/gen-ai</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="sidebot" class="level4">
+<h4 class="anchored" data-anchor-id="sidebot">Sidebot</h4>
+<p>A more advanced application of this concept is to drive multiple views of the data with a single natural language query. An implementation of this idea is available in the <a href="https://github.com/jcheng5/py-sidebot">sidebot</a> repo. It defaults to the <code>tips</code> dataset, but without much effort, you can adapt it to another dataset of your choosing.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-sidebot.png" class="lightbox" data-gallery="quarto-lightbox-gallery-2" title="Screenshot of the “sidebot” app, which leverages LLMs to translate natural language to SQL, and tools to reactively update the dashboard."><img src="../images/genai-sidebot.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the “sidebot” app, which leverages LLMs to translate natural language to SQL, and tools to reactively update the dashboard."></a></p>
+<figcaption>Screenshot of the “sidebot” app, which leverages LLMs to translate natural language to SQL, and tools to reactively update the dashboard.</figcaption>
+</figure>
+</div>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>The app above is available as a <a href="../templates/sidebot/index.html">template</a>:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="genai-inspiration.html#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shiny</span> create <span class="at">--template</span> querychat <span class="dt">\</span></span>
+<span id="cb2-2"><a href="genai-inspiration.html#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">--github</span> posit-dev/py-shiny-templates/gen-ai</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</div>
+</div>
+<p>Sidebot also demonstrates how one can leverage an LLM’s ability to “see” images and generate natural language descriptions of them. Specifically, by clicking on the ✨ icon, the user is provided with a natural language description of the visualization, which can be useful for accessibility or for users who are not as familiar with the data.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-sidebot-tooltip.png" class="lightbox" data-gallery="quarto-lightbox-gallery-3" title="Screenshot of the “sidebot” app with a tooltip describing the visualization."><img src="../images/genai-sidebot-tooltip.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the “sidebot” app with a tooltip describing the visualization."></a></p>
+<figcaption>Screenshot of the “sidebot” app with a tooltip describing the visualization.</figcaption>
+</figure>
+</div>
+</section>
+</section>
+<section id="guided-exploration" class="level3">
+<h3 class="anchored" data-anchor-id="guided-exploration">Guided exploration 🧭</h3>
+<p>Chatbots are also a great way to guide users through an experience, such as a story, game, or learning activity. The <code>Chat()</code> component’s <a href="genai-chatbots.html#suggest-input">input suggestion</a> feature provides a particularly useful interface for this, as it makes it very easy for users to ‘choose their own adventure’ with little to no typing.</p>
+<p>For example, this “Choose your own Data Science Adventure” app starts by collecting some basic user information, then generates relevant hypothetical data science scenarios. Based on the scenario the user chooses, the app then guides the user through a series of questions, ultimately leading to a data science project idea and deliverable:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-data-science-adventure.png" class="lightbox" data-gallery="quarto-lightbox-gallery-4" title="Screenshot of the “Choose your own Data Science Adventure” app."><img src="../images/genai-data-science-adventure.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the “Choose your own Data Science Adventure” app."></a></p>
+<figcaption>Screenshot of the “Choose your own Data Science Adventure” app.</figcaption>
+</figure>
+</div>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>The app above is available as a <a href="../templates/data-sci-adventure/index.html">template</a>:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="genai-inspiration.html#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shiny</span> create <span class="at">--template</span> data-sci-adventure <span class="dt">\</span></span>
+<span id="cb3-2"><a href="genai-inspiration.html#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">--github</span> posit-dev/py-shiny-templates/gen-ai</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</div>
+</div>
+<p>Another example is the “What’s for Dinner?” app, which helps the user brainstorm dinner (or other) recipe ideas based on available ingredients and other input. In addition to brainstorming through recipe ideas, it also leverages <a href="genai-structured-data.html">structured data extraction</a> to put the recipe in a structured format that could be ingested by a database.</p>
+<div class="tabset-margin-container"></div><div class="panel-tabset panel-pills">
+<ul class="nav nav-tabs" role="tablist"><li class="nav-item" role="presentation"><a class="nav-link active" id="tabset-1-1-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-1" role="tab" aria-controls="tabset-1-1" aria-selected="true">Exploring recipes 🍲</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-2-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-2" role="tab" aria-controls="tabset-1-2" aria-selected="false">Extracted recipe 📝</a></li></ul>
+<div class="tab-content panel-pills">
+<div id="tabset-1-1" class="tab-pane active" role="tabpanel" aria-labelledby="tabset-1-1-tab">
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-dinner-recipe1.png" class="lightbox" data-gallery="quarto-lightbox-gallery-5" title="Screenshot of the “What’s for Dinner?” app."><img src="../images/genai-dinner-recipe1.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the “What’s for Dinner?” app."></a></p>
+<figcaption>Screenshot of the “What’s for Dinner?” app.</figcaption>
+</figure>
+</div>
+</div>
+<div id="tabset-1-2" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-2-tab">
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-dinner-recipe2.png" class="lightbox" data-gallery="quarto-lightbox-gallery-6" title="A recipe extracted from the “What’s for Dinner?” app."><img src="../images/genai-dinner-recipe2.png" class="rounded shadow mt-3 img-fluid figure-img" alt="A recipe extracted from the “What’s for Dinner?” app."></a></p>
+<figcaption>A recipe extracted from the “What’s for Dinner?” app.</figcaption>
+</figure>
+</div>
+</div>
+</div>
+</div>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>The app above is available as a <a href="../templates/dinner-recipe/index.html">template</a>:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="genai-inspiration.html#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shiny</span> create <span class="at">--template</span> dinner-recipe <span class="dt">\</span></span>
+<span id="cb4-2"><a href="genai-inspiration.html#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">--github</span> posit-dev/py-shiny-templates/gen-ai</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</div>
+</div>
+</section>
+</section>
+<section id="streaming-markdown" class="level2">
+<h2 class="anchored" data-anchor-id="streaming-markdown">Streaming markdown</h2>
+<p><code>MarkdownStream()</code> <a href="genai-inspiration.html#basic-usage">usage</a> is fairly straightforward, but the potential applications may not be immediately obvious. In a generative AI setting, a common pattern is to gather <a href="../components/index.html#inputs">input</a> from the user, then pass that info along to a prompt template for the LLM to generate a response. Here are a couple motivating examples:</p>
+<section id="workout-plan-generator" class="level3">
+<h3 class="anchored" data-anchor-id="workout-plan-generator">Workout plan generator 💪</h3>
+<p>The app illustrated below uses an LLM to generate a workout plan based on a user’s fitness goals, experience level, and available equipment:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-workout-plan.png" class="lightbox" data-gallery="quarto-lightbox-gallery-7" title="Screenshot of the app with a generated workout plan."><img src="../images/genai-workout-plan.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the app with a generated workout plan."></a></p>
+<figcaption>Screenshot of the app with a generated workout plan.</figcaption>
+</figure>
+</div>
+<p>When the user clicks ‘Get Workout’, the app fills a prompt template that looks roughly like this, and passes the result as input to the LLM:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="genai-inspiration.html#cb5-1" aria-hidden="true" tabindex="-1"></a>prompt <span class="op">=</span> <span class="ss">f"""</span></span>
+<span id="cb5-2"><a href="genai-inspiration.html#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ss">Generate a brief </span><span class="sc">{</span><span class="bu">input</span><span class="sc">.</span>duration()<span class="sc">}</span><span class="ss">-minute workout plan for a </span><span class="sc">{</span><span class="bu">input</span><span class="sc">.</span>goal()<span class="sc">}</span><span class="ss"> fitness goal.</span></span>
+<span id="cb5-3"><a href="genai-inspiration.html#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ss">On a scale of 1-10, I have a level  </span><span class="sc">{</span><span class="bu">input</span><span class="sc">.</span>experience()<span class="sc">}</span><span class="ss"> experience,</span></span>
+<span id="cb5-4"><a href="genai-inspiration.html#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="ss">works out </span><span class="sc">{</span><span class="bu">input</span><span class="sc">.</span>daysPerWeek()<span class="sc">}</span><span class="ss"> days per week, and have access to:</span></span>
+<span id="cb5-5"><a href="genai-inspiration.html#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="sc">{</span><span class="st">", "</span><span class="sc">.</span>join(<span class="bu">input</span>.equipment()) <span class="cf">if</span> <span class="bu">input</span><span class="sc">.</span>equipment() <span class="cf">else</span> <span class="st">"no equipment"</span><span class="sc">}</span><span class="ss">.</span></span>
+<span id="cb5-6"><a href="genai-inspiration.html#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="ss">"""</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>From this prompt, the LLM responds with a workout plan, which is streamed into the app via <code>MarkdownStream()</code> component. Go ahead and visit the <a href="https://github.com/posit-dev/py-shiny-templates/tree/main/gen-ai/workout-plan">live app</a> to see it in action, or grab the source code to run it locally:</p>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>The app above is available as a <a href="../templates/workout-plan/index.html">template</a>:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="genai-inspiration.html#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shiny</span> create <span class="at">--template</span> workout-plan <span class="dt">\</span></span>
+<span id="cb6-2"><a href="genai-inspiration.html#cb6-2" aria-hidden="true" tabindex="-1"></a>    <span class="at">--github</span> posit-dev/py-shiny-templates/gen-ai</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</div>
+</div>
+</section>
+<section id="image-describer" class="level3">
+<h3 class="anchored" data-anchor-id="image-describer">Image describer 🖼️</h3>
+<p>The app below uses an LLM to generate a description of an image based on a user-provided URL:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-image-describer.png" class="lightbox" data-gallery="quarto-lightbox-gallery-8" title="Screenshot of an app that generates an image description."><img src="../images/genai-image-describer.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of an app that generates an image description."></a></p>
+<figcaption>Screenshot of an app that generates an image description.</figcaption>
+</figure>
+</div>
+<p>When the user clicks ‘Describe Image’, the app passes the image URL to the LLM, which generates an overall description, tag keywords, as well as estimates on location, photographer, etc. This content is then streamed into the <code>MarkdownStream()</code> component (inside of a card) as it’s being produced.</p>
+<p>This slightly more advanced example also demonstrates how to route the same response stream to multiple output views: namely, both the <code>MarkdownStream()</code> and a <code>Chat()</code> component. This allows the user to make follow-up requests or ask questions about the image description.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../images/genai-image-describer-chat.png" class="lightbox" data-gallery="quarto-lightbox-gallery-9" title="Screenshot of the image description app with the offcanvas chat made visible."><img src="../images/genai-image-describer-chat.png" class="rounded shadow mt-3 img-fluid figure-img" alt="Screenshot of the image description app with the offcanvas chat made visible."></a></p>
+<figcaption>Screenshot of the image description app with the offcanvas chat made visible.</figcaption>
+</figure>
+</div>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>The app above is available as a <a href="../templates/index.html">template</a>:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="genai-inspiration.html#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">shiny</span> create <span class="at">--github</span> jonkeane/shinyImages</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+</div>
+</div>
+</div>
+<!--
+TODO: this seems worth another section
+
+## Generative UI
+
+A Shiny that leverages Generative AI doesn't necessarily need a chatbot or streaming markdown aspect.
+
+Thinking beyond chatbots and streaming markdown, Generative AI can leveraged in sorts of creative ways to generate UI components, layouts, and even entire apps.
+-->
+<!--
+TODO: Collect apps from cohorts https://github.com/jcheng5/llm-quickstart/blob/main/quickstart.qmd#L511-L524
+
+* 14: Sharon Wang (Flow chat extractor)
+* 12: Andrie, Invoice extractor, https://github.com/posit-dev/accounts-payable-bot
+* 10: Sara Altman, Data generator, https://github.com/skaltman/data-generator
+* 5: Gordon Woodhall, Quarto DS Assistant, https://github.com/gordonwoodhull/quarto-data-science-chatbot
+* 4: Alex Chishom, Dataset generator, https://github.com/alex-chisholm/houdini/
+  * Hosted: https://posit-ai-dataset-generator-ellmer.share.connect.posit.cloud/
+* 2: Isabella Velásquez, Al text generator, https://github.com/ivelasq/rplot-alt-text-generator
+  * Hosted: https://posit-ai-altr.share.connect.posit.cloud/
+-->
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+        const codeEl = trigger.previousElementSibling.cloneNode(true);
+        for (const childEl of codeEl.children) {
+          if (isCodeAnnotation(childEl)) {
+            childEl.remove();
+          }
+        }
+        return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+            // target, if specified
+            link.setAttribute("target", "_blank");
+            if (link.getAttribute("rel") === null) {
+              link.setAttribute("rel", "noopener");
+            }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="user-interfaces.html" class="pagination-link" aria-label="User interfaces">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">User interfaces</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="genai-chatbots.html" class="pagination-link" aria-label="Chatbots">
+        <span class="nav-page-text">Chatbots</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+<p>Proudly supported by <a href="https://www.posit.co/" class="no-icon"><img src="../images/posit-logo-black.svg" alt="Posit" width="80" style="padding-left: 3px;vertical-align:text-top;"></a></p>
+</div>   
+    <div class="nav-footer-center">
+      &nbsp;
+    <div class="toc-actions d-sm-block d-md-none"><ul><li><a href="https://github.com/posit-dev/py-shiny-site/issues/new" class="toc-action"><i class="bi bi-github"></i>Report an issue</a></li><li><a href="https://github.com/posit-dev/py-shiny-site/edit/main/docs/genai-inspiration.qmd" class="toc-action"><i class="bi empty"></i>Edit this page</a></li></ul></div></div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://discord.gg/yMGCamUMnS">
+      <i class="bi bi-discord" role="img" aria-label="Shiny Discord">
+</i> 
+    </a>
+  </li>  
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/posit-dev/py-shiny/">
+      <i class="bi bi-github" role="img" aria-label="Shiny for Python Github">
+</i> 
+    </a>
+  </li>  
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://twitter.com/posit_pbc">
+      <i class="bi bi-twitter" role="img" aria-label="Posit Twitter">
+</i> 
+    </a>
+  </li>  
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://www.youtube.com/playlist?list=PL9HYL-VRX0oRbLoj3FyL5zeASU5FMDgVe">
+      <i class="bi bi-youtube" role="img" aria-label="Shiny YouTube Playlist">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+<script>videojs(video_shortcode_videojs_video1);</script>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"fade","descPosition":"bottom","loop":false,"openEffect":"fade","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
+
+
+
+
+</body></html>

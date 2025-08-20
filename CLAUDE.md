@@ -101,249 +101,292 @@ The application uses Shiny's reactive system:
 - Error handling includes debug print statements throughout
 - All modules register their outputs in the main server function
 
-## GL-Based PCAP Implementation Plan
+## Shiny for Python Reference
 
-### Overview
-Implement a comprehensive GL-based Partner Capital Account Projections (PCAP) system that generates detailed line-item breakdowns for each Limited Partner, showing capital flows, P&L allocations, and performance metrics calculated directly from General Ledger transactions.
+### Core UI Components for Financial Dashboards
 
-### Target Output Format
+#### Input Controls
+```python
+# Date range picker for financial periods
+ui.input_date_range(
+    "date_range",
+    "Reporting Period:",
+    start="2024-01-01",
+    end="2024-12-31"
+)
 
-For each LP, display:
+# Fund/entity selection
+ui.input_select(
+    "fund_selector",
+    "Select Fund:",
+    {"fund_a": "Fund A", "fund_b": "Fund B", "fund_c": "Fund C"}
+)
 
-```
-👤 LP: LP_00001_fund_i_class_B_ETH
-------------------------------------------------------------
-             Line_Item                                    SCPC Category        Current_Month      Current_Quarter         Current_Year                  ITD
-     Beginning Capital                       Beginning Balance  Capital  -0.0000000000000000  -0.0000000000000000  -0.0000000000000000   0.0000000000000000
- Capital Contributions                   Capital contributions  Capital 427.7683160000000271 427.7683160000000271 427.7683160000000271 427.7683160000000271
- Capital Distributions                   Capital distributions  Capital  -0.0000000000000000  -0.0000000000000000  -0.0000000000000000  -0.0000000000000000
-    Operating expenses                      Operating expenses  Expense  -0.3345340000000000  -0.3345340000000000  -0.3345340000000000  -0.3345340000000000
-       Interest income                         Interest income   Income   0.0210160000000000   0.0210160000000000   0.0210160000000000   0.0210160000000000
-Provision for bad debt                  Provision for bad debt  Expense  -0.0031520000000000  -0.0031520000000000  -0.0031520000000000  -0.0031520000000000
-       Management Fees                         Management fees     Fees  -0.1379900000000000  -0.1379900000000000  -0.1379900000000000  -0.1379900000000000
-     GP Incentive Fees Incentive allocation to General Partner     Fees  -0.0000000000000000  -0.0000000000000000  -0.0000000000000000  -0.0000000000000000
-        Ending Capital                          Ending Balance  Capital 427.3136559999999804 427.3136559999999804 427.3136559999999804 427.3136559999999804
-
-Commitment summary
-Total commitments 427.7683
-Capital called 427.7683
-Remaining commitments -
-
-Performance metrics
-Net IRR -
-Gross MOIC 1.064400
-NAV per unit -
+# Numeric inputs for financial parameters
+ui.input_numeric(
+    "amount",
+    "Amount:",
+    value=0,
+    min=0,
+    step=0.01
+)
 ```
 
-### Phase 1: Core GL Processing Engine
+#### Dashboard Layout Components
+```python
+# Navbar layout for multi-module financial app
+ui.page_navbar(
+    ui.nav_panel("Fund Accounting", fund_accounting_ui()),
+    ui.nav_panel("General Ledger", general_ledger_ui()),
+    ui.nav_panel("Investments", investments_ui()),
+    ui.nav_panel("Financial Reporting", reporting_ui()),
+    title="RealWorldNAV"
+)
 
-#### 1.1 Create New GL-Based PCAP Module
-**File**: `main_app/modules/fund_accounting/PCAP/pcap_gl_detailed.py`
+# Column layout for KPI dashboard
+ui.layout_columns(
+    ui.value_box("Total NAV", "$1.2M", "Up 5.2% vs last month"),
+    ui.value_box("Total Assets", "$2.1M", "Portfolio value"),
+    ui.value_box("Cash Position", "$150K", "Available liquidity"),
+    col_widths=[4, 4, 4]
+)
 
-**Key Functions**:
-- `normalize_to_eod_utc(series)` - Convert dates to 23:59:59 UTC for consistent matching
-- `process_gl_for_pcap_detailed(gl_df, coa_df, start_date, end_date, selected_fund)` - Main processing function
-- `generate_lp_detailed_breakdown(gl_data, lp_id, as_of_date)` - Generate individual LP breakdown
-- `calculate_period_aggregations(gl_data, lp_id, as_of_date)` - Calculate Current_Month, Current_Quarter, Current_Year, ITD
-- `generate_commitment_summary(gl_data, lp_id)` - Calculate commitment metrics
-- `calculate_performance_metrics(gl_data, lp_id, as_of_date)` - Calculate IRR, MOIC, NAV per unit
-
-#### 1.2 Line Item Processing Logic
-
-**GL Account Mapping to Line Items**:
-- **Beginning Capital**: Calculate from prior period ending balances
-- **Capital Contributions**: Sum all `capital_contributions_property` transactions
-- **Capital Distributions**: Sum all `capital_distributions_property` transactions  
-- **Operating expenses**: Sum all expense accounts (GL_Acct_Number >= 40000) excluding mgmt fees and provisions
-- **Interest income**: Sum all income accounts with "interest" classification in COA
-- **Provision for bad debt**: Sum accounts with "provision" or "bad debt" in account name
-- **Management Fees**: Sum all `management_fee_expense` transactions
-- **GP Incentive Fees**: Sum all `capital_incentive_allocation_GP_property` transactions
-- **Ending Capital**: Beginning + Contributions - Distributions + Net P&L
-
-**Period Calculations**:
-- **Current_Month**: Transactions within the selected month
-- **Current_Quarter**: Q1 (Jan-Mar), Q2 (Apr-Jun), Q3 (Jul-Sep), Q4 (Oct-Dec) containing as_of_date
-- **Current_Year**: January 1st through December 31st of as_of_date year
-- **ITD**: All transactions from fund inception through as_of_date
-
-#### 1.3 Data Integration Points
-
-**Required Data Sources**:
-- GL transactions from S3: `drip_capital/all_posted_journal_entries.parquet`
-- Chart of Accounts from S3: `drip_capital/drip_capital_COA.csv`
-- GP Incentive Audit Trail: `drip_capital/20240731_fund_i_class_B_ETH_GP_incentive_audit_trail.xlsx`
-
-**Integration with Existing Functions**:
-- Use existing `load_GL_file()` from `s3_utils.py`
-- Use existing `load_COA_file()` from `s3_utils.py` 
-- Use existing `get_lp_net_irr_from_audit()` for Net IRR calculation
-
-### Phase 2: Enhanced PCAP UI Components
-
-#### 2.1 Update PCAP User Interface
-**File**: Enhance existing PCAP UI module
-
-**New UI Elements**:
-- **As-of Date Picker**: Single date selection for period calculations
-- **LP Multi-Select**: Choose specific LPs or "All LPs"
-- **Fund Selector**: Integrate with existing fund selection
-- **Generate Detailed PCAP Button**: Trigger GL-based calculations
-- **View Toggle**: Switch between summary and detailed line-item view
-
-#### 2.2 Results Display Table
-**Interactive DataGrid Features**:
-- **LP Grouping**: Expandable/collapsible sections per LP
-- **Frozen Columns**: Line_Item and SCPC Category columns frozen for horizontal scrolling
-- **High Precision Display**: Show full decimal precision as in example
-- **Color Coding**: Different colors for Capital, Expense, Income, Fees categories
-- **Export Buttons**: CSV and PDF export options
-
-**Table Structure**:
-```
-LP Section Header: 👤 LP: [LP_ID]
-------------------------------------------------------------
-Line_Item | SCPC Category | Current_Month | Current_Quarter | Current_Year | ITD
-[9 line items as shown in example]
-
-Commitment summary
-[3 commitment metrics]
-
-Performance metrics  
-[3 performance metrics]
+# Card-based organization
+ui.card(
+    ui.card_header("Portfolio Performance"),
+    ui.output_plot("performance_chart"),
+    ui.card_footer("Data as of latest NAV calculation")
+)
 ```
 
-### Phase 3: Commitment and Performance Calculations
+#### Financial Data Display
+```python
+# Interactive data tables for financial data
+ui.output_data_frame("financial_table")
 
-#### 3.1 Commitment Summary Logic
-- **Total commitments**: Sum of all committed capital for the LP (from commitment data or maximum contributions)
-- **Capital called**: Sum of actual capital contributions to date
-- **Remaining commitments**: Total commitments - Capital called
-
-#### 3.2 Performance Metrics Calculations  
-- **Net IRR**: Extract from GP incentive audit trail using existing `get_lp_net_irr_from_audit()`
-- **Gross MOIC**: (Current NAV + Total Distributions) / Total Contributions
-- **NAV per unit**: Current NAV / Number of units held (calculate from contribution/unit data)
-
-#### 3.3 Data Sources for Metrics
-- **Commitment Data**: Extract from GL patterns or separate commitment file
-- **NAV Calculations**: Use ending capital balance as current NAV
-- **Unit Calculations**: Derive from contribution amounts and unit prices
-
-### Phase 4: Export and Reporting
-
-#### 4.1 PDF Export Enhancement
-**Professional PDF Layout**:
-- **Header**: Fund name, as-of date, generation timestamp
-- **LP Sections**: Each LP on separate page or clearly separated
-- **Table Formatting**: Professional styling with proper decimal alignment
-- **Summary Pages**: Overall fund totals and statistics
-
-#### 4.2 CSV Export Structure
-**Flat File Format**:
-```
-LP_ID, Line_Item, SCPC_Category, Current_Month, Current_Quarter, Current_Year, ITD
-LP_00001, Beginning Capital, Beginning Balance Capital, 0.0000, 0.0000, 0.0000, 0.0000
-LP_00001, Capital Contributions, Capital contributions Capital, 427.7683, 427.7683, 427.7683, 427.7683
-...
+# Value boxes for KPIs
+ui.value_box(
+    title="Net Asset Value",
+    value="$1,234,567.89",
+    showcase="Up 12.5% YTD",
+    theme="primary"
+)
 ```
 
-**Additional CSV Sheets**:
-- Commitment Summary data
-- Performance Metrics data
-- Metadata (generation date, fund, date range)
+### Server-Side Patterns
 
-### Phase 5: Integration Architecture
+#### Reactive Calculations
+```python
+# Reactive calculation for derived financial metrics
+@reactive.calc
+def portfolio_nav():
+    fund = input.fund_selector()
+    date_range = input.date_range()
+    return calculate_nav(fund, date_range[0], date_range[1])
 
-#### 5.1 File Structure
-**New Files**:
-- `main_app/modules/fund_accounting/PCAP/pcap_gl_detailed.py` - Core GL processing
-- `main_app/modules/fund_accounting/PCAP/pcap_ui_detailed.py` - Enhanced UI components
+@reactive.calc
+def filtered_transactions():
+    nav_data = portfolio_nav()
+    return nav_data.filter_transactions()
+```
 
-**Modified Files**:
-- `main_app/modules/fund_accounting/PCAP/__init__.py` - Export new functions
-- `main_app/modules/fund_accounting/PCAP/pcap.py` - Integrate GL detailed functions
-- `main_app/server.py` - Register new PCAP outputs (if needed)
+#### Render Functions
+```python
+# Financial data table
+@render.data_frame
+def financial_data():
+    df = filtered_transactions()
+    return render.DataGrid(
+        df,
+        filters=True,
+        selection_mode="rows",
+        width="100%",
+        height="400px"
+    )
 
-#### 5.2 Function Integration Plan
-**New Functions to Add to `__init__.py`**:
-- `process_gl_for_pcap_detailed`
-- `generate_lp_detailed_breakdown` 
-- `calculate_period_aggregations`
-- `generate_commitment_summary`
-- `calculate_performance_metrics`
+# Charts for financial visualization
+@render.plot
+def performance_chart():
+    data = portfolio_nav()
+    return create_plotly_chart(data)
 
-#### 5.3 Error Handling Strategy
-- **Missing GL Data**: Graceful degradation with clear error messages
-- **Missing COA Mappings**: Default categorization with warnings
-- **Missing Audit Trail**: Show "Net IRR not available" 
-- **Data Inconsistencies**: Validation checks with detailed error reporting
+# Dynamic text outputs
+@render.text
+def current_nav():
+    nav = portfolio_nav()
+    return f"Current NAV: ${nav.total:,.2f}"
+```
 
-### Phase 6: Technical Implementation Details
+#### Event Handling
+```python
+# Button-triggered calculations
+@reactive.event(input.calculate_btn)
+@reactive.calc
+def updated_calculations():
+    # Expensive calculation only runs when button is clicked
+    return perform_nav_calculation()
 
-#### 6.1 Data Processing Optimizations
-- **Efficient GL Filtering**: Pre-filter by date range and fund before processing
-- **Cached COA Lookups**: Build account mapping dictionary once
-- **Vectorized Calculations**: Use pandas groupby operations for aggregations
-- **Memory Management**: Process LPs in batches for large datasets
+# File upload processing
+@reactive.calc
+def uploaded_data():
+    file_info = input.file_upload()
+    if file_info is None:
+        return None
+    return pd.read_csv(file_info[0]["datapath"])
+```
 
-#### 6.2 Decimal Precision Handling
-- **High Precision**: Use Decimal type for all financial calculations
-- **Display Format**: Match exact format from example (16 decimal places)
-- **Rounding Strategy**: No rounding during calculations, format only for display
+### Module Patterns for Financial Applications
 
-#### 6.3 Date Handling Strategy
-- **Timezone Consistency**: All dates normalized to UTC 23:59:59 format
-- **Period Boundaries**: Clear logic for month/quarter/year boundaries
-- **ITD Calculations**: Handle fund inception date properly
+#### Module Structure
+```python
+# module_ui.py
+@module.ui
+def fund_performance_ui():
+    return ui.card(
+        ui.card_header("Fund Performance"),
+        ui.input_select("metric", "Metric", ["NAV", "Returns", "Volatility"]),
+        ui.output_plot("chart"),
+        ui.output_data_frame("data_table")
+    )
 
-### Phase 7: Testing and Validation
+# module_server.py  
+@module.server
+def fund_performance_server(input, output, session, fund_data):
+    @reactive.calc
+    def filtered_data():
+        return fund_data().filter(metric=input.metric())
+    
+    @render.plot
+    def chart():
+        return create_chart(filtered_data())
+        
+    @render.data_frame
+    def data_table():
+        return render.DataGrid(filtered_data())
+```
 
-#### 7.1 Test Data Validation
-- **Balance Verification**: Ensure Beginning + Activity = Ending for each LP
-- **Period Consistency**: Verify ITD >= Current_Year >= Current_Quarter >= Current_Month
-- **Cross-Validation**: Compare totals across different aggregation methods
+#### Module Usage in Main App
+```python
+# In main server function
+def server(input, output, session):
+    # Load shared data
+    fund_data = reactive.calc(lambda: load_fund_data())
+    
+    # Register modules
+    fund_performance_server("module1", fund_data=fund_data)
+    fund_performance_server("module2", fund_data=fund_data)
+```
 
-#### 7.2 Performance Testing
-- **Large Dataset Handling**: Test with multiple years of GL data
-- **Memory Usage**: Monitor RAM usage during processing
-- **Response Time**: Ensure UI remains responsive during calculations
+### Financial Dashboard Best Practices
 
-#### 7.3 User Acceptance Testing
-- **UI Usability**: Ensure table navigation is intuitive
-- **Export Functionality**: Verify PDF and CSV exports work correctly
-- **Error Scenarios**: Test graceful handling of missing/invalid data
+#### Data Loading and Caching
+```python
+# S3 data loading with caching
+@reactive.calc
+def master_trial_balance():
+    fund = input.selected_fund()
+    date = input.as_of_date()
+    return load_cached_s3_data(f"master_tb/{fund}_{date}.csv")
 
-### Implementation Priority Order
+# File reader for real-time updates
+@reactive.file_reader("path/to/live_data.csv")
+def live_market_data():
+    return pd.read_csv("path/to/live_data.csv")
+```
 
-1. **Phase 1**: Core GL processing engine - Foundation for all calculations
-2. **Phase 3**: Commitment and performance calculations - Core business logic
-3. **Phase 2**: UI components - User interface for interaction
-4. **Phase 4**: Export functionality - Output generation
-5. **Phase 5**: Integration - System integration and testing
-6. **Phase 6**: Optimization - Performance and precision improvements
-7. **Phase 7**: Testing - Comprehensive validation
+#### Error Handling
+```python
+from shiny import req
 
-### Success Criteria
+@reactive.calc
+def safe_calculation():
+    data = input.data_source()
+    req(data is not None, "Please upload data file")
+    req(len(data) > 0, "Data file is empty")
+    return perform_calculation(data)
+```
 
-✅ **Functional Requirements**:
-- Exact line item breakdown matching provided example format
-- Accurate period aggregations (Current_Month, Current_Quarter, Current_Year, ITD)
-- Proper SCPC categorization from COA mapping
-- Commitment summary calculations
-- Performance metrics integration
-- Interactive table display with export capabilities
+#### State Management
+```python
+# Reactive values for application state
+selected_fund = reactive.value("default_fund")
+calculation_status = reactive.value("idle")
 
-✅ **Technical Requirements**:
-- High decimal precision (16 decimal places)
-- Efficient processing of large GL datasets
-- Seamless integration with existing S3 data sources
-- Professional PDF and CSV export functionality
-- Robust error handling and user feedback
+# Update state based on user actions
+@reactive.event(input.fund_selector)
+def update_fund():
+    selected_fund.set(input.fund_selector())
+    calculation_status.set("calculating")
+```
 
-✅ **User Experience Requirements**:
-- Intuitive date and LP selection
-- Clear data display with expandable LP sections
-- Fast response times for typical datasets
-- Clear error messages for data issues
-- Consistent styling with existing application
+### Integration with Financial Data Sources
+
+#### Pandas DataFrame Handling
+```python
+@render.data_frame
+def gl_transactions():
+    gl_data = load_GL_file()
+    coa_data = load_COA_file()
+    
+    # Join and process financial data
+    processed = gl_data.merge(coa_data, on="account_number")
+    
+    return render.DataGrid(
+        processed,
+        filters=True,
+        selection_mode="rows"
+    )
+```
+
+#### High-Precision Financial Calculations
+```python
+from decimal import Decimal
+
+@reactive.calc  
+def precise_nav_calculation():
+    # Use Decimal for financial precision
+    transactions = get_transactions()
+    total = Decimal('0.0')
+    for tx in transactions:
+        total += Decimal(str(tx.amount))
+    return float(total)
+```
+
+### Layout Patterns for Financial Apps
+
+#### Sidebar Navigation
+```python
+ui.page_sidebar(
+    ui.sidebar(
+        ui.input_select("fund", "Fund", fund_choices),
+        ui.input_date_range("dates", "Period"),
+        ui.input_action_button("refresh", "Refresh Data")
+    ),
+    # Main content area
+    ui.layout_columns(
+        ui.card("Portfolio Summary", portfolio_summary_ui()),
+        ui.card("Recent Transactions", transactions_ui()),
+        col_widths=[6, 6]
+    )
+)
+```
+
+#### Card-Based Dashboard
+```python
+ui.layout_columns(
+    ui.card(
+        ui.card_header("Fund Performance"),
+        ui.value_box("NAV", nav_value, "Current value"),
+        ui.output_plot("nav_chart")
+    ),
+    ui.card(
+        ui.card_header("Portfolio Allocation"),
+        ui.output_plot("allocation_chart")
+    ),
+    ui.card(
+        ui.card_header("Recent Activity"),
+        ui.output_data_frame("recent_transactions")
+    ),
+    col_widths=[4, 4, 4]
+)
+```
