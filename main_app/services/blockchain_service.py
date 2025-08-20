@@ -36,6 +36,7 @@ from ..s3_utils import load_WALLET_file
 
 # Import token classifier
 from .token_classifier import TokenClassifier
+from .transaction_rules import TransactionRuleEngine
 import requests
 
 
@@ -72,7 +73,11 @@ class BlockchainService:
         # Initialize token classifier for security filtering
         self.token_classifier = TokenClassifier(self.w3)
         
+        # Initialize transaction rule engine
+        self.rule_engine = TransactionRuleEngine(self.wallet_mapping)
+        
         logger.info(f"BlockchainService initialized. Connected to chain ID: {self.w3.eth.chain_id}")
+        logger.info(f"Transaction rule engine initialized with {len(self.wallet_mapping) if self.wallet_mapping is not None else 0} wallet mappings")
     
     def _load_wallet_mapping(self):
         """Load wallet mapping from S3 and organize by fund."""
@@ -235,6 +240,20 @@ class BlockchainService:
             # Remove duplicates based on tx_hash and log_index
             df = df.drop_duplicates(subset=['tx_hash', 'log_index'])
             
+            # Apply transaction processing rules for accurate buy/sell classification
+            logger.info(f"Applying transaction processing rules to {len(df)} transactions")
+            
+            # Debug specific hash before rule processing
+            debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
+            debug_rows = df[df['tx_hash'].str.lower() == debug_hash.lower()]
+            if not debug_rows.empty:
+                logger.info(f"🔍 BLOCKCHAIN SERVICE: Found debug hash before rules")
+                for idx, row in debug_rows.iterrows():
+                    logger.info(f"🔍 BEFORE RULES: side={row.get('side')}, qty={row.get('qty')}, direction={row.get('direction')}, event_type={row.get('event_type')}, from={row.get('from_address')}, to={row.get('to_address')}, token_symbol={row.get('token_symbol')}")
+            
+            processed_transactions = self.rule_engine.apply_fifo_rules(df.to_dict('records'))
+            df = pd.DataFrame(processed_transactions)
+            
             # Apply internal transaction splitting (following master_fifo.py rules)
             df = self._split_internal_transactions(df)
             
@@ -367,6 +386,17 @@ class BlockchainService:
             # Get transaction details
             tx = self.w3.eth.get_transaction(log['transactionHash'])
             
+            # Extract function signature for rule processing
+            function_signature = None
+            if tx.input and tx.input != '0x' and len(tx.input) >= 10:
+                # Extract 4-byte function selector
+                function_selector = tx.input[:10]
+                # Ensure it's a string, not bytes
+                if isinstance(function_selector, bytes):
+                    function_selector = function_selector.hex()
+                # For now, just store the selector; could be enhanced to decode signature
+                function_signature = str(function_selector)
+            
             # Get token symbol and name
             token_symbol = self._get_token_symbol_from_address(token_address)
             token_name = self._get_token_name_from_address(token_address)
@@ -430,19 +460,27 @@ class BlockchainService:
                 logger.warning(f"Error in intercompany detection for tx {log.get('transactionHash', 'unknown')}: {e}")
                 is_internal = False
             
-            # Determine wallet_id and quantity sign for FIFO processing
+            # Determine wallet_id and quantity for raw transaction data
+            # Note: side (buy/sell) will be determined by TransactionRuleEngine
+            wallet_id = wallet_checksum
             if direction == "in":
-                wallet_id = wallet_checksum
                 qty = float(token_amount)  # Positive for incoming
             else:  # direction == "out"
-                wallet_id = wallet_checksum  
                 qty = -float(token_amount)  # Negative for outgoing
             
-            # Determine side (buy/sell) based on quantity sign
+            # Initial side assignment (will be corrected by rule engine)
             side = "buy" if qty > 0 else "sell"
             
             # Format direction for display (keeping for backward compatibility)
             direction_display = "IN" if direction == "in" else "OUT"
+            
+            # Debug specific transaction
+            debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
+            if log['transactionHash'].hex().lower() == debug_hash.lower():
+                logger.info(f"🔍 DECODE_LOG: Processing debug hash {debug_hash}")
+                logger.info(f"🔍 DECODE_LOG: event_type={event_type}, direction={direction}, from_addr={from_addr}, to_addr={to_addr}")
+                logger.info(f"🔍 DECODE_LOG: wallet_checksum={wallet_checksum}, qty={qty}, side={side}")
+                logger.info(f"🔍 DECODE_LOG: token_symbol={token_symbol}, token_address={token_address}")
             
             # New structure with required fields following master_fifo.py format
             return {
@@ -481,7 +519,9 @@ class BlockchainService:
                 'token_status': token_classification['status'],
                 'token_risk_level': token_classification['risk_level'],
                 'token_risk_factors': token_classification['risk_factors'],
-                'requires_approval': token_classification['requires_approval']
+                'requires_approval': token_classification['requires_approval'],
+                # Function signature for rule processing
+                'function_signature': function_signature
             }
             
         except Exception as e:

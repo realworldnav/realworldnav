@@ -356,6 +356,37 @@ def fifo_tracker_content():
             )
         ),
         
+        # Transaction Processing Rules Documentation
+        ui.row(
+            ui.column(
+                12,
+                ui.card(
+                    ui.card_header(
+                        ui.div(
+                            ui.HTML('<i class="bi bi-gear-fill text-info"></i> Transaction Processing Rules'),
+                            ui.HTML('''
+                                <button class="btn btn-sm btn-outline-info float-end" type="button" 
+                                        data-bs-toggle="collapse" data-bs-target="#rules_documentation" 
+                                        aria-expanded="false" aria-controls="rules_documentation">
+                                    <i class="bi bi-info-circle"></i>
+                                </button>
+                            '''),
+                            class_="d-flex justify-content-between align-items-center"
+                        )
+                    ),
+                    ui.card_body(
+                        ui.output_ui("transaction_rules_status"),
+                        ui.div(
+                            ui.output_ui("transaction_rules_documentation"),
+                            id="rules_documentation",
+                            class_="collapse mt-3"
+                        )
+                    )
+                ),
+                class_="mb-3"
+            )
+        ),
+        
         # Main FIFO Ledger with Transaction Details
         ui.row(
             ui.column(
@@ -2452,6 +2483,110 @@ def register_crypto_tracker_outputs(output, input, session):
         except Exception as e:
             logger.error(f"Error displaying ledger status: {e}")
             return ui.div()
+    
+    # Transaction Rules Documentation
+    
+    @output
+    @render.ui
+    def transaction_rules_status():
+        """Display current rule application status"""
+        try:
+            # Check if we have rule stats from the last processing
+            from ...services.blockchain_service import BlockchainService
+            
+            # For now, just show static information since rule stats are per-session
+            return ui.div(
+                ui.div(
+                    ui.HTML('<i class="bi bi-check-circle-fill text-success"></i>'),
+                    ui.strong("Transaction Processing Rules Active", class_="text-success ms-2"),
+                    class_="d-flex align-items-center mb-2"
+                ),
+                ui.p(
+                    "All blockchain transactions are processed through 6 comprehensive rules to ensure accurate buy/sell classification and FIFO compatibility.",
+                    class_="small text-muted mb-0"
+                )
+            )
+        except Exception as e:
+            logger.error(f"Error displaying rules status: {e}")
+            return ui.div(
+                ui.p("Rules status unavailable", class_="text-warning")
+            )
+    
+    @output
+    @render.ui
+    def transaction_rules_documentation():
+        """Display comprehensive rules documentation"""
+        try:
+            return ui.div(
+                ui.HTML('''
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-primary mb-3">📋 Processing Rules</h6>
+                        
+                        <div class="mb-3">
+                            <strong class="text-success">Rule 0: Wallet Filtering</strong>
+                            <p class="small text-muted mb-1">Only process transactions involving known fund wallets</p>
+                            <span class="badge bg-secondary">Foundation</span>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong class="text-info">Rule 1: WETH Wrapping</strong>
+                            <p class="small text-muted mb-1">Split ETH deposits to WETH contract into: ETH sell + WETH buy</p>
+                            <span class="badge bg-info">DeFi</span>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong class="text-info">Rule 2: WETH Unwrapping</strong>
+                            <p class="small text-muted mb-1">Split WETH withdrawals into: WETH sell + ETH buy</p>
+                            <span class="badge bg-info">DeFi</span>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong class="text-warning">Rule 3: Token Normalization</strong>
+                            <p class="small text-muted mb-1">Standardize token symbols (e.g., BLUR → BLUR POOL)</p>
+                            <span class="badge bg-warning">Cleanup</span>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <h6 class="text-primary mb-3">🛡️ Security & Processing</h6>
+                        
+                        <div class="mb-3">
+                            <strong class="text-danger">Rule 4: Phishing Filtering</strong>
+                            <p class="small text-muted mb-1">Remove transactions involving known scam/phishing addresses</p>
+                            <span class="badge bg-danger">Security</span>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong class="text-primary">Rule 5: Token Mints</strong>
+                            <p class="small text-muted mb-1">Add ETH payment transactions for token mints from 0x0</p>
+                            <span class="badge bg-primary">Economics</span>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong class="text-primary">Rule 6: Token Burns</strong>
+                            <p class="small text-muted mb-1">Add ETH receipt transactions for token burns to 0x0</p>
+                            <span class="badge bg-primary">Economics</span>
+                        </div>
+                        
+                        <div class="alert alert-info mt-3">
+                            <h6><i class="bi bi-lightbulb"></i> Why Rules Matter</h6>
+                            <ul class="small mb-0">
+                                <li><strong>Accurate FIFO:</strong> Correct buy/sell classification prevents inventory errors</li>
+                                <li><strong>Economic Substance:</strong> Rules capture true economic transactions, not just blockchain direction</li>
+                                <li><strong>DeFi Compatibility:</strong> Handles complex patterns like wrapping, minting, burning</li>
+                                <li><strong>Security:</strong> Filters out phishing and scam transactions automatically</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                ''')
+            )
+        except Exception as e:
+            logger.error(f"Error displaying rules documentation: {e}")
+            return ui.div(
+                ui.p("Documentation unavailable", class_="text-warning")
+            )
     
     # Reactive Filters for FIFO Ledger
     

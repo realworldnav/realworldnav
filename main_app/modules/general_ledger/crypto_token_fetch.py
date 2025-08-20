@@ -36,11 +36,16 @@ def sanitize_address_for_id(address: str) -> str:
     Sanitize token address for use as HTML ID.
     Replaces problematic characters with safe alternatives.
     """
+    # Handle None or empty address
+    if not address or address is None:
+        return "addr_none"
+    
     if address in _address_to_sanitized_id:
         return _address_to_sanitized_id[address]
     
-    # Remove 0x prefix and replace with 'addr_'
-    sanitized = address.replace('0x', 'addr_').replace('-', '_').replace('.', '_')
+    # Convert to string and remove 0x prefix and replace with 'addr_'
+    address_str = str(address)
+    sanitized = address_str.replace('0x', 'addr_').replace('-', '_').replace('.', '_')
     
     # Store bidirectional mapping
     _address_to_sanitized_id[address] = sanitized
@@ -1384,6 +1389,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         if not unverified_df.empty:
             unique_tokens = unverified_df['token_address'].unique()
+            # Filter out None values and empty strings
+            unique_tokens = [addr for addr in unique_tokens if addr is not None and addr != '' and str(addr).lower() != 'none']
             current_registered = registered_token_handlers.get()
             
             for token_addr in unique_tokens:
@@ -1397,6 +1404,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
     
     def create_token_button_handlers(token_address):
         """Create individual button handlers for a specific token"""
+        # Skip None or empty addresses
+        if not token_address or token_address is None:
+            logger.warning("Skipping button handler creation for None token address")
+            return
+            
         sanitized_id = sanitize_address_for_id(token_address)
         
         # Create approve button handler
