@@ -1490,6 +1490,96 @@ def register_crypto_token_tracker_outputs(output, input, session):
         except Exception as e:
             logger.error(f"Error exporting token list: {e}")
     
+    # Handle view all approved tokens
+    @reactive.effect
+    @reactive.event(input.view_approved_tokens)
+    def view_approved_tokens():
+        try:
+            # Load approved tokens
+            approved_tokens = load_approved_tokens_file()
+            
+            if not approved_tokens:
+                # Show modal with no tokens message
+                m = ui.modal(
+                    ui.div(
+                        ui.p("No approved tokens found.", class_="text-muted"),
+                        ui.p("Add tokens using the 'Add' button in the Token Management section.", class_="small")
+                    ),
+                    title="Approved Tokens",
+                    size="lg",
+                    easy_close=True,
+                    footer=ui.modal_button("Close")
+                )
+                ui.modal_show(m)
+                return
+            
+            # Create table data for approved tokens
+            table_rows = []
+            for i, token_addr in enumerate(sorted(approved_tokens), 1):
+                token_info = get_token_info_from_address(token_addr)
+                table_rows.append(
+                    ui.tags.tr(
+                        ui.tags.td(str(i), style="width: 50px;"),
+                        ui.tags.td(
+                            ui.div(
+                                ui.strong(token_info['name']),
+                                ui.br(),
+                                ui.span(token_info['symbol'], class_="text-muted small")
+                            )
+                        ),
+                        ui.tags.td(
+                            ui.div(
+                                ui.code(token_addr, class_="small"),
+                                ui.br(),
+                                ui.span(f"Source: {token_info['source']}", class_="text-muted small")
+                            )
+                        ),
+                        ui.tags.td(
+                            ui.div(
+                                ui.tags.a(
+                                    ui.HTML('<i class="bi bi-box-arrow-up-right"></i> Etherscan'),
+                                    href=f"https://etherscan.io/token/{token_addr}",
+                                    target="_blank",
+                                    class_="btn btn-sm btn-outline-primary"
+                                ),
+                                style="text-align: right;"
+                            )
+                        )
+                    )
+                )
+            
+            # Create modal with approved tokens table
+            m = ui.modal(
+                ui.div(
+                    ui.p(f"Total approved tokens: {len(approved_tokens)}", class_="mb-3"),
+                    ui.div(
+                        ui.tags.table(
+                            ui.tags.thead(
+                                ui.tags.tr(
+                                    ui.tags.th("#", style="width: 50px;"),
+                                    ui.tags.th("Token"),
+                                    ui.tags.th("Address"),
+                                    ui.tags.th("Actions", style="text-align: right;")
+                                )
+                            ),
+                            ui.tags.tbody(*table_rows),
+                            class_="table table-hover table-sm"
+                        ),
+                        style="max-height: 500px; overflow-y: auto;"
+                    )
+                ),
+                title="All Approved Tokens",
+                size="xl",
+                easy_close=True,
+                footer=ui.modal_button("Close")
+            )
+            ui.modal_show(m)
+            
+            logger.info(f"Displaying {len(approved_tokens)} approved tokens in modal")
+            
+        except Exception as e:
+            logger.error(f"Error viewing approved tokens: {e}")
+    
     # Handle legacy token approval (removed - no longer needed with new UI)
     # The approve_selected_token button no longer exists in the new 2-tab UI
     # All token approval is now handled by the dynamic button handler system
@@ -1832,7 +1922,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             )
         
         # Get selected rows from the data grid
-        selected_rows = input.all_transactions_table_selected_rows()
+        selected_rows = input.review_transactions_table_selected_rows()
         
         if not selected_rows or len(selected_rows) == 0:
             return ui.div(
@@ -1847,9 +1937,57 @@ def register_crypto_token_tracker_outputs(output, input, session):
         # Get the first selected row index
         selected_idx = selected_rows[0]
         
-        # Get transaction details from the original dataframe
-        if selected_idx < len(df) and 'tx_hash' in df.columns:
-            tx_row = df.iloc[selected_idx]
+        # We need to reconstruct the formatted data to match what's displayed in review_transactions_table
+        # since the table is sorted and the row indices don't match the original dataframe
+        
+        # Get verified and approved addresses
+        verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
+        try:
+            approved_tokens = load_approved_tokens_file()
+            approved_addresses = {addr.lower() for addr in approved_tokens}
+        except:
+            approved_addresses = set()
+        
+        # Recreate the formatted data (same logic as review_transactions_table)
+        formatted_data = []
+        for _, row in df.iterrows():
+            token_addr = str(row.get('token_address', ''))
+            
+            # Determine status
+            if token_addr.lower() in verified_addresses:
+                status = "✅ Verified"
+                status_class = "text-success"
+            elif token_addr.lower() in approved_addresses:
+                status = "☑️ Approved" 
+                status_class = "text-info"
+            else:
+                status = "⚠️ Needs Review"
+                status_class = "text-warning"
+            
+            formatted_row = {
+                'tx_hash': row.get('tx_hash', ''),
+                'date': row.get('date', ''),
+                'token_name': row.get('token_name', row.get('token_symbol', 'Unknown')),
+                'token_amount': row.get('token_amount', 0),
+                'token_value_usd': row.get('token_value_usd', 0),
+                'token_value_eth': row.get('token_value_eth', 0),
+                'direction': row.get('direction', 'Unknown'),
+                'from_address': row.get('from_address', ''),
+                'to_address': row.get('to_address', ''),
+                'status': status,
+                '_sort_priority': 0 if status == "⚠️ Needs Review" else (1 if status == "☑️ Approved" else 2)
+            }
+            formatted_data.append(formatted_row)
+        
+        # Sort the same way as review_transactions_table
+        formatted_df = pd.DataFrame(formatted_data)
+        if not formatted_df.empty:
+            formatted_df = formatted_df.sort_values(['_sort_priority', 'date'], ascending=[True, False])
+            formatted_df = formatted_df.head(100)  # Same limit as table
+        
+        # Now get the correct row
+        if selected_idx < len(formatted_df):
+            tx_row = formatted_df.iloc[selected_idx]
             tx_hash = tx_row['tx_hash']
             etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
             
@@ -1863,7 +2001,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 except:
                     pass
             
-            token_name = tx_row.get('token_name', tx_row.get('token_symbol', 'Unknown'))
+            token_name = tx_row.get('token_name', 'Unknown')
             direction = tx_row.get('direction', 'Unknown')
             amount = tx_row.get('token_amount', 0)
             value_usd = tx_row.get('token_value_usd', 0)
