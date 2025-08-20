@@ -70,7 +70,7 @@ class FIFOTracker:
         dq = self.lots.setdefault(key, deque())
         
         # Calculate total ETH value for this transaction
-        total_eth = abs(qty) * unit_price_eth
+        amount_eth = abs(qty) * unit_price_eth
         
         # Initialize tracking variables
         proceeds_eth = Decimal("0")
@@ -146,7 +146,7 @@ class FIFOTracker:
                 "hash": tx_hash,
                 "side": side.lower(),
                 "qty": float(qty),
-                "total_eth": float(total_eth),
+                "amount (eth)": float(amount_eth),
                 "price_eth": float(price_eth),  # ETH/USD price
                 "unit_price_eth": float(unit_price_eth),  # ETH per token
                 "proceeds_eth": float(proceeds_eth),
@@ -158,27 +158,41 @@ class FIFOTracker:
     
     def to_dataframe(self) -> pd.DataFrame:
         """
-        Convert logged transactions to DataFrame.
+        Convert logged transactions to DataFrame with exact required column structure.
         
         Returns:
             DataFrame containing all processed transactions with FIFO calculations
+            Columns: fund_id, wallet_address, asset, date, hash, side, qty, 
+                    amount (eth), price_eth, unit_price_eth, proceeds_eth, 
+                    cost_basis_sold_eth, realized_gain_eth, remaining_qty, 
+                    remaining_cost_basis_eth
         """
         if not self.logs:
             return pd.DataFrame()
         
         df = pd.DataFrame(self.logs)
         
-        # Ensure proper column order
-        column_order = [
+        # Ensure proper column order (exact specification from user)
+        required_columns = [
             'fund_id', 'wallet_address', 'asset', 'date', 'hash', 'side', 
-            'qty', 'total_eth', 'price_eth', 'unit_price_eth', 
+            'qty', 'amount (eth)', 'price_eth', 'unit_price_eth', 
             'proceeds_eth', 'cost_basis_sold_eth', 'realized_gain_eth', 
             'remaining_qty', 'remaining_cost_basis_eth'
         ]
         
-        # Reorder columns, keeping any extras at the end
-        existing_cols = [col for col in column_order if col in df.columns]
-        extra_cols = [col for col in df.columns if col not in column_order]
+        # Add missing columns with default values
+        for col in required_columns:
+            if col not in df.columns:
+                if col in ['qty', 'amount (eth)', 'price_eth', 'unit_price_eth', 
+                          'proceeds_eth', 'cost_basis_sold_eth', 'realized_gain_eth', 
+                          'remaining_qty', 'remaining_cost_basis_eth']:
+                    df[col] = 0.0
+                else:
+                    df[col] = ''
+        
+        # Reorder columns to match exact specification
+        existing_cols = [col for col in required_columns if col in df.columns]
+        extra_cols = [col for col in df.columns if col not in required_columns]
         df = df[existing_cols + extra_cols]
         
         return df
@@ -396,9 +410,20 @@ def convert_crypto_fetch_to_fifo_format(df_transactions: pd.DataFrame) -> pd.Dat
     else:
         fifo_df['price_eth'] = 0.0  # Will need to fetch later
     
-    # Clean up infinities and NaNs
+    # Clean up infinities and NaNs - preserve string columns
     fifo_df = fifo_df.replace([float('inf'), float('-inf')], 0)
-    fifo_df = fifo_df.fillna(0)
+    
+    # Fill numeric columns with 0, string columns with appropriate defaults
+    numeric_columns = ['token_amount', 'token_value_eth', 'unit_price_eth', 'qty', 'price_eth']
+    for col in numeric_columns:
+        if col in fifo_df.columns:
+            fifo_df[col] = fifo_df[col].fillna(0)
+    
+    # Ensure string columns remain strings
+    string_columns = ['fund_id', 'wallet_address', 'asset', 'hash', 'side']
+    for col in string_columns:
+        if col in fifo_df.columns:
+            fifo_df[col] = fifo_df[col].fillna('').astype(str)
     
     logger.info(f"Conversion complete: {len(fifo_df)} transactions ready for FIFO")
     
