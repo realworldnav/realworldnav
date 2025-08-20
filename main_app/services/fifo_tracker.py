@@ -364,7 +364,13 @@ def convert_crypto_fetch_to_fifo_format(df_transactions: pd.DataFrame) -> pd.Dat
     fifo_df = pd.DataFrame()
     
     # Map basic fields
-    fifo_df['fund_id'] = 'fund_i_class_B_ETH'  # Default fund
+    # Use fund_id from source data if available, otherwise default
+    if 'Fund' in df_transactions.columns:
+        fifo_df['fund_id'] = df_transactions['Fund']
+    elif 'fund_id' in df_transactions.columns:
+        fifo_df['fund_id'] = df_transactions['fund_id']
+    else:
+        fifo_df['fund_id'] = 'fund_i_class_B_ETH'  # Fallback default
     fifo_df['wallet_address'] = df_transactions.get('wallet_id', df_transactions.get('from_address', ''))
     fifo_df['asset'] = df_transactions['token_name'].astype(str).str.upper()
     fifo_df['hash'] = df_transactions['tx_hash']

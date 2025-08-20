@@ -272,6 +272,27 @@ def crypto_token_tracker_ui():
 def register_crypto_token_tracker_outputs(output, input, session):
     """Register all crypto token tracker outputs with blockchain integration"""
     
+    # Helper function for wallet-to-fund mapping
+    @reactive.calc
+    def get_wallet_to_fund_mapping():
+        """Create mapping dictionary from wallet_address to fund_id"""
+        try:
+            wallet_df = load_WALLET_file()
+            if not wallet_df.empty and 'wallet_address' in wallet_df.columns and 'fund_id' in wallet_df.columns:
+                # Create mapping dictionary, handling case variations
+                mapping = {}
+                for _, row in wallet_df.iterrows():
+                    wallet_addr = str(row['wallet_address']).strip()
+                    fund_id = str(row['fund_id']).strip()
+                    if wallet_addr and fund_id:
+                        # Store both original and lowercase versions for flexible matching
+                        mapping[wallet_addr] = fund_id
+                        mapping[wallet_addr.lower()] = fund_id
+                return mapping
+        except Exception as e:
+            logger.warning(f"Could not load wallet mapping: {e}")
+        return {}
+    
     # Initialize blockchain service
     blockchain_service = reactive.value(None)
     
@@ -694,7 +715,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
     def review_transactions_table():
         df = fetched_transactions.get()
         if df.empty:
-            return pd.DataFrame(columns=['Date', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
+            return pd.DataFrame(columns=['Date', 'Fund', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
+        
+        # Get wallet-to-fund mapping
+        wallet_to_fund = get_wallet_to_fund_mapping()
         
         # Get verified and approved addresses
         verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
@@ -744,6 +768,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
             else:
                 wallet_id_display = wallet_id
             
+            # Get fund ID from wallet mapping
+            fund_id = wallet_to_fund.get(wallet_id, wallet_to_fund.get(wallet_id.lower(), 'Unknown Fund'))
+            
             # Format hash (shortened)
             tx_hash = str(row.get('tx_hash', ''))
             if len(tx_hash) > 10:
@@ -753,6 +780,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             formatted_row = {
                 'Date': pd.to_datetime(row.get('date', '')).strftime('%Y-%m-%d %H:%M') if row.get('date') else '',
+                'Fund': fund_id,
                 'Wallet ID': wallet_id_display,
                 'Token': row.get('token_symbol', 'Unknown'),
                 'IN/OUT': in_out,
@@ -780,7 +808,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         from shiny import render
         return render.DataGrid(
-            final_df[['Date', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash']].head(100),
+            final_df[['Date', 'Fund', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash']].head(100),
             selection_mode="row",
             height="500px",
             filters=True
@@ -1068,7 +1096,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
     def ready_transactions_table():
         df = fetched_transactions.get()
         if df.empty:
-            return pd.DataFrame(columns=['Date', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
+            return pd.DataFrame(columns=['Date', 'Fund', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
+        
+        # Get wallet-to-fund mapping
+        wallet_to_fund = get_wallet_to_fund_mapping()
         
         # Get verified and approved addresses
         verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
@@ -1085,7 +1116,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         ].copy()
         
         if ready_df.empty:
-            return pd.DataFrame(columns=['Date', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
+            return pd.DataFrame(columns=['Date', 'Fund', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
         
         # Prepare display dataframe with enhanced columns
         formatted_data = []
@@ -1124,6 +1155,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
             else:
                 wallet_id_display = wallet_id
             
+            # Get fund ID from wallet mapping
+            fund_id = wallet_to_fund.get(wallet_id, wallet_to_fund.get(wallet_id.lower(), 'Unknown Fund'))
+            
             # Format hash (shortened)
             tx_hash = str(row.get('tx_hash', ''))
             if len(tx_hash) > 10:
@@ -1133,6 +1167,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             formatted_row = {
                 'Date': pd.to_datetime(row.get('date', '')).strftime('%Y-%m-%d %H:%M') if row.get('date') else '',
+                'Fund': fund_id,
                 'Wallet ID': wallet_id_display,
                 'Token': row.get('token_symbol', 'Unknown'),
                 'IN/OUT': in_out,
@@ -1156,7 +1191,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         from shiny import render
         return render.DataGrid(
-            final_df[['Date', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash']].head(100),
+            final_df[['Date', 'Fund', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash']].head(100),
             selection_mode="row",
             height="400px",
             filters=True
@@ -1198,7 +1233,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
     def all_transactions_table():
         df = fetched_transactions.get()
         if df.empty:
-            return pd.DataFrame(columns=['Date', 'Hash', 'Wallet ID', 'Side', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'Intercompany', 'From', 'To'])
+            return pd.DataFrame(columns=['Date', 'Fund', 'Hash', 'Wallet ID', 'Side', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'Intercompany', 'From', 'To'])
+        
+        # Get wallet-to-fund mapping
+        wallet_to_fund = get_wallet_to_fund_mapping()
         
         # Prepare display dataframe - NEW STRUCTURE
         formatted_data = []
@@ -1211,6 +1249,14 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 formatted_row['Date'] = pd.to_datetime(row['date']).strftime('%Y-%m-%d %H:%M:%S')
             else:
                 formatted_row['Date'] = ""
+            
+            # Fund - get from wallet mapping
+            if 'wallet_id' in row and row['wallet_id']:
+                wallet_id = str(row['wallet_id'])
+                fund_id = wallet_to_fund.get(wallet_id, wallet_to_fund.get(wallet_id.lower(), 'Unknown Fund'))
+                formatted_row['Fund'] = fund_id
+            else:
+                formatted_row['Fund'] = "Unknown Fund"
             
             # Hash (shortened)
             if 'tx_hash' in row:
@@ -1275,7 +1321,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         
         # Create final dataframe with exact column order
         final_df = pd.DataFrame(formatted_data)
-        column_order = ['Date', 'Hash', 'Wallet ID', 'Side', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'Intercompany', 'From', 'To']
+        column_order = ['Date', 'Fund', 'Hash', 'Wallet ID', 'Side', 'Token Name', 'Amount (of token)', 'Value (ETH)', 'Value (USD)', 'Intercompany', 'From', 'To']
         
         # Ensure all columns exist
         for col in column_order:
@@ -2273,6 +2319,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 # Step 3: Map essential fields
                 progress.set(40, message="Mapping essential fields...", detail="Converting blockchain data to FIFO format")
                 
+                # Preserve Fund column as fund_id for FIFO processing
+                if 'Fund' in fifo_df.columns:
+                    fifo_df['fund_id'] = fifo_df['Fund']
+                    print(f"   🔄 Preserved 'Fund' → 'fund_id' for FIFO processing")
+                
                 # Map asset → token_name if token_name is missing
                 if 'asset' in fifo_df.columns and 'token_name' not in fifo_df.columns:
                     fifo_df['token_name'] = fifo_df['asset']
@@ -2316,10 +2367,23 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 set_staged_transactions_global(fifo_df)
                 print(f"🌐 Staged transactions globally: {len(fifo_df)} rows")
                 
-                # Trigger reactive update for cross-module access
+                # Force multiple reactive updates to ensure all components see the changes
                 current_trigger = staged_transactions_trigger.get()
                 staged_transactions_trigger.set(current_trigger + 1)
                 print(f"🔄 Triggered reactive update for staged transactions (trigger: {current_trigger + 1})")
+                
+                # Additional reactive invalidation to force UI updates
+                import asyncio
+                await asyncio.sleep(0.1)  # Small delay to ensure state propagation
+                
+                # Trigger additional update to ensure all reactive components are notified
+                staged_transactions_trigger.set(current_trigger + 2)
+                print(f"🔄 Additional reactive trigger sent (trigger: {current_trigger + 2})")
+                
+                # Log final global state for debugging
+                final_check = get_staged_transactions_global()
+                print(f"🔍 Final global state check: {len(final_check)} rows")
+                print(f"🔍 Final global state columns: {list(final_check.columns) if not final_check.empty else 'Empty'}")
                 
                 # Complete progress
                 progress.set(100, message="Push to FIFO completed!", 

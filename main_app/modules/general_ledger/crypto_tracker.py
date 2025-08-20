@@ -304,6 +304,16 @@ def fifo_tracker_content():
                                 class_="btn-primary me-2"
                             ),
                             ui.input_action_button(
+                                "save_fifo_ledger",
+                                ui.HTML('<i class="bi bi-save"></i> Save Ledger'),
+                                class_="btn-success me-2"
+                            ),
+                            ui.input_action_button(
+                                "clear_saved_ledger",
+                                ui.HTML('<i class="bi bi-trash"></i> Clear Saved'),
+                                class_="btn-outline-danger me-2"
+                            ),
+                            ui.input_action_button(
                                 "export_fifo_csv",
                                 ui.HTML('<i class="bi bi-download"></i> Export CSV'),
                                 class_="btn-secondary me-2"
@@ -311,7 +321,12 @@ def fifo_tracker_content():
                             ui.input_action_button(
                                 "refresh_ledger",
                                 ui.HTML('<i class="bi bi-arrow-clockwise"></i> Refresh'),
-                                class_="btn-outline-primary"
+                                class_="btn-outline-primary me-2"
+                            ),
+                            ui.input_action_button(
+                                "clear_staged_transactions",
+                                ui.HTML('<i class="bi bi-x-circle"></i> Clear Staged'),
+                                class_="btn-outline-warning"
                             ),
                             class_="d-flex justify-content-center"
                         )
@@ -332,14 +347,34 @@ def fifo_tracker_content():
             )
         ),
         
-        # Main FIFO Ledger - Full Width
+        # Ledger Status Display
         ui.row(
             ui.column(
                 12,
+                ui.output_ui("fifo_ledger_status_display"),
+                class_="mb-3"
+            )
+        ),
+        
+        # Main FIFO Ledger with Transaction Details
+        ui.row(
+            ui.column(
+                8,
                 ui.card(
                     ui.card_header(ui.HTML('<i class="bi bi-journal-bookmark"></i> FIFO Ledger')),
                     ui.card_body(
                         ui.output_data_frame("fifo_ledger_table"),
+                        style="min-height: 500px;"
+                    )
+                ),
+                class_="mt-3"
+            ),
+            ui.column(
+                4,
+                ui.card(
+                    ui.card_header(ui.HTML('<i class="bi bi-info-circle"></i> Transaction Details')),
+                    ui.card_body(
+                        ui.output_ui("fifo_transaction_details_card"),
                         style="min-height: 500px;"
                     )
                 ),
@@ -953,6 +988,99 @@ def register_crypto_tracker_outputs(output, input, session):
     journal_entries = reactive.Value(pd.DataFrame())
     validation_report = reactive.Value({})
     
+    # Reactive values for month-end balances table
+    month_end_table_data = reactive.Value(pd.DataFrame())
+    month_end_header_date = reactive.Value("")
+    
+    # Reactive value for FIFO ledger row selection
+    fifo_selection = reactive.Value({"rows": []})
+    
+    # Track whether FIFO data was auto-loaded or freshly calculated
+    fifo_data_source = reactive.Value("none")  # "none", "auto-loaded", "calculated"
+    
+    # Auto-load saved FIFO ledger on startup (if no staged transactions)
+    def auto_load_saved_ledger():
+        """Automatically load saved FIFO ledger on app startup"""
+        try:
+            from ...s3_utils import check_fifo_ledger_exists, load_fifo_ledger_file
+            
+            # Always check for staged transactions first
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                if not staged_df.empty:
+                    logger.info(f"Found {len(staged_df)} staged transactions - auto-load will not replace them")
+                    # Don't auto-load if we have staged transactions, but still check for saved ledger
+                    if check_fifo_ledger_exists():
+                        fifo_data_source.set("saved-available")
+                    return False
+            except Exception as check_e:
+                logger.debug(f"Could not check staged transactions: {check_e}")
+            
+            # Check if there's a saved ledger
+            if not check_fifo_ledger_exists():
+                logger.info("No saved FIFO ledger found in S3")
+                fifo_data_source.set("none")
+                return False
+            
+            # Load the saved data only if no staged transactions
+            logger.info("Loading saved FIFO ledger from S3...")
+            saved_data = load_fifo_ledger_file()
+            
+            # Extract the DataFrames
+            saved_fifo_df = saved_data.get('fifo_transactions', pd.DataFrame())
+            saved_positions_df = saved_data.get('fifo_positions', pd.DataFrame())
+            saved_journal_df = saved_data.get('journal_entries', pd.DataFrame())
+            metadata = saved_data.get('metadata', {})
+            
+            # Only load if we have valid data
+            if not saved_fifo_df.empty:
+                # Set the reactive values
+                fifo_results.set(saved_fifo_df)
+                fifo_positions.set(saved_positions_df)
+                journal_entries.set(saved_journal_df)
+                fifo_data_source.set("auto-loaded")  # Track that data was auto-loaded
+                
+                logger.info(f"Successfully loaded saved FIFO ledger: {len(saved_fifo_df)} transactions, {len(saved_positions_df)} positions")
+                
+                # Show notification to user
+                transaction_count = len(saved_fifo_df)
+                save_timestamp = metadata.get('save_timestamp', 'Unknown')
+                
+                # Format timestamp for display
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(save_timestamp.replace('Z', '+00:00'))
+                    formatted_time = dt.strftime('%Y-%m-%d %H:%M')
+                except:
+                    formatted_time = save_timestamp[:10] if save_timestamp else 'Unknown'
+                
+                ui.notification_show(
+                    f"Loaded saved FIFO ledger from {formatted_time} ({transaction_count} transactions)",
+                    type="info",
+                    duration=5
+                )
+                
+                return True
+            else:
+                logger.warning("Saved FIFO ledger exists but contains no transaction data")
+                fifo_data_source.set("saved-empty")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error auto-loading saved FIFO ledger: {e}")
+            import traceback
+            traceback.print_exc()
+            fifo_data_source.set("error")
+            return False
+    
+    # Trigger auto-load on startup - run as regular function
+    try:
+        auto_load_saved_ledger()
+    except Exception as e:
+        logger.warning(f"Could not auto-load FIFO ledger on startup: {e}")
+        fifo_data_source.set("error")
+    
     @output
     @render.ui
     def fifo_token_selector():
@@ -1054,25 +1182,76 @@ def register_crypto_tracker_outputs(output, input, session):
             # Create reactive dependency on the trigger to ensure updates
             trigger_value = get_staged_transactions_trigger_global()
             print(f"🔄 Transactions ready table triggered with value: {trigger_value}")
+            print(f"🔍 DEBUG: Attempting to retrieve staged transactions...")
             
-            staged_df = get_staged_transactions_global()
-            print(f"📊 Retrieved staged transactions: {len(staged_df)} rows")
+            # Add more detailed debugging
+            try:
+                staged_df = get_staged_transactions_global()
+                print(f"📊 Retrieved staged transactions: {len(staged_df)} rows")
+                print(f"🔍 DEBUG: Staged DataFrame shape: {staged_df.shape}")
+                print(f"🔍 DEBUG: Staged DataFrame empty check: {staged_df.empty}")
+                print(f"🔍 DEBUG: Staged DataFrame type: {type(staged_df)}")
+                
+                # Deep debugging of the DataFrame
+                if hasattr(staged_df, 'index'):
+                    print(f"🔍 DEBUG: DataFrame index: {staged_df.index}")
+                if hasattr(staged_df, 'columns'):
+                    print(f"🔍 DEBUG: DataFrame columns: {list(staged_df.columns)}")
+                
+            except Exception as get_error:
+                print(f"❌ ERROR getting staged transactions: {get_error}")
+                import traceback
+                traceback.print_exc()
+                staged_df = pd.DataFrame()  # Fallback to empty
             
             if not staged_df.empty:
                 print(f"📋 Staged transaction columns: {list(staged_df.columns)}")
+                print(f"📋 Column data types: {staged_df.dtypes.to_dict()}")
                 print(f"📋 Sample staged transaction: {staged_df.iloc[0].to_dict() if len(staged_df) > 0 else 'None'}")
+                
+                # Check for Fund/fund_id column specifically
+                fund_columns = [col for col in staged_df.columns if 'fund' in col.lower()]
+                print(f"📋 Fund-related columns found: {fund_columns}")
+                
+                # Check data quality
+                null_counts = staged_df.isnull().sum()
+                print(f"📋 Null value counts: {null_counts[null_counts > 0].to_dict()}")
+            else:
+                print(f"🔍 DEBUG: No staged transactions found - investigating...")
+                # Try to get some debug info about the global state
+                try:
+                    from .crypto_token_fetch import _global_staged_transactions
+                    print(f"🔍 DEBUG: Direct global access - shape: {_global_staged_transactions.shape}")
+                    print(f"🔍 DEBUG: Direct global access - empty: {_global_staged_transactions.empty}")
+                    print(f"🔍 DEBUG: Direct global access - type: {type(_global_staged_transactions)}")
+                    print(f"🔍 DEBUG: Direct global access - memory id: {id(_global_staged_transactions)}")
+                except Exception as debug_e:
+                    print(f"🔍 DEBUG: Could not access global state directly: {debug_e}")
+                    
+                # Check if the function calls are working
+                try:
+                    print(f"🔍 DEBUG: Testing function import...")
+                    from .crypto_token_fetch import get_staged_transactions_global as test_func
+                    print(f"🔍 DEBUG: Function imported successfully: {test_func}")
+                    test_result = test_func()
+                    print(f"🔍 DEBUG: Test function call result shape: {test_result.shape}")
+                except Exception as func_error:
+                    print(f"❌ ERROR testing function: {func_error}")
+                    import traceback
+                    traceback.print_exc()
             
             if staged_df.empty:
-                # Placeholder data
+                # Placeholder data - use consistent string types for display
                 placeholder_df = pd.DataFrame({
                     'Status': ['No transactions staged for FIFO processing'],
                     'Date': ['-'],
+                    'Fund': ['-'],
                     'Wallet ID': ['-'],
                     'Token': ['-'],
                     'Side': ['-'],
-                    'Amount': [0.0],
-                    'ETH Value': [0.0],
-                    'USD Value': [0.0],
+                    'Amount': ['0.000000'],
+                    'ETH Value': ['0.000000'],
+                    'USD Value': ['$0.00'],
                     'Hash': ['-']
                 })
                 print("📋 Displaying empty state for transactions ready table")
@@ -1080,69 +1259,114 @@ def register_crypto_tracker_outputs(output, input, session):
             
             # Format staged transactions for display
             display_data = []
+            print(f"🔧 Processing {len(staged_df)} staged transactions for display...")
             
-            for _, row in staged_df.iterrows():
-                # Handle different possible column names from crypto_token_fetch
-                date_value = row.get('date', row.get('timestamp', ''))
-                if pd.notna(date_value):
+            for idx, row in staged_df.iterrows():
+                try:
+                    print(f"🔧 Processing transaction {idx}: {row.to_dict()}")
+                    
+                    # Handle different possible column names from crypto_token_fetch
+                    date_value = row.get('date', row.get('timestamp', ''))
+                    if pd.notna(date_value):
+                        try:
+                            date_formatted = pd.to_datetime(date_value).strftime('%Y-%m-%d %H:%M:%S')
+                        except:
+                            date_formatted = str(date_value)
+                    else:
+                        date_formatted = '-'
+                    
+                    # Handle Fund/fund_id column specifically
+                    fund_value = row.get('Fund', row.get('fund_id', row.get('fund', 'Unknown Fund')))
+                    fund_display = str(fund_value) if pd.notna(fund_value) else 'Unknown Fund'
+                    
+                    # Handle wallet address - could be wallet_id, wallet_address, from_address, to_address
+                    wallet = row.get('wallet_id', row.get('wallet_address', row.get('from_address', row.get('to_address', ''))))
+                    if pd.notna(wallet) and len(str(wallet)) > 10:
+                        wallet_display = f"{str(wallet)[:6]}...{str(wallet)[-4:]}"
+                    else:
+                        wallet_display = str(wallet) if pd.notna(wallet) else '-'
+                    
+                    # Handle token name
+                    token = row.get('token_name', row.get('asset', row.get('token_symbol', '-')))
+                    
+                    # Handle side/direction
+                    side = row.get('side', row.get('direction', '-'))
+                    
+                    # Handle amounts - ensure numeric values
                     try:
-                        date_formatted = pd.to_datetime(date_value).strftime('%Y-%m-%d %H:%M:%S')
-                    except:
-                        date_formatted = str(date_value)
-                else:
-                    date_formatted = '-'
-                
-                # Handle wallet address - could be wallet_id, wallet_address, from_address, to_address
-                wallet = row.get('wallet_id', row.get('wallet_address', row.get('from_address', row.get('to_address', ''))))
-                if pd.notna(wallet) and len(str(wallet)) > 10:
-                    wallet_display = f"{str(wallet)[:6]}...{str(wallet)[-4:]}"
-                else:
-                    wallet_display = str(wallet) if pd.notna(wallet) else '-'
-                
-                # Handle token name
-                token = row.get('token_name', row.get('asset', row.get('token_symbol', '-')))
-                
-                # Handle side/direction
-                side = row.get('side', row.get('direction', '-'))
-                
-                # Handle amounts - ensure numeric values
-                try:
-                    amount = float(row.get('token_amount', row.get('qty', 0)))
-                except (ValueError, TypeError):
-                    amount = 0.0
-                
-                try:
-                    eth_value = float(row.get('token_value_eth', row.get('amount_eth', 0)))
-                except (ValueError, TypeError):
-                    eth_value = 0.0
-                
-                try:
-                    usd_value = float(row.get('token_value_usd', row.get('amount_usd', 0)))
-                except (ValueError, TypeError):
-                    usd_value = 0.0
-                
-                # Handle transaction hash
-                tx_hash = row.get('tx_hash', row.get('hash', '-'))
-                if pd.notna(tx_hash) and len(str(tx_hash)) > 10:
-                    hash_display = f"{str(tx_hash)[:8]}...{str(tx_hash)[-6:]}"
-                else:
-                    hash_display = str(tx_hash) if pd.notna(tx_hash) else '-'
-                
-                display_row = {
-                    'Status': 'Ready for FIFO',
-                    'Date': date_formatted,
-                    'Wallet ID': wallet_display,
-                    'Token': str(token),
-                    'Side': str(side).upper() if pd.notna(side) else '-',
-                    'Amount': f"{amount:.6f}",
-                    'ETH Value': f"{eth_value:.6f}",
-                    'USD Value': f"${usd_value:,.2f}",
-                    'Hash': hash_display
-                }
-                display_data.append(display_row)
+                        amount = float(row.get('token_amount', row.get('qty', 0)))
+                    except (ValueError, TypeError):
+                        amount = 0.0
+                    
+                    try:
+                        eth_value = float(row.get('token_value_eth', row.get('amount_eth', 0)))
+                    except (ValueError, TypeError):
+                        eth_value = 0.0
+                    
+                    try:
+                        usd_value = float(row.get('token_value_usd', row.get('amount_usd', 0)))
+                    except (ValueError, TypeError):
+                        usd_value = 0.0
+                    
+                    # Handle transaction hash
+                    tx_hash = row.get('tx_hash', row.get('hash', '-'))
+                    if pd.notna(tx_hash) and len(str(tx_hash)) > 10:
+                        hash_display = f"{str(tx_hash)[:8]}...{str(tx_hash)[-6:]}"
+                    else:
+                        hash_display = str(tx_hash) if pd.notna(tx_hash) else '-'
+                    
+                    display_row = {
+                        'Status': 'Ready for FIFO',
+                        'Date': date_formatted,
+                        'Fund': fund_display,
+                        'Wallet ID': wallet_display,
+                        'Token': str(token),
+                        'Side': str(side).upper() if pd.notna(side) else '-',
+                        'Amount': f"{amount:.6f}",
+                        'ETH Value': f"{eth_value:.6f}",
+                        'USD Value': f"${usd_value:,.2f}",
+                        'Hash': hash_display
+                    }
+                    display_data.append(display_row)
+                    print(f"✅ Successfully processed transaction {idx}")
+                    
+                except Exception as row_error:
+                    print(f"❌ Error processing transaction {idx}: {row_error}")
+                    logger.error(f"Error processing transaction row {idx}: {row_error}")
+                    # Add placeholder row for failed transactions
+                    display_data.append({
+                        'Status': 'Error',
+                        'Date': '-',
+                        'Fund': 'Error',
+                        'Wallet ID': '-',
+                        'Token': 'Error',
+                        'Side': '-',
+                        'Amount': '0.0',
+                        'ETH Value': '0.0',
+                        'USD Value': '$0.00',
+                        'Hash': '-'
+                    })
+            
+            if not display_data:
+                print("⚠️ No valid transactions could be processed for display")
+                # Return empty state if all transactions failed to process
+                placeholder_df = pd.DataFrame({
+                    'Status': ['No valid transactions'],
+                    'Date': ['-'],
+                    'Fund': ['-'],
+                    'Wallet ID': ['-'],
+                    'Token': ['-'],
+                    'Side': ['-'],
+                    'Amount': ['0.0'],
+                    'ETH Value': ['0.0'],
+                    'USD Value': ['$0.00'],
+                    'Hash': ['-']
+                })
+                return render.DataGrid(placeholder_df, selection_mode="row", height="400px")
             
             display_df = pd.DataFrame(display_data)
             print(f"📋 Displaying {len(display_df)} formatted transactions in ready table")
+            print(f"📋 Final display columns: {list(display_df.columns)}")
             
             return render.DataGrid(
                 display_df,
@@ -1159,11 +1383,12 @@ def register_crypto_tracker_outputs(output, input, session):
             error_df = pd.DataFrame({
                 'Status': [f'Error: {str(e)}'],
                 'Date': ['-'],
+                'Fund': ['-'],
                 'Wallet ID': ['-'],
                 'Token': ['-'],
                 'Side': ['-'],
-                'Amount': ['0.0'],
-                'ETH Value': ['0.0'],
+                'Amount': ['0.000000'],
+                'ETH Value': ['0.000000'],
                 'USD Value': ['$0.00'],
                 'Hash': ['-']
             })
@@ -1243,6 +1468,8 @@ def register_crypto_tracker_outputs(output, input, session):
         
         # Format FIFO results for display with new columns
         display_df = fifo_df.copy()
+        print(f"DEBUG FIFO transactions table columns: {list(display_df.columns)}")
+        
         display_df['Date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
         display_df['Side'] = display_df['side']
         display_df['Token'] = display_df['asset']
@@ -1256,12 +1483,20 @@ def register_crypto_tracker_outputs(output, input, session):
             display_df['Wallet'] = '-'
             
         display_df['Qty'] = display_df['qty'].round(6)
-        display_df['Total ETH'] = display_df['total_eth'].round(8)
-        display_df['Unit Price (ETH)'] = display_df['unit_price_eth'].round(8)
-        display_df['Proceeds (ETH)'] = display_df['proceeds_eth'].round(8)
-        display_df['Cost Basis (ETH)'] = display_df['cost_basis_sold_eth'].round(8)
-        display_df['Remaining Qty'] = display_df['remaining_qty'].round(6)
-        display_df['Remaining Cost (ETH)'] = display_df['remaining_cost_basis_eth'].round(8)
+        
+        # Handle the amount column - check which name is available
+        if 'amount (eth)' in display_df.columns:
+            display_df['Total ETH'] = display_df['amount (eth)'].round(8)
+        elif 'total_eth' in display_df.columns:
+            display_df['Total ETH'] = display_df['total_eth'].round(8)
+        else:
+            display_df['Total ETH'] = 0.0
+            
+        display_df['Unit Price (ETH)'] = display_df['unit_price_eth'].round(8) if 'unit_price_eth' in display_df.columns else 0.0
+        display_df['Proceeds (ETH)'] = display_df['proceeds_eth'].round(8) if 'proceeds_eth' in display_df.columns else 0.0
+        display_df['Cost Basis (ETH)'] = display_df['cost_basis_sold_eth'].round(8) if 'cost_basis_sold_eth' in display_df.columns else 0.0
+        display_df['Remaining Qty'] = display_df['remaining_qty'].round(6) if 'remaining_qty' in display_df.columns else 0.0
+        display_df['Remaining Cost (ETH)'] = display_df['remaining_cost_basis_eth'].round(8) if 'remaining_cost_basis_eth' in display_df.columns else 0.0
         
         # Add ETH/USD price if available
         if 'price_eth' in display_df.columns:
@@ -1539,17 +1774,28 @@ def register_crypto_tracker_outputs(output, input, session):
             from .crypto_token_fetch import get_staged_transactions_global, clear_staged_transactions_global
             transactions_df = get_staged_transactions_global()
             
+            print(f"🔍 FIFO CALC DEBUG: Retrieved {len(transactions_df)} staged transactions")
+            print(f"🔍 FIFO CALC DEBUG: DataFrame shape: {transactions_df.shape}")
+            print(f"🔍 FIFO CALC DEBUG: DataFrame empty: {transactions_df.empty}")
+            
             if transactions_df.empty:
                 logger.warning("No staged transactions available for FIFO calculation. Please fetch and stage transactions first.")
+                print(f"❌ FIFO CALC DEBUG: No staged transactions found - cannot proceed")
                 return
+                
+            print(f"✅ FIFO CALC DEBUG: Found staged transactions, proceeding with filters...")
             
             # Apply fund filter
             fund_filter = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
+            print(f"🔍 FIFO CALC DEBUG: Fund filter = '{fund_filter}'")
             if fund_filter and fund_filter != "all":
                 fund_columns = [col for col in transactions_df.columns if 'fund' in col.lower()]
+                print(f"🔍 FIFO CALC DEBUG: Fund columns found: {fund_columns}")
                 if fund_columns:
                     fund_col = fund_columns[0]
+                    before_count = len(transactions_df)
                     transactions_df = transactions_df[transactions_df[fund_col] == fund_filter]
+                    print(f"🔍 FIFO CALC DEBUG: Fund filter '{fund_filter}' reduced from {before_count} to {len(transactions_df)} transactions")
                     logger.info(f"Filtered to fund '{fund_filter}': {len(transactions_df)} transactions")
             
             # Apply wallet filter
@@ -1569,6 +1815,13 @@ def register_crypto_tracker_outputs(output, input, session):
             date_range = input.fifo_date_range()
             if date_range:
                 start_date, end_date = date_range
+                logger.info(f"Date range filter: {start_date} to {end_date}")
+                
+                # Debug: Show sample dates before filtering
+                if not transactions_df.empty:
+                    sample_dates = transactions_df['date'].head(3).tolist()
+                    logger.info(f"Sample transaction dates before filtering: {sample_dates}")
+                
                 # Ensure consistent datetime handling
                 date_col = pd.to_datetime(transactions_df['date'])
                 if date_col.dt.tz is not None:
@@ -1577,7 +1830,11 @@ def register_crypto_tracker_outputs(output, input, session):
                     transactions_df['date'] = date_col
                     
                 start_dt = pd.to_datetime(start_date)
-                end_dt = pd.to_datetime(end_date)
+                # Make end_dt include the entire end day (23:59:59)
+                end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+                
+                logger.info(f"Filter range (datetime): {start_dt} to {end_dt}")
+                logger.info(f"Transaction date range: {transactions_df['date'].min()} to {transactions_df['date'].max()}")
                 
                 transactions_df = transactions_df[
                     (transactions_df['date'] >= start_dt) &
@@ -1609,6 +1866,7 @@ def register_crypto_tracker_outputs(output, input, session):
             print(f"✅ FIFO output columns: {list(fifo_df.columns)}")
             print(f"✅ Sample FIFO output row: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
             fifo_results.set(fifo_df)
+            fifo_data_source.set("calculated")  # Track that data was freshly calculated
             
             # Get current positions using the new simplified tracker
             tracker = FIFOTracker()
@@ -1633,9 +1891,16 @@ def register_crypto_tracker_outputs(output, input, session):
             positions_df = tracker.get_all_positions()
             fifo_positions.set(positions_df)
             
-            # Clear staged transactions after successful processing
-            clear_staged_transactions_global()
-            logger.info(f"FIFO calculation completed. Processed {len(fifo_df)} transactions and cleared staging area")
+            # Smart staging area management
+            data_source = fifo_data_source.get()
+            if data_source == "calculated":
+                # Fresh calculation from staged transactions - clear them
+                clear_staged_transactions_global()
+                logger.info(f"FIFO calculation completed. Processed {len(fifo_df)} transactions and cleared staging area")
+            else:
+                # Keep staged transactions when working with saved data
+                logger.info(f"FIFO calculation completed. Processed {len(fifo_df)} transactions (preserved staging area)")
+                # Note: User can manually clear staged transactions if needed
             
         except Exception as e:
             logger.error(f"Error in FIFO calculation: {e}")
@@ -1645,6 +1910,122 @@ def register_crypto_tracker_outputs(output, input, session):
             # Set empty results on error
             fifo_results.set(pd.DataFrame())
             fifo_positions.set(pd.DataFrame())
+    
+    # Handle FIFO ledger save
+    @reactive.effect
+    @reactive.event(input.save_fifo_ledger)
+    def handle_fifo_save():
+        """Save FIFO ledger results to S3"""
+        logger.info("FIFO ledger save requested")
+        
+        try:
+            from ...s3_utils import save_fifo_ledger_file
+            
+            # Get current FIFO data
+            fifo_df = fifo_results.get()
+            positions_df = fifo_positions.get()
+            journal_df = journal_entries.get()
+            
+            if fifo_df.empty:
+                logger.warning("No FIFO data to save. Calculate FIFO first.")
+                ui.notification_show(
+                    "No FIFO data to save. Please calculate FIFO first.",
+                    type="warning",
+                    duration=3
+                )
+                return
+            
+            # Prepare metadata
+            metadata = {
+                'fund_filter': input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else 'all',
+                'wallet_filter': input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else 'all',
+                'date_range_start': input.fifo_date_range()[0].isoformat() if hasattr(input, 'fifo_date_range') and input.fifo_date_range() else None,
+                'date_range_end': input.fifo_date_range()[1].isoformat() if hasattr(input, 'fifo_date_range') and input.fifo_date_range() else None,
+                'user_action': 'manual_save'
+            }
+            
+            # Save to S3
+            success = save_fifo_ledger_file(fifo_df, positions_df, journal_df, metadata)
+            
+            if success:
+                logger.info("FIFO ledger saved successfully to S3")
+                ui.notification_show(
+                    f"FIFO ledger saved successfully! ({len(fifo_df)} transactions, {len(positions_df)} positions)",
+                    type="success",
+                    duration=5
+                )
+                # Refresh the status display by invalidating the cache
+                from ...s3_utils import load_fifo_ledger_file
+                if hasattr(load_fifo_ledger_file, 'cache_clear'):
+                    load_fifo_ledger_file.cache_clear()
+            else:
+                logger.error("Failed to save FIFO ledger to S3")
+                ui.notification_show(
+                    "Failed to save FIFO ledger. Please check your S3 connection.",
+                    type="error",
+                    duration=5
+                )
+                
+        except Exception as e:
+            logger.error(f"Error saving FIFO ledger: {e}")
+            import traceback
+            traceback.print_exc()
+            ui.notification_show(
+                f"Error saving FIFO ledger: {str(e)}",
+                type="error",
+                duration=5
+            )
+    
+    # Handle clear saved ledger
+    @reactive.effect
+    @reactive.event(input.clear_saved_ledger)
+    def handle_clear_saved_ledger():
+        """Clear saved FIFO ledger from S3"""
+        logger.info("Clear saved ledger requested")
+        
+        try:
+            from ...s3_utils import delete_fifo_ledger_file, check_fifo_ledger_exists
+            
+            # Check if there's a saved ledger to clear
+            if not check_fifo_ledger_exists():
+                ui.notification_show(
+                    "No saved ledger found to clear.",
+                    type="warning",
+                    duration=3
+                )
+                return
+            
+            # Delete from S3
+            success = delete_fifo_ledger_file()
+            
+            if success:
+                logger.info("Saved FIFO ledger cleared successfully from S3")
+                ui.notification_show(
+                    "Saved ledger cleared successfully!",
+                    type="success",
+                    duration=3
+                )
+                # Refresh the status display by invalidating the cache
+                from ...s3_utils import load_fifo_ledger_file
+                if hasattr(load_fifo_ledger_file, 'cache_clear'):
+                    load_fifo_ledger_file.cache_clear()
+            else:
+                logger.error("Failed to clear saved FIFO ledger from S3")
+                ui.notification_show(
+                    "Failed to clear saved ledger. Please check your S3 connection.",
+                    type="error",
+                    duration=5
+                )
+                
+        except Exception as e:
+            logger.error(f"Error clearing saved FIFO ledger: {e}")
+            import traceback
+            traceback.print_exc()
+            ui.notification_show(
+                f"Error clearing saved ledger: {str(e)}",
+                type="error",
+                duration=5
+            )
     
     # Handle journal entry generation
     @reactive.effect
@@ -1805,7 +2186,7 @@ def register_crypto_tracker_outputs(output, input, session):
         
         return render.DataGrid(
             final_df,
-            selection_mode="rows",
+            selection_mode="row",
             filters=True,
             height="500px"
         )
@@ -1826,76 +2207,101 @@ def register_crypto_tracker_outputs(output, input, session):
                 ui.p("Calculate FIFO first to see month-end balances.", class_="small text-muted mt-2")
             )
         
-        # Calculate month-end balances
+        # Calculate month-end balances as a table
         try:
-            # Convert timestamp to datetime if needed
-            if 'timestamp' in fifo_df.columns:
-                fifo_df['date'] = pd.to_datetime(fifo_df['timestamp'])
-            elif 'date' in fifo_df.columns:
+            # Convert date to datetime if needed
+            if 'date' in fifo_df.columns:
                 fifo_df['date'] = pd.to_datetime(fifo_df['date'])
             else:
                 return ui.p("Date information not available", class_="text-muted")
             
-            # Group by month and calculate ending balances
-            fifo_df['month_end'] = fifo_df['date'].dt.to_period('M')
+            # Get date range from current filter for header
+            try:
+                date_range = input.fifo_date_range()
+                if date_range and len(date_range) == 2:
+                    end_date = date_range[1]
+                    header_date = pd.to_datetime(end_date).strftime('%B %d, %Y')
+                else:
+                    # Fallback to max date in data
+                    header_date = fifo_df['date'].max().strftime('%B %d, %Y')
+            except:
+                header_date = fifo_df['date'].max().strftime('%B %d, %Y')
             
-            # Get the last entry for each asset/wallet/month combination
-            month_end_balances = fifo_df.groupby(['asset', 'wallet_address', 'month_end']).agg({
-                'running_balance': 'last',
-                'date': 'last'
-            }).reset_index()
+            # For each wallet and asset combination, get the most recent remaining_qty
+            fifo_df_sorted = fifo_df.sort_values('date')
+            latest_balances = fifo_df_sorted.groupby(['wallet_address', 'asset']).last().reset_index()
             
-            balance_cards = []
+            # Filter to show non-zero remaining quantities
+            active_balances = latest_balances[latest_balances['remaining_qty'] != 0]
             
-            # Group by month for display
-            for month_period in month_end_balances['month_end'].unique():
-                month_data = month_end_balances[month_end_balances['month_end'] == month_period]
-                month_str = str(month_period)
-                
-                # Create summary for this month
-                total_positions = len(month_data)
-                unique_assets = month_data['asset'].nunique()
-                
-                balance_items = []
-                for _, row in month_data.iterrows():
-                    wallet_short = f"{str(row['wallet_address'])[:6]}..." if pd.notna(row['wallet_address']) else "Unknown"
-                    balance_items.append(
-                        ui.div(
-                            ui.div(
-                                ui.strong(f"{row['asset']}"),
-                                ui.small(f" ({wallet_short})", class_="text-muted ms-1"),
-                                class_="d-flex justify-content-between"
-                            ),
-                            ui.div(
-                                f"{float(row['running_balance']):.6f}",
-                                class_="text-end small"
-                            ),
-                            class_="border-bottom py-1"
-                        )
-                    )
-                
-                balance_cards.append(
-                    ui.card(
-                        ui.card_header(
-                            ui.div(
-                                ui.strong(month_str),
-                                ui.badge(f"{total_positions} positions", color="primary", class_="ms-2"),
-                                class_="d-flex justify-content-between align-items-center"
-                            )
-                        ),
-                        ui.card_body(
-                            *balance_items[:10],  # Limit to first 10 items to avoid clutter
-                            ui.small(f"...and {max(0, len(balance_items)-10)} more", class_="text-muted") if len(balance_items) > 10 else "",
-                            class_="p-2"
-                        ),
-                        class_="mb-2"
-                    )
+            if active_balances.empty:
+                return ui.div(
+                    ui.h5(f"Ending Balances as of {header_date}", class_="text-center mb-3"),
+                    ui.p("No active balances found", class_="text-muted text-center")
                 )
             
-            if balance_cards:
-                return ui.div(*balance_cards)
-            else:
-                return ui.p("No month-end data available", class_="text-muted")
+            # Create pivot table with wallets as rows and tokens as columns
+            balance_pivot = active_balances.pivot_table(
+                index='wallet_address', 
+                columns='asset', 
+                values='remaining_qty', 
+                fill_value=0
+            ).reset_index()
+            
+            # Get fund information for each wallet
+            fund_mapping = {}
+            if 'fund_id' in active_balances.columns:
+                for _, row in active_balances[['wallet_address', 'fund_id']].drop_duplicates().iterrows():
+                    fund_mapping[row['wallet_address']] = row['fund_id']
+            
+            # Create table data
+            table_data = []
+            
+            # Get all unique assets for column headers
+            assets = [col for col in balance_pivot.columns if col != 'wallet_address']
+            
+            for _, row in balance_pivot.iterrows():
+                wallet_address = row['wallet_address']
+                wallet_display = f"{wallet_address[:6]}...{wallet_address[-4:]}" if len(wallet_address) > 10 else wallet_address
+                fund_display = fund_mapping.get(wallet_address, 'Unknown Fund')
+                
+                # Create row data
+                row_data = {
+                    'Wallet': f"{wallet_display}",
+                    'Fund': fund_display
+                }
+                
+                # Add asset columns
+                for asset in assets:
+                    qty = row.get(asset, 0)
+                    if qty != 0:
+                        if qty > 0:
+                            row_data[asset] = f"{qty:.6f}"
+                        else:
+                            row_data[asset] = f"{qty:.6f} (SHORT)"
+                    else:
+                        row_data[asset] = "-"
+                
+                table_data.append(row_data)
+            
+            # Create DataFrame for display
+            display_df = pd.DataFrame(table_data)
+            
+            if display_df.empty:
+                return ui.div(
+                    ui.h5(f"Ending Balances as of {header_date}", class_="text-center mb-3"),
+                    ui.p("No data to display", class_="text-muted text-center")
+                )
+            
+            # Store the data for the table render function
+            month_end_table_data.set(display_df)
+            month_end_header_date.set(header_date)
+            
+            # Return the UI structure with a placeholder for the table
+            return ui.div(
+                ui.h5(f"Ending Balances as of {header_date}", class_="text-center mb-3"),
+                ui.output_data_frame("month_end_balances_table")
+            )
                 
         except Exception as e:
             logger.error(f"Error generating month-end balances: {e}")
@@ -1904,6 +2310,148 @@ def register_crypto_tracker_outputs(output, input, session):
                 ui.p("Error loading balances", class_="text-warning ms-2"),
                 class_="d-flex align-items-center"
             )
+    
+    @output
+    @render.data_frame
+    def month_end_balances_table():
+        """Render the month-end balances table"""
+        try:
+            # Get the stored table data
+            table_data = month_end_table_data.get()
+            
+            if table_data.empty:
+                # Return placeholder table
+                placeholder_df = pd.DataFrame({
+                    'Wallet': ['No data available'],
+                    'ETH': [0.0],
+                    'USDC': [0.0]
+                })
+                return render.DataGrid(
+                    placeholder_df,
+                    selection_mode="none",
+                    filters=False,
+                    height="300px"
+                )
+            
+            return render.DataGrid(
+                table_data,
+                selection_mode="none",
+                filters=False,
+                height="300px"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error rendering month-end balances table: {e}")
+            # Return error placeholder
+            error_df = pd.DataFrame({
+                'Error': ['Failed to load data']
+            })
+            return render.DataGrid(
+                error_df,
+                selection_mode="none",
+                filters=False,
+                height="300px"
+            )
+    
+    @output
+    @render.ui
+    def fifo_ledger_status_display():
+        """Display comprehensive ledger status and workflow guidance"""
+        try:
+            from ...s3_utils import check_fifo_ledger_exists, load_fifo_ledger_file
+            from .crypto_token_fetch import get_staged_transactions_global
+            
+            # Get current state information
+            has_saved_ledger = check_fifo_ledger_exists()
+            staged_df = get_staged_transactions_global()
+            staged_count = len(staged_df)
+            data_source = fifo_data_source.get()
+            fifo_df = fifo_results.get()
+            has_calculated_data = not fifo_df.empty
+            
+            status_parts = []
+            
+            # Show saved ledger status
+            if has_saved_ledger:
+                saved_data = load_fifo_ledger_file()
+                metadata = saved_data.get('metadata', {})
+                
+                if metadata:
+                    save_timestamp = metadata.get('save_timestamp', 'Unknown')
+                    transaction_count = metadata.get('fifo_transaction_count', 0)
+                    
+                    # Format timestamp for display
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(save_timestamp.replace('Z', '+00:00'))
+                        formatted_time = dt.strftime('%Y-%m-%d %H:%M')
+                    except:
+                        formatted_time = save_timestamp[:10] if save_timestamp else 'Unknown'
+                    
+                    status_parts.append(
+                        ui.div(
+                            ui.HTML('<i class="bi bi-cloud-check text-success"></i>'),
+                            ui.span(f"Saved Ledger: {transaction_count} transactions from {formatted_time}", 
+                                   class_="text-success fw-bold ms-2"),
+                            class_="d-flex align-items-center"
+                        )
+                    )
+            
+            # Show staged transactions status
+            if staged_count > 0:
+                status_parts.append(
+                    ui.div(
+                        ui.HTML('<i class="bi bi-layers text-warning"></i>'),
+                        ui.span(f"Staged Transactions: {staged_count} ready for FIFO", 
+                               class_="text-warning fw-bold ms-2"),
+                        class_="d-flex align-items-center mt-1"
+                    )
+                )
+            
+            # Show current calculation status
+            if has_calculated_data:
+                calculated_count = len(fifo_df)
+                if data_source == "auto-loaded":
+                    source_text = "loaded from S3"
+                    icon_class = "bi-cloud-download text-info"
+                elif data_source == "calculated":
+                    source_text = "calculated from staged"
+                    icon_class = "bi-calculator text-primary"
+                else:
+                    source_text = "unknown source"
+                    icon_class = "bi-question-circle text-muted"
+                
+                status_parts.append(
+                    ui.div(
+                        ui.HTML(f'<i class="{icon_class}"></i>'),
+                        ui.span(f"Current FIFO: {calculated_count} transactions ({source_text})", 
+                               class_="fw-bold ms-2"),
+                        class_="d-flex align-items-center mt-1"
+                    )
+                )
+            
+            # Workflow guidance
+            if not status_parts:
+                # No data at all
+                return ui.div(
+                    ui.div(
+                        ui.HTML('<i class="bi bi-info-circle text-info"></i>'),
+                        ui.span("Ready to start - Fetch transactions and push to FIFO", 
+                               class_="text-info fw-bold ms-2"),
+                        class_="d-flex align-items-center"
+                    ),
+                    class_="alert alert-light border-info py-2 px-3"
+                )
+            else:
+                # Show all status information
+                return ui.div(
+                    *status_parts,
+                    class_="alert alert-light border-secondary py-2 px-3"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error displaying ledger status: {e}")
+            return ui.div()
     
     # Reactive Filters for FIFO Ledger
     
@@ -1937,16 +2485,20 @@ def register_crypto_tracker_outputs(output, input, session):
                             choices[str(fund)] = str(fund)
             
             # Also check staged transactions as fallback
-            from .crypto_token_fetch import get_staged_transactions_global
-            staged_df = get_staged_transactions_global()
-            if not staged_df.empty:
-                fund_columns = [col for col in staged_df.columns if 'fund' in col.lower()]
-                if fund_columns:
-                    fund_col = fund_columns[0]
-                    unique_funds = staged_df[fund_col].dropna().unique()
-                    for fund in sorted(unique_funds):
-                        if pd.notna(fund) and str(fund).strip() and str(fund) not in choices:
-                            choices[str(fund)] = str(fund)
+            try:
+                from .crypto_token_fetch import get_staged_transactions_global
+                staged_df = get_staged_transactions_global()
+                if not staged_df.empty:
+                    fund_columns = [col for col in staged_df.columns if 'fund' in col.lower()]
+                    if fund_columns:
+                        fund_col = fund_columns[0]
+                        unique_funds = staged_df[fund_col].dropna().unique()
+                        for fund in sorted(unique_funds):
+                            if pd.notna(fund) and str(fund).strip() and str(fund) not in choices:
+                                choices[str(fund)] = str(fund)
+            except ImportError:
+                # Module might not be available yet
+                pass
                             
         except Exception as e:
             logger.warning(f"Error getting fund choices: {e}")
@@ -1955,12 +2507,21 @@ def register_crypto_tracker_outputs(output, input, session):
     
     @reactive.calc  
     def get_available_wallet_choices():
-        """Get wallet choices with friendly names from wallet mapping"""
+        """Get wallet choices with friendly names from wallet mapping, filtered by selected fund"""
         choices = {"all": "All Wallets"}
         
         try:
+            # Get the currently selected fund
+            selected_fund = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
+            
             wallet_df = get_wallet_mapping_data()
-            if not wallet_df.empty:
+            if not wallet_df.empty and isinstance(wallet_df, pd.DataFrame):
+                
+                # Filter wallets by selected fund if not "all"
+                if selected_fund != "all" and 'fund_id' in wallet_df.columns:
+                    wallet_df = wallet_df[wallet_df['fund_id'] == selected_fund]
+                    print(f"🔍 Filtered wallets for fund '{selected_fund}': {len(wallet_df)} wallets")
+                
                 # Look for wallet address and friendly name columns
                 address_columns = [col for col in wallet_df.columns if 'address' in col.lower() or 'wallet' in col.lower()]
                 name_columns = [col for col in wallet_df.columns if 'name' in col.lower() or 'friendly' in col.lower() or 'display' in col.lower()]
@@ -1970,24 +2531,32 @@ def register_crypto_tracker_outputs(output, input, session):
                     name_col = name_columns[0]
                     
                     for _, row in wallet_df.iterrows():
-                        address = row.get(address_col)
-                        friendly_name = row.get(name_col)
-                        
-                        if pd.notna(address) and pd.notna(friendly_name):
-                            # Use first 10 chars of address as key, friendly name as display
-                            address_key = str(address)[:10] if len(str(address)) > 10 else str(address)
-                            display_name = f"{friendly_name} ({str(address)[:6]}...{str(address)[-4:]})" if len(str(address)) > 10 else f"{friendly_name} ({address})"
-                            choices[address_key] = display_name
+                        try:
+                            address = row.get(address_col)
+                            friendly_name = row.get(name_col)
+                            
+                            if pd.notna(address) and pd.notna(friendly_name):
+                                # Use first 10 chars of address as key, friendly name as display
+                                address_key = str(address)[:10] if len(str(address)) > 10 else str(address)
+                                display_name = f"{friendly_name} ({str(address)[:6]}...{str(address)[-4:]})" if len(str(address)) > 10 else f"{friendly_name} ({address})"
+                                choices[address_key] = display_name
+                        except Exception as row_error:
+                            # Skip problematic rows
+                            continue
                 
                 # If no friendly names, fall back to just addresses
                 elif address_columns:
                     address_col = address_columns[0]
                     unique_addresses = wallet_df[address_col].dropna().unique()
                     for address in sorted(unique_addresses):
-                        if pd.notna(address) and str(address).strip():
-                            address_key = str(address)[:10] if len(str(address)) > 10 else str(address)
-                            display_name = f"{str(address)[:6]}...{str(address)[-4:]}" if len(str(address)) > 10 else str(address)
-                            choices[address_key] = display_name
+                        try:
+                            if pd.notna(address) and str(address).strip():
+                                address_key = str(address)[:10] if len(str(address)) > 10 else str(address)
+                                display_name = f"{str(address)[:6]}...{str(address)[-4:]}" if len(str(address)) > 10 else str(address)
+                                choices[address_key] = display_name
+                        except Exception:
+                            # Skip problematic addresses
+                            continue
                             
         except Exception as e:
             logger.warning(f"Error getting wallet choices: {e}")
@@ -2007,12 +2576,34 @@ def register_crypto_tracker_outputs(output, input, session):
     
     @reactive.effect  
     def update_wallet_filter_choices():
-        """Update wallet filter choices reactively"""
+        """Update wallet filter choices reactively when fund changes"""
         try:
+            # This effect will run whenever the fund filter changes
+            selected_fund = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
             choices = get_available_wallet_choices()
-            logger.debug(f"Wallet choices available: {len(choices)} options")
+            logger.debug(f"Wallet choices for fund '{selected_fund}': {len(choices)} options")
+            
+            # Reset wallet selection to "all" when fund changes
+            # This ensures the wallet filter doesn't retain invalid selections
+            if hasattr(input, 'fifo_wallet_filter'):
+                current_wallet = input.fifo_wallet_filter()
+                if current_wallet not in choices:
+                    # Current wallet selection is not valid for this fund, reset to "all"
+                    print(f"🔄 Resetting wallet filter to 'all' for fund '{selected_fund}'")
+                    
         except Exception as e:
             logger.error(f"Error updating wallet filter: {e}")
+    
+    @reactive.effect
+    @reactive.event(input.fifo_fund_filter)
+    def reset_wallet_on_fund_change():
+        """Reset wallet filter when fund changes"""
+        try:
+            selected_fund = input.fifo_fund_filter()
+            print(f"🔄 Fund changed to: {selected_fund}")
+            # The wallet filter will automatically update due to reactive dependency
+        except Exception as e:
+            logger.error(f"Error handling fund change: {e}")
     
     @output
     @render.ui
@@ -2040,16 +2631,30 @@ def register_crypto_tracker_outputs(output, input, session):
     @output
     @render.ui  
     def fifo_wallet_filter_choices():
-        """Dynamic wallet selector with friendly names from wallet mapping"""
+        """Dynamic wallet selector with friendly names from wallet mapping, filtered by fund"""
         try:
+            # Get the currently selected fund to trigger reactivity
+            selected_fund = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
+            
+            # Get wallet choices filtered by the selected fund
             choices = get_available_wallet_choices()
-            current_selection = input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else "all"
+            
+            # Always reset to "all" when fund changes to avoid invalid selections
+            current_selection = "all"
+            
+            # Only preserve wallet selection if it's valid for the current fund
+            if hasattr(input, 'fifo_wallet_filter'):
+                user_selection = input.fifo_wallet_filter()
+                if user_selection in choices:
+                    current_selection = user_selection
+            
+            print(f"🔄 Updating wallet filter for fund '{selected_fund}': {len(choices)} wallet options")
             
             return ui.input_select(
                 "fifo_wallet_filter",
                 "Wallet:",
                 choices=choices,
-                selected=current_selection if current_selection in choices else "all"
+                selected=current_selection
             )
         except Exception as e:
             logger.error(f"Error creating wallet filter: {e}")
@@ -2145,3 +2750,176 @@ def register_crypto_tracker_outputs(output, input, session):
             logger.info("FIFO Ledger refreshed successfully")
         except Exception as e:
             logger.error(f"Error refreshing FIFO ledger: {e}")
+    
+    # Handle clear staged transactions button
+    @reactive.effect
+    @reactive.event(input.clear_staged_transactions)
+    def handle_clear_staged_transactions():
+        """Clear all staged transactions"""
+        logger.info("Clear staged transactions requested")
+        
+        try:
+            from .crypto_token_fetch import clear_staged_transactions_global
+            clear_staged_transactions_global()
+            
+            ui.notification_show(
+                "Staged transactions cleared successfully",
+                type="success",
+                duration=3
+            )
+            logger.info("Staged transactions cleared successfully")
+        except Exception as e:
+            logger.error(f"Error clearing staged transactions: {e}")
+            ui.notification_show(
+                f"Error clearing staged transactions: {str(e)}",
+                type="error",
+                duration=5
+            )
+    
+    # Handle FIFO ledger row selection
+    @reactive.effect
+    def handle_fifo_selection():
+        """Handle row selection from FIFO ledger table"""
+        try:
+            # Get cell selection from FIFO ledger table
+            cell_selection = input.fifo_ledger_table_cell_selection()
+            selected_rows = list(cell_selection.get("rows", [])) if cell_selection else []
+            
+            print(f"DEBUG FIFO selection: {selected_rows}")
+            
+            # Update reactive value
+            fifo_selection.set({"rows": selected_rows})
+            
+        except Exception as e:
+            print(f"DEBUG FIFO selection error: {e}")
+            fifo_selection.set({"rows": []})
+    
+    @output
+    @render.ui
+    def fifo_transaction_details_card():
+        """Display selected FIFO transaction details with Etherscan link"""
+        try:
+            # Get selected rows
+            selection_info = fifo_selection.get()
+            selected_rows = selection_info.get("rows", [])
+            
+            # Get FIFO data
+            fifo_df = fifo_results.get()
+            
+            if fifo_df.empty:
+                return ui.div(
+                    ui.div(
+                        ui.HTML('<i class="bi bi-info-circle text-muted"></i>'),
+                        ui.p("No FIFO data available", class_="text-muted mb-0 ms-2"),
+                        class_="d-flex align-items-center"
+                    ),
+                    ui.p("Calculate FIFO first to view transaction details.", class_="small text-muted mt-2")
+                )
+            
+            if not selected_rows:
+                return ui.div(
+                    ui.div(
+                        ui.HTML('<i class="bi bi-hand-index text-primary"></i>'),
+                        ui.p("Select a transaction", class_="text-primary mb-0 ms-2"),
+                        class_="d-flex align-items-center"
+                    ),
+                    ui.p("Click on a FIFO transaction row to view details and access Etherscan.", class_="small text-muted mt-2")
+                )
+            
+            # Get the selected transaction
+            selected_idx = selected_rows[0]
+            if selected_idx >= len(fifo_df):
+                return ui.div(
+                    ui.p("Invalid selection", class_="text-danger")
+                )
+            
+            tx_row = fifo_df.iloc[selected_idx]
+            
+            # Extract transaction details
+            tx_hash = str(tx_row.get('hash', ''))
+            date_str = tx_row.get('date', 'Unknown')
+            asset = str(tx_row.get('asset', 'Unknown'))
+            side = str(tx_row.get('side', 'Unknown'))
+            qty = float(tx_row.get('qty', 0))
+            wallet_address = str(tx_row.get('wallet_address', ''))
+            
+            # Format date
+            if hasattr(date_str, 'strftime'):
+                date_str = date_str.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(date_str, str):
+                try:
+                    date_str = pd.to_datetime(date_str).strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+            
+            # Format wallet address (shortened)
+            if len(wallet_address) > 10:
+                wallet_display = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+            else:
+                wallet_display = wallet_address
+            
+            # Create Etherscan URL
+            etherscan_url = f"https://etherscan.io/tx/{tx_hash}" if tx_hash else ""
+            
+            return ui.div(
+                # Transaction header
+                ui.div(
+                    ui.HTML('<i class="bi bi-receipt text-success"></i>'),
+                    ui.strong("FIFO Transaction Selected", class_="text-success ms-2"),
+                    class_="d-flex align-items-center mb-3"
+                ),
+                
+                # Transaction details
+                ui.div(
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Hash</small>'),
+                        ui.div(ui.code(tx_hash[:16] + "..." if len(tx_hash) > 16 else tx_hash, class_="small"), class_="mt-1"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Date</small>'),
+                        ui.div(date_str, class_="mt-1 small"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Asset</small>'),
+                        ui.div(asset, class_="mt-1 small fw-bold"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Side</small>'),
+                        ui.div(
+                            ui.span(side.upper(), class_="badge bg-success" if side.lower() == "buy" else "badge bg-danger"),
+                            class_="mt-1"
+                        ),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Quantity</small>'),
+                        ui.div(f"{qty:,.6f}", class_="mt-1 small font-monospace"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Wallet</small>'),
+                        ui.div(wallet_display, class_="mt-1 small font-monospace"),
+                        class_="mb-3"
+                    ),
+                ),
+                
+                # Etherscan link
+                ui.hr(),
+                ui.div(
+                    ui.HTML(f'<a href="{etherscan_url}" target="_blank" class="btn btn-primary w-100" {"" if etherscan_url else "disabled"}>'),
+                    ui.HTML('<i class="bi bi-box-arrow-up-right me-2"></i>View on Etherscan'),
+                    ui.HTML('</a>'),
+                    class_="text-center"
+                ) if etherscan_url else ui.div(
+                    ui.p("No transaction hash available", class_="text-muted text-center")
+                )
+            )
+            
+        except Exception as e:
+            logger.error(f"Error displaying FIFO transaction details: {e}")
+            return ui.div(
+                ui.p(f"Error loading transaction details: {str(e)}", class_="text-danger")
+            )

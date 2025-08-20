@@ -1243,3 +1243,249 @@ df_ultimate = df_ultimate.rename(columns={
     "date": "transaction_datetime"
 })
 df_ultimate.columns
+ 
+"""## Rule 0 - Only our transactions"""
+
+# --- Rule 0: Drop transactions not involving known wallets ---
+df_rule0 = df_month1.copy()
+
+# Ensure all comparison addresses are lowercase
+raw_wallets_set = {addr.lower() for addr in raw_wallets}
+
+# Normalize 'from' and 'to' to lowercase
+df_rule0["from"] = df_rule0["from"].str.lower()
+df_rule0["to"] = df_rule0["to"].str.lower()
+
+# Keep rows where either sender or receiver is in our wallet list
+mask_rule0 = (
+    df_rule0["from"].isin(raw_wallets_set) |
+    df_rule0["to"].isin(raw_wallets_set)
+)
+
+# Apply the rule
+df_rule0 = df_rule0[mask_rule0].copy()
+df0_applied = df_rule0.copy()  # ✅ this now reflects the actual filtered DataFrame
+
+# Optional shape print or inspection
+df0_applied.shape
+df_rule0_applied = df0_applied.copy()
+print(f"✅ Rule 0 applied: {len(df_month1) - len(df_rule0_applied)} rows dropped, {len(df_rule0_applied)} rows retained involving known wallets.")
+
+"""## Rule 1 - Wrap *WETH*"""
+
+WETH_CONTRACT = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+
+# Step 1: Copy base DataFrame
+df_rule1_applied = df_rule0_applied.copy()
+
+# Step 2: Drop ETH Transfers going to WETH contract
+drop_mask = (
+    (df_rule1_applied["event_name"] == "ETH Transfer") &
+    (df_rule1_applied["to"].str.lower() == WETH_CONTRACT)
+)
+dropped_count = drop_mask.sum()
+df_rule1_applied = df_rule1_applied[~drop_mask]
+
+# Step 3: WETH deposit split logic
+mask_rule1 = (
+    (df_rule1_applied["event_name"].str.lower() == "deposit") &
+    (df_rule1_applied["to"].isna()) &
+    (df_rule1_applied["contractAddress"].str.lower() == WETH_CONTRACT)
+)
+
+rows_to_duplicate = df_rule1_applied[mask_rule1].copy()
+
+eth_rows = rows_to_duplicate.copy()
+eth_rows["tokenSymbol"] = "ETH"
+eth_rows["to"] = eth_rows["contractAddress"]
+eth_rows["from"] = rows_to_duplicate["from"]
+eth_rows["contractAddress"] = None
+
+weth_rows = rows_to_duplicate.copy()
+weth_rows["tokenSymbol"] = "WETH"
+weth_rows["from"] = weth_rows["contractAddress"]
+weth_rows["to"] = rows_to_duplicate["from"]
+
+df_rule1_applied = pd.concat([df_rule1_applied[~mask_rule1], eth_rows, weth_rows], ignore_index=True)
+
+# ✅ Print results
+print(f"🗑️ Dropped {dropped_count} ETH Transfer → WETH_CONTRACT rows.")
+print(f"✅ Rule 1 applied: {len(rows_to_duplicate)} WETH deposit rows duplicated as ETH + WETH splits.")
+
+df_month1_checker = df_rule1_applied[df_rule1_applied["hash"] == "0x91dcca6b512233dbf0fe79c3c1ca1321a5197e9a3c98fbc7d9b27f94cd6ddc1f"]
+df_month1_checker
+
+"""## Rule 2 - Unwrap *WETH*"""
+
+WETH_CONTRACT = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+
+df_rule2_applied = df_rule1_applied.copy()
+
+mask_rule2 = (
+    (df_rule2_applied["event_name"].str.lower() == "withdraw") &
+    (df_rule2_applied["to"].isna()) &
+    (df_rule2_applied["contractAddress"].str.lower() == WETH_CONTRACT)
+)
+
+rows_to_duplicate = df_rule2_applied[mask_rule2].copy()
+num_rows = len(rows_to_duplicate)
+
+eth_rows = rows_to_duplicate.copy()
+eth_rows["tokenSymbol"] = "ETH"
+eth_rows["from"] = eth_rows["contractAddress"]
+eth_rows["to"] = rows_to_duplicate["from"]
+eth_rows["contractAddress"] = None
+
+weth_rows = rows_to_duplicate.copy()
+weth_rows["tokenSymbol"] = "WETH"
+weth_rows["to"] = weth_rows["contractAddress"]
+weth_rows["from"] = rows_to_duplicate["from"]
+
+df_rule2_applied = pd.concat([df_rule2_applied[~mask_rule2], eth_rows, weth_rows], ignore_index=True)
+
+print(f"Rule 2 duplicated {num_rows} rows into {num_rows * 2} new rows.")
+
+hash_checker = df_rule2_applied[df_rule2_applied["hash"] == "0xd1282673ee38b3d924516f0000aa96793d0863d3d9c77d02ac42c2349f0dddfd"]
+hash_checker
+
+"""## Rule 3 - Normalize BLUR POOL name"""
+
+df_rule3_applied = df_rule2_applied.copy()
+
+mask_rule3 = df_rule3_applied["tokenSymbol"].str.upper() == "BLUR"
+num_replaced = mask_rule3.sum()
+
+df_rule3_applied.loc[mask_rule3, "tokenSymbol"] = "BLUR POOL"
+print(f"Rule 3 replaced {num_replaced} tokenSymbol values with 'BLUR POOL'.")
+
+"""## Rule 4 - Remove phishy things"""
+
+df_rule4_applied = df_rule3_applied.copy()
+
+# Normalize address case
+df_rule4_applied["contractAddress"] = df_rule4_applied["contractAddress"].str.lower()
+raw_suspects = [addr.lower() for addr in raw_suspects]
+fake_phishing = [addr.lower() for addr in fake_phishing]
+
+# Count rows before
+before_count = len(df_rule4_applied)
+
+# Remove rows with suspicious contractAddress
+df_rule4_applied = df_rule4_applied[
+    ~df_rule4_applied["contractAddress"].isin(raw_suspects + fake_phishing)
+]
+
+# Count rows after
+after_count = len(df_rule4_applied)
+print(f"Rule 4 removed {before_count - after_count} suspicious rows.")
+
+"""## Rule 5 - Purchased *BLUR POOL*"""
+
+BLUR_POOL_CONTRACT = "0x0000000000a39bb272e79075ade125fd351887ac"
+MINT_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+df_rule5_applied = df_rule4_applied.copy()
+
+# Build mask
+mask_rule5 = (
+    (df_rule5_applied["from"].str.lower() == MINT_ADDRESS.lower()) &
+    (df_rule5_applied["contractAddress"].str.lower() == BLUR_POOL_CONTRACT.lower())
+)
+
+# Get matching rows
+rows_to_duplicate = df_rule5_applied[mask_rule5].copy()
+
+# Create flipped ETH rows
+eth_rows = rows_to_duplicate.copy()
+eth_rows["tokenSymbol"] = "ETH"
+eth_rows["from"] = rows_to_duplicate["to"]
+eth_rows["to"] = rows_to_duplicate["from"]
+eth_rows["contractAddress"] = None  # Native ETH
+
+# Append
+df_rule5_applied = pd.concat([df_rule5_applied, eth_rows], ignore_index=True)
+
+# ✅ Print what happened
+print(f"✅ Rule 5 applied: {len(rows_to_duplicate)} mint rows duplicated as ETH transfers.")
+
+"""## Rule 6 - Sold *BLUR POOL*"""
+
+BLUR_POOL_CONTRACT = "0x0000000000a39bb272e79075ade125fd351887ac"
+BURN_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+df_rule6_applied = df_rule4_applied.copy()
+
+# Build mask
+mask_rule6 = (
+    (df_rule6_applied["to"].str.lower() == BURN_ADDRESS.lower()) &
+    (df_rule6_applied["contractAddress"].str.lower() == BLUR_POOL_CONTRACT.lower()) &
+    (df_rule6_applied["function"] == "OwnerTransferV7b711143(uint256)")
+)
+
+# Get matching rows
+rows_to_duplicate = df_rule6_applied[mask_rule6].copy()
+
+# Create flipped ETH rows
+eth_rows = rows_to_duplicate.copy()
+eth_rows["tokenSymbol"] = "ETH"
+eth_rows["from"] = rows_to_duplicate["to"]
+eth_rows["to"] = rows_to_duplicate["from"]
+eth_rows["contractAddress"] = None  # Native ETH
+
+# Append
+df_rule6_applied = pd.concat([df_rule6_applied, eth_rows], ignore_index=True)
+
+# ✅ Print what happened
+print(f"✅ Rule 6 applied: {len(rows_to_duplicate)} burn rows duplicated as ETH receipts.")
+
+rows_to_duplicate["function"].unique()
+
+df_for_fifo = df_rule6_applied.copy()
+df_for_fifo.shape
+
+hash_checkaa = df_for_fifo[df_for_fifo["hash"] == "0x84f25b9a9f6d1fef4363156c1fc269aaea46a2721a80aa166acff4c8e6d57432"]
+hash_checkaa
+
+"""# Add USD Prices"""
+
+from typing import Union
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def fetch_all_eth_usd(tx_hashes: Union[str, list[str]], max_workers: int = 10) -> pd.DataFrame:
+    # Convert single hash to list
+    if isinstance(tx_hashes, str):
+        tx_hashes = [tx_hashes]
+
+    results = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(get_eth_usd_for_tx, h): h for h in tx_hashes}
+
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            result = future.result()
+            if result:
+                tx_hash, price, dt = result
+                results.append({
+                    "hash": tx_hash,
+                    "TX_ETH_USD_price": price,
+                    "block_datetime": dt
+                })
+
+    return pd.DataFrame(results)
+
+tx_hashes = df_for_fifo['hash'].dropna().unique().tolist()
+df_with_prices = fetch_all_eth_usd(tx_hashes, max_workers=10)
+
+tx_with_price = fetch_all_eth_usd("0x1bf0d0cc928978ac155e618f7f85e17ccf9fcb61a3c7071142d4e4c33da78854")
+tx_with_price
+
+df_with_prices
+
+#merge df_with_prices with df_for_group on "hash"
+df_for_fifo = df_for_fifo.merge(df_with_prices, left_on='hash', right_on='hash', how='left')
+
+df_for_fifo.tail(5)
+
+hash_checker7 = df_for_fifo[df_for_fifo["hash"] == "0xd28c8c2712e822c4c957d7094d0116734ba0ee3bdee61252a717a8ad247a3452"]
+hash_checker7

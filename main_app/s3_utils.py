@@ -16,6 +16,7 @@ LP_COMMITMENTS_KEY = "drip_capital/LP_commitments.csv"
 GP_INCENTIVE_AUDIT_KEY = "drip_capital/20240731_fund_i_class_B_ETH_GP_incentive_audit_trail.xlsx"
 APPROVED_TOKENS_KEY = "drip_capital/user_approved_tokens.csv"
 REJECTED_TOKENS_KEY = "drip_capital/user_rejected_tokens.csv"
+FIFO_LEDGER_KEY = "drip_capital/fifo_ledger_results.parquet"
 
 # -- Create a reusable S3 client
 s3 = boto3.client("s3")
@@ -399,4 +400,201 @@ def save_rejected_tokens_file(token_addresses: set, key: str = REJECTED_TOKENS_K
         
     except Exception as e:
         print(f"Error saving rejected tokens to S3: {e}")
+        return False
+
+# FIFO Ledger Storage Functions
+
+def save_fifo_ledger_file(fifo_df: pd.DataFrame, positions_df: pd.DataFrame, 
+                         journal_df: pd.DataFrame, metadata: dict, 
+                         key: str = FIFO_LEDGER_KEY) -> bool:
+    """Save FIFO ledger results to S3 with proper dtype preservation."""
+    try:
+        from datetime import datetime, timezone
+        import json
+        
+        # Base key without extension
+        base_key = key.replace('.parquet', '')
+        
+        # Save each DataFrame separately to preserve dtypes
+        # 1. Save FIFO transactions
+        if not fifo_df.empty:
+            buffer = BytesIO()
+            fifo_df.to_parquet(buffer, index=False)
+            buffer.seek(0)
+            s3.put_object(
+                Bucket=BUCKET_NAME,
+                Key=f"{base_key}_transactions.parquet",
+                Body=buffer.getvalue()
+            )
+        
+        # 2. Save positions
+        if not positions_df.empty:
+            buffer = BytesIO()
+            positions_df.to_parquet(buffer, index=False)
+            buffer.seek(0)
+            s3.put_object(
+                Bucket=BUCKET_NAME,
+                Key=f"{base_key}_positions.parquet",
+                Body=buffer.getvalue()
+            )
+        
+        # 3. Save journal entries
+        if not journal_df.empty:
+            buffer = BytesIO()
+            journal_df.to_parquet(buffer, index=False)
+            buffer.seek(0)
+            s3.put_object(
+                Bucket=BUCKET_NAME,
+                Key=f"{base_key}_journal.parquet",
+                Body=buffer.getvalue()
+            )
+        
+        # 4. Save metadata as JSON
+        metadata_full = {
+            'save_timestamp': datetime.now(timezone.utc).isoformat(),
+            'fifo_transaction_count': len(fifo_df),
+            'position_count': len(positions_df),
+            'journal_entry_count': len(journal_df),
+            'has_transactions': not fifo_df.empty,
+            'has_positions': not positions_df.empty,
+            'has_journal': not journal_df.empty,
+            **metadata
+        }
+        
+        metadata_json = json.dumps(metadata_full, indent=2)
+        s3.put_object(
+            Bucket=BUCKET_NAME,
+            Key=f"{base_key}_metadata.json",
+            Body=metadata_json.encode('utf-8'),
+            ContentType='application/json'
+        )
+        
+        # Clear cache since we've updated the data
+        if hasattr(load_fifo_ledger_file, 'cache_clear'):
+            load_fifo_ledger_file.cache_clear()
+        
+        print(f"Successfully saved FIFO ledger: {len(fifo_df)} transactions, {len(positions_df)} positions")
+        return True
+        
+    except Exception as e:
+        print(f"Error saving FIFO ledger to S3: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+@lru_cache(maxsize=8)
+def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
+    """Load FIFO ledger results from S3 with proper dtype preservation."""
+    try:
+        import json
+        
+        # Base key without extension
+        base_key = key.replace('.parquet', '')
+        
+        # Load metadata first to check what files exist
+        try:
+            obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_metadata.json")
+            metadata_json = obj["Body"].read().decode('utf-8')
+            metadata = json.loads(metadata_json)
+        except s3.exceptions.NoSuchKey:
+            # No metadata file means no saved ledger
+            return {
+                'fifo_transactions': pd.DataFrame(),
+                'fifo_positions': pd.DataFrame(),
+                'journal_entries': pd.DataFrame(),
+                'metadata': {}
+            }
+        
+        # Load each DataFrame if it exists
+        fifo_df = pd.DataFrame()
+        positions_df = pd.DataFrame()
+        journal_df = pd.DataFrame()
+        
+        # 1. Load FIFO transactions
+        if metadata.get('has_transactions', False):
+            try:
+                obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_transactions.parquet")
+                fifo_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+            except Exception as e:
+                print(f"Warning: Could not load FIFO transactions: {e}")
+        
+        # 2. Load positions
+        if metadata.get('has_positions', False):
+            try:
+                obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_positions.parquet")
+                positions_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+            except Exception as e:
+                print(f"Warning: Could not load positions: {e}")
+        
+        # 3. Load journal entries
+        if metadata.get('has_journal', False):
+            try:
+                obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_journal.parquet")
+                journal_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+            except Exception as e:
+                print(f"Warning: Could not load journal entries: {e}")
+        
+        print(f"Successfully loaded FIFO ledger: {len(fifo_df)} transactions, {len(positions_df)} positions")
+        
+        return {
+            'fifo_transactions': fifo_df,
+            'fifo_positions': positions_df,
+            'journal_entries': journal_df,
+            'metadata': metadata
+        }
+        
+    except Exception as e:
+        print(f"Warning: Failed to load FIFO ledger from S3: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'fifo_transactions': pd.DataFrame(),
+            'fifo_positions': pd.DataFrame(),
+            'journal_entries': pd.DataFrame(),
+            'metadata': {}
+        }
+
+def check_fifo_ledger_exists(key: str = FIFO_LEDGER_KEY) -> bool:
+    """Check if FIFO ledger metadata file exists in S3."""
+    try:
+        base_key = key.replace('.parquet', '')
+        s3.head_object(Bucket=BUCKET_NAME, Key=f"{base_key}_metadata.json")
+        return True
+    except s3.exceptions.NoSuchKey:
+        return False
+    except Exception as e:
+        print(f"Error checking FIFO ledger existence: {e}")
+        return False
+
+def delete_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> bool:
+    """Delete all FIFO ledger files from S3."""
+    try:
+        base_key = key.replace('.parquet', '')
+        success = True
+        
+        # Delete all related files
+        files_to_delete = [
+            f"{base_key}_transactions.parquet",
+            f"{base_key}_positions.parquet", 
+            f"{base_key}_journal.parquet",
+            f"{base_key}_metadata.json"
+        ]
+        
+        for file_key in files_to_delete:
+            try:
+                s3.delete_object(Bucket=BUCKET_NAME, Key=file_key)
+            except s3.exceptions.NoSuchKey:
+                # File doesn't exist, that's okay
+                pass
+            except Exception as e:
+                print(f"Warning: Could not delete {file_key}: {e}")
+                success = False
+        
+        # Clear cache since we've deleted the data
+        if hasattr(load_fifo_ledger_file, 'cache_clear'):
+            load_fifo_ledger_file.cache_clear()
+        
+        return success
+    except Exception as e:
+        print(f"Error deleting FIFO ledger from S3: {e}")
         return False
