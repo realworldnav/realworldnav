@@ -651,6 +651,7 @@ class BlockchainService:
         sell_legs['wallet_id'] = sell_legs['from_address']
         sell_legs['side'] = 'sell'
         sell_legs['qty'] = -sell_legs['token_amount']  # Negative quantity for sell
+        sell_legs['direction'] = 'OUT'  # Fix: FROM wallet should have direction='OUT'
         sell_legs['fund_id'] = sell_legs['wallet_id'].apply(lambda w: self._get_fund_id_for_wallet(w))
         
         # Create buy legs (into the 'to_address' wallet) 
@@ -658,6 +659,7 @@ class BlockchainService:
         buy_legs['wallet_id'] = buy_legs['to_address']
         buy_legs['side'] = 'buy'
         buy_legs['qty'] = buy_legs['token_amount']  # Positive quantity for buy
+        buy_legs['direction'] = 'IN'   # Confirm: TO wallet should have direction='IN'
         buy_legs['fund_id'] = buy_legs['wallet_id'].apply(lambda w: self._get_fund_id_for_wallet(w))
         
         # Concatenate all transactions

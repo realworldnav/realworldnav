@@ -1031,6 +1031,55 @@ def register_crypto_tracker_outputs(output, input, session):
     # Reactive value for FIFO ledger row selection
     fifo_selection = reactive.Value({"rows": []})
     
+    # Reactive filtered dataset - centralized filtering logic
+    @reactive.calc
+    def filtered_fifo_data():
+        """Apply all filters to FIFO data and return filtered DataFrame"""
+        try:
+            # Get base FIFO data
+            fifo_df = fifo_results.get()
+            
+            if fifo_df.empty:
+                return pd.DataFrame()
+            
+            # Start with copy of full data
+            filtered_df = fifo_df.copy()
+            
+            # Apply fund filter
+            try:
+                fund_filter = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
+                if fund_filter and fund_filter != "all":
+                    filtered_df = filtered_df[filtered_df['fund_id'] == fund_filter]
+                    logger.debug(f"Applied fund filter '{fund_filter}': {len(filtered_df)} rows remaining")
+            except Exception as e:
+                logger.debug(f"Could not apply fund filter: {e}")
+            
+            # Apply wallet filter  
+            try:
+                wallet_filter = input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else "all"
+                if wallet_filter and wallet_filter != "all":
+                    # Use exact matching since wallet addresses are already lowercase
+                    filtered_df = filtered_df[filtered_df['wallet_address'].str.lower() == wallet_filter.lower()]
+                    logger.debug(f"Applied wallet filter '{wallet_filter}': {len(filtered_df)} rows remaining")
+            except Exception as e:
+                logger.debug(f"Could not apply wallet filter: {e}")
+            
+            # Apply token filter
+            try:
+                token_filter = input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else "all"
+                if token_filter and token_filter != "all":
+                    filtered_df = filtered_df[filtered_df['asset'] == token_filter]
+                    logger.debug(f"Applied token filter '{token_filter}': {len(filtered_df)} rows remaining")
+            except Exception as e:
+                logger.debug(f"Could not apply token filter: {e}")
+            
+            logger.debug(f"Total filtered FIFO data: {len(filtered_df)} rows")
+            return filtered_df
+            
+        except Exception as e:
+            logger.error(f"Error in filtered_fifo_data calculation: {e}")
+            return pd.DataFrame()
+    
     # Track whether FIFO data was auto-loaded or freshly calculated
     fifo_data_source = reactive.Value("none")  # "none", "auto-loaded", "calculated"
     
@@ -2159,10 +2208,11 @@ def register_crypto_tracker_outputs(output, input, session):
     @output
     @render.data_frame
     def fifo_ledger_table():
-        """Main FIFO Ledger DataGrid with exact column specification"""
-        fifo_df = fifo_results.get()
+        """Main FIFO Ledger DataGrid using centralized filtered dataset"""
+        # Use the reactive filtered dataset instead of applying filters here
+        filtered_df = filtered_fifo_data()
         
-        if fifo_df.empty:
+        if filtered_df.empty:
             # Return placeholder DataFrame with exact column structure requested by user
             placeholder_df = pd.DataFrame({
                 'fund_id': ['fund_i_class_B_ETH'],
@@ -2188,8 +2238,8 @@ def register_crypto_tracker_outputs(output, input, session):
                 height="500px"
             )
         
-        # Use the FIFO DataFrame directly with exact column specification
-        display_df = fifo_df.copy()
+        # Use the filtered DataFrame directly
+        display_df = filtered_df.copy()
         
         # Ensure all required columns exist and are properly formatted
         required_columns = [
@@ -2231,27 +2281,6 @@ def register_crypto_tracker_outputs(output, input, session):
         existing_cols = [col for col in required_columns if col in display_df.columns]
         extra_cols = [col for col in display_df.columns if col not in required_columns]
         final_df = display_df[existing_cols + extra_cols]
-        
-        # Apply any additional filtering at display level if needed
-        try:
-            fund_filter = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
-            wallet_filter = input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else "all"
-            token_filter = input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else "all"
-            
-            if fund_filter and fund_filter != "all":
-                final_df = final_df[final_df['fund_id'] == fund_filter]
-            
-            if wallet_filter and wallet_filter != "all":
-                # Use exact matching since wallet_filter now contains full address (both lowercase)
-                final_df = final_df[final_df['wallet_address'].str.lower() == wallet_filter.lower()]
-            
-            if token_filter and token_filter != "all":
-                # Filter by the selected token
-                final_df = final_df[final_df['asset'] == token_filter]
-                logger.info(f"Applied token filter '{token_filter}': {len(final_df)} transactions")
-                
-        except Exception as e:
-            logger.debug(f"Could not apply display filters: {e}")
         
         return render.DataGrid(
             final_df,
@@ -3007,8 +3036,8 @@ def register_crypto_tracker_outputs(output, input, session):
             selection_info = fifo_selection.get()
             selected_rows = selection_info.get("rows", [])
             
-            # Get FIFO data
-            fifo_df = fifo_results.get()
+            # Get FILTERED FIFO data - this ensures row indices match the displayed table
+            fifo_df = filtered_fifo_data()
             
             if fifo_df.empty:
                 return ui.div(
