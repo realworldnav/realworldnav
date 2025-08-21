@@ -18,7 +18,13 @@ from decimal import Decimal
 import requests
 from functools import lru_cache
 
-from ...s3_utils import load_WALLET_file, load_approved_tokens_file, save_approved_tokens_file
+from ...s3_utils import (
+    load_WALLET_file, 
+    load_approved_tokens_file, 
+    save_approved_tokens_file,
+    load_rejected_tokens_file,
+    save_rejected_tokens_file
+)
 from ...services.blockchain_service import BlockchainService
 from ...services.token_classifier import TokenClassifier
 from ...config.blockchain_config import INFURA_URL, VERIFIED_TOKENS, TOKEN_STATUS
@@ -169,11 +175,11 @@ def crypto_token_tracker_ui():
                     # Status Dashboard
                     ui.output_ui("review_status_dashboard"),
                     
-                    # Main Review Layout - Split between transactions and token approval
+                    # Main Review Layout - Split between transactions and transaction details (matching Ready layout)
                     ui.row(
-                        # Left Panel (70%) - Transactions Table
+                        # Left Panel (75%) - Transactions Table
                         ui.column(
-                            8,
+                            9,
                             ui.card(
                                 ui.card_header(
                                     ui.div(
@@ -191,17 +197,31 @@ def crypto_token_tracker_ui():
                             )
                         ),
                         
-                        # Right Panel (30%) - Token Approval Sidebar
+                        # Right Panel (25%) - Transaction Details Card
                         ui.column(
-                            4,
+                            3,
+                            ui.card(
+                                ui.card_header("Transaction Details"),
+                                ui.card_body(
+                                    ui.output_ui("review_transaction_details_card")
+                                )
+                            )
+                        )
+                    ),
+                    
+                    # Token Approval and Management Section - Below main tables
+                    ui.row(
+                        ui.column(
+                            6,
                             ui.card(
                                 ui.card_header(ui.HTML('<i class="bi bi-shield-exclamation text-warning"></i> Token Approval')),
                                 ui.card_body(
                                     ui.output_ui("token_approval_sidebar")
                                 )
-                            ),
-                            
-                            # Token Management Section
+                            )
+                        ),
+                        ui.column(
+                            6,
                             ui.card(
                                 ui.card_header(ui.HTML('<i class="bi bi-gear text-info"></i> Token Management')),
                                 ui.card_body(
@@ -277,6 +297,26 @@ def crypto_token_tracker_ui():
 def register_crypto_token_tracker_outputs(output, input, session):
     """Register all crypto token tracker outputs with blockchain integration"""
     
+    # Helper function to check if token should be treated as verified ETH
+    def is_eth_token(token_address):
+        """Check if token address represents native ETH"""
+        if token_address is None or token_address == '' or str(token_address).lower() in ['none', 'nan']:
+            return True
+        return False
+    
+    # Helper function to check if token is verified (including ETH)
+    def is_verified_token(token_address):
+        """Check if token is verified (including native ETH)"""
+        # Handle ETH separately - it's verified but not in VERIFIED_TOKENS (to avoid Web3 errors)
+        if is_eth_token(token_address):
+            return True
+        # Handle "ETH" string identifier (from post-processing)
+        if str(token_address).upper() == "ETH":
+            return True
+        # Check other verified token contract addresses
+        verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
+        return str(token_address).lower() in verified_addresses
+    
     # Helper function for wallet-to-fund mapping
     @reactive.calc
     def get_wallet_to_fund_mapping():
@@ -310,6 +350,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
     
     # Track approved tokens changes for reactive updates
     approved_tokens_updated = reactive.value(0)
+    
+    # Track rejected tokens changes for reactive updates
+    rejected_tokens_updated = reactive.value(0)
     
     # Track save status for user feedback
     save_status_msg = reactive.value("")
@@ -565,6 +608,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
                         processed_df['token_amount'] = processed_df['qty'].abs()  # Use absolute value for display
                         print(f"📊 Mapped 'qty' to 'token_amount' (absolute values for display)")
                     
+                    # Note: ETH handling moved to post-processing to avoid Web3 hex string errors
+                    
                     # Quantity validation: Ensure proper signs are preserved for FIFO processing
                     if 'side' in processed_df.columns:
                         print(f"📊 Side distribution: {processed_df['side'].value_counts().to_dict()}")
@@ -579,8 +624,30 @@ def register_crypto_token_tracker_outputs(output, input, session):
                                detail=f"Successfully processed {len(processed_df)} transactions")
                     
                     logger.info(f"Fetched and processed {len(processed_df)} transactions")
-                    fetched_transactions.set(processed_df)
-                    fetch_progress_message.set(f"✅ Successfully fetched {len(processed_df)} transactions!")
+                    
+                    # Post-process: Add "ETH" identifier for native transactions (after Web3 operations complete)
+                    final_df = processed_df.copy()
+                    if 'token_address' in final_df.columns:
+                        blank_addresses = final_df['token_address'].isin(['', None]) | final_df['token_address'].isna()
+                        blank_count = blank_addresses.sum()
+                        
+                        if blank_count > 0:
+                            print(f"📊 Post-processing: Found {blank_count} transactions with blank token addresses (ETH native)")
+                            # Now safe to assign "ETH" after all Web3 operations are complete
+                            final_df.loc[blank_addresses, 'token_address'] = 'ETH'
+                            
+                            # Also ensure token_symbol is set to ETH for these transactions
+                            if 'token_symbol' in final_df.columns:
+                                final_df.loc[blank_addresses, 'token_symbol'] = 'ETH'
+                            
+                            # Ensure token_name is set to "Ethereum" for these transactions
+                            if 'token_name' in final_df.columns:
+                                final_df.loc[blank_addresses, 'token_name'] = 'Ethereum'
+                            
+                            print(f"📊 Post-processing: Assigned 'ETH' identifier to {blank_count} native ETH transactions")
+                    
+                    fetched_transactions.set(final_df)
+                    fetch_progress_message.set(f"✅ Successfully fetched {len(final_df)} transactions!")
                 
             except Exception as e:
                 logger.error(f"Error fetching transactions: {e}")
@@ -667,18 +734,18 @@ def register_crypto_token_tracker_outputs(output, input, session):
         except:
             approved_addresses = set()
         
-        # Count transactions by status
-        verified_txns = len(df[df['token_address'].str.lower().isin(verified_addresses)])
-        approved_txns = len(df[df['token_address'].str.lower().isin(approved_addresses)])
+        # Count transactions by status using helper functions
+        verified_mask = df['token_address'].apply(is_verified_token)
+        approved_mask = df['token_address'].str.lower().isin(approved_addresses) & ~verified_mask
+        
+        verified_txns = verified_mask.sum()
+        approved_txns = approved_mask.sum()
         unverified_txns = total_txns - verified_txns - approved_txns
         
         # Count unique tokens by status
-        verified_tokens_count = df[df['token_address'].str.lower().isin(verified_addresses)]['token_address'].nunique()
-        approved_tokens_count = df[df['token_address'].str.lower().isin(approved_addresses)]['token_address'].nunique()
-        unverified_tokens_count = df[
-            (~df['token_address'].str.lower().isin(verified_addresses)) &
-            (~df['token_address'].str.lower().isin(approved_addresses))
-        ]['token_address'].nunique()
+        verified_tokens_count = df[verified_mask]['token_address'].nunique()
+        approved_tokens_count = df[approved_mask]['token_address'].nunique()
+        unverified_tokens_count = df[~verified_mask & ~approved_mask]['token_address'].nunique()
         
         return ui.div(
             ui.row(
@@ -755,8 +822,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
             # Use token_amount for display, properly signed
             token_amount = float(row.get('token_amount', 0)) * amount_multiplier
             
-            # Determine status with enhanced icons
-            if token_addr in verified_addresses:
+            # Determine status with enhanced icons using helper functions
+            if is_verified_token(row.get('token_address', '')):
                 status = "✅ Verified"
                 status_class = "success"
             elif token_addr in approved_addresses:
@@ -823,8 +890,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
     @output
     @render.ui
     def token_approval_sidebar():
-        # Watch for changes in approved tokens to trigger refresh
+        # Watch for changes in approved and rejected tokens to trigger refresh
         approved_tokens_updated.get()
+        rejected_tokens_updated.get()
         
         df = fetched_transactions.get()
         if df.empty or 'token_address' not in df.columns:
@@ -837,7 +905,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 ui.p("Please fetch transactions first.", class_="small text-muted mt-2")
             )
         
-        # Get verified and approved addresses
+        # Get verified, approved, and rejected addresses
         verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
         try:
             approved_tokens = load_approved_tokens_file()
@@ -845,20 +913,33 @@ def register_crypto_token_tracker_outputs(output, input, session):
         except:
             approved_addresses = set()
         
-        # Filter for unverified tokens
-        unverified_df = df[
-            (~df['token_address'].str.lower().isin(verified_addresses)) &
-            (~df['token_address'].str.lower().isin(approved_addresses))
-        ].copy()
+        try:
+            rejected_tokens = load_rejected_tokens_file()
+            rejected_addresses = {addr.lower() for addr in rejected_tokens}
+        except:
+            rejected_addresses = set()
+        
+        # Filter for unverified tokens (excluding verified, approved, and rejected)
+        verified_mask = df['token_address'].apply(is_verified_token)
+        approved_mask = df['token_address'].str.lower().isin(approved_addresses)
+        rejected_mask = df['token_address'].str.lower().isin(rejected_addresses)
+        
+        unverified_df = df[~verified_mask & ~approved_mask & ~rejected_mask].copy()
         
         if unverified_df.empty:
+            # Count rejected tokens for display
+            rejected_count = len(rejected_addresses)
+            status_text = "All transaction tokens are either verified, approved, or rejected."
+            if rejected_count > 0:
+                status_text += f" ({rejected_count} tokens rejected)"
+            
             return ui.div(
                 ui.div(
                     ui.HTML('<i class="bi bi-check-circle text-success"></i>'),
-                    ui.strong("All tokens approved!", class_="text-success ms-2"),
+                    ui.strong("All tokens processed!", class_="text-success ms-2"),
                     class_="d-flex align-items-center mb-2"
                 ),
-                ui.p("All transaction tokens are either verified or manually approved.", class_="small text-muted")
+                ui.p(status_text, class_="small text-muted")
             )
         
         # Get unique unverified tokens with stats
@@ -872,7 +953,18 @@ def register_crypto_token_tracker_outputs(output, input, session):
         # Create approval interface
         approval_components = []
         
-        # Individual token approval section header (removed bulk actions as requested)
+        # Show status summary
+        approved_count = len(approved_addresses)
+        rejected_count = len(rejected_addresses)
+        
+        if approved_count > 0 or rejected_count > 0:
+            approval_components.append(
+                ui.div(
+                    ui.span(f"✅ {approved_count} Approved", class_="badge bg-success me-2") if approved_count > 0 else "",
+                    ui.span(f"❌ {rejected_count} Rejected", class_="badge bg-danger") if rejected_count > 0 else "",
+                    class_="mb-2"
+                )
+            )
         
         # Individual token approval cards
         approval_components.append(ui.h6(f"Tokens Needing Approval ({len(token_stats)})", class_="text-danger mb-2"))
@@ -900,43 +992,42 @@ def register_crypto_token_tracker_outputs(output, input, session):
             token_card = ui.div(
                 ui.card(
                     ui.card_body(
-                        # Token header
+                        # Token header with full name
                         ui.div(
                             ui.div(
-                                ui.strong(token_symbol, class_="text-primary"),
+                                ui.strong(f"{token_symbol}", class_="text-primary fs-5"),
                                 ui.br(),
-                                ui.HTML(f'<small class="text-muted">{token_info["name"]}</small>')
+                                ui.HTML(f'<span class="text-muted">{token_info["name"]}</span>')
                             ),
                             risk_badge,
-                            class_="d-flex justify-content-between align-items-center mb-2"
+                            class_="d-flex justify-content-between align-items-center mb-3"
                         ),
                         
-                        # Token stats
+                        # Token stats - removed volume, showing full address
                         ui.div(
-                            ui.HTML(f'<small class="text-muted d-block">Transactions: {tx_count}</small>'),
-                            ui.HTML(f'<small class="text-muted d-block">Volume: ${total_usd:,.2f}</small>'),
-                            ui.HTML(f'<small class="text-muted d-block">Address: {token_addr[:8]}...{token_addr[-6:]}</small>'),
-                            class_="mb-2"
+                            ui.HTML(f'<small class="text-muted d-block"><strong>Transactions:</strong> {tx_count}</small>'),
+                            ui.HTML(f'<small class="text-muted d-block" style="word-break: break-all;"><strong>Address:</strong> {token_addr}</small>'),
+                            class_="mb-3"
                         ),
                         
-                        # Action buttons with sanitized IDs
+                        # Action buttons with better styling
                         ui.div(
                             ui.input_action_button(
                                 f"approve_token_{sanitized_id}",
-                                ui.HTML('<i class="bi bi-check"></i>'),
-                                class_="btn-success btn-sm me-1",
+                                ui.HTML('<i class="bi bi-check-circle"></i> Approve'),
+                                class_="btn-success btn-sm me-2",
                                 title=f"Approve {token_symbol}"
                             ),
                             ui.input_action_button(
                                 f"reject_token_{sanitized_id}",
-                                ui.HTML('<i class="bi bi-x"></i>'),
-                                class_="btn-danger btn-sm me-1",
+                                ui.HTML('<i class="bi bi-x-circle"></i> Reject'),
+                                class_="btn-danger btn-sm me-2",
                                 title=f"Reject {token_symbol}"
                             ),
                             ui.input_action_button(
                                 f"info_token_{sanitized_id}",
-                                ui.HTML('<i class="bi bi-info"></i>'),
-                                class_="btn-info btn-sm",
+                                ui.HTML('<i class="bi bi-box-arrow-up-right"></i> Etherscan'),
+                                class_="btn-outline-info btn-sm",
                                 title=f"View {token_symbol} on Etherscan"
                             ),
                             class_="d-flex justify-content-center"
@@ -1000,8 +1091,13 @@ def register_crypto_token_tracker_outputs(output, input, session):
             ui.div(
                 ui.input_action_button(
                     "view_approved_tokens",
-                    ui.HTML('<i class="bi bi-list"></i> View All Approved'),
-                    class_="btn-outline-info btn-sm me-1"
+                    ui.HTML('<i class="bi bi-check-circle"></i> View Approved'),
+                    class_="btn-outline-success btn-sm me-1"
+                ),
+                ui.input_action_button(
+                    "view_rejected_tokens",
+                    ui.HTML('<i class="bi bi-x-circle"></i> View Rejected'),
+                    class_="btn-outline-danger btn-sm me-1"
                 ),
                 ui.input_action_button(
                     "export_token_list",
@@ -1058,11 +1154,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
         except:
             approved_addresses = set()
         
-        # Count ready transactions (verified + approved)
-        ready_df = df[
-            (df['token_address'].str.lower().isin(verified_addresses)) |
-            (df['token_address'].str.lower().isin(approved_addresses))
-        ]
+        # Count ready transactions (verified + approved) using helper functions
+        verified_mask = df['token_address'].apply(is_verified_token)
+        approved_mask = df['token_address'].str.lower().isin(approved_addresses)
+        ready_df = df[verified_mask | approved_mask]
         
         total_ready = len(ready_df)
         total_value = ready_df['token_value_usd'].sum() if not ready_df.empty else 0
@@ -1114,11 +1209,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
         except:
             approved_addresses = set()
         
-        # Filter for ready transactions (verified + approved)
-        ready_df = df[
-            (df['token_address'].str.lower().isin(verified_addresses)) |
-            (df['token_address'].str.lower().isin(approved_addresses))
-        ].copy()
+        # Filter for ready transactions (verified + approved) using helper functions
+        verified_mask = df['token_address'].apply(is_verified_token)
+        approved_mask = df['token_address'].str.lower().isin(approved_addresses)
+        ready_df = df[verified_mask | approved_mask].copy()
         
         if ready_df.empty:
             return pd.DataFrame(columns=['Date', 'Fund', 'Wallet ID', 'Token', 'IN/OUT', 'Token Amount', 'Value (ETH)', 'Value (USD)', 'Status', 'Hash'])
@@ -1145,8 +1239,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
             # Use token_amount for display, properly signed
             token_amount = float(row.get('token_amount', 0)) * amount_multiplier
             
-            # Determine status
-            if token_addr in verified_addresses:
+            # Determine status using helper functions
+            if is_verified_token(row.get('token_address', '')):
                 status = "✅ Verified"
             elif token_addr in approved_addresses:
                 status = "☑️ Approved"
@@ -1366,14 +1460,14 @@ def register_crypto_token_tracker_outputs(output, input, session):
     
     # Token discovery and handler registration
     @reactive.effect
-    @reactive.event(fetched_transactions)
+    @reactive.event(fetched_transactions, rejected_tokens_updated)
     def discover_and_register_token_handlers():
         """Discover tokens in fetched transactions and register handlers"""
         df = fetched_transactions.get()
         if df.empty or 'token_address' not in df.columns:
             return
         
-        # Get verified and approved addresses
+        # Get verified, approved, and rejected addresses
         verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
         try:
             approved_tokens = load_approved_tokens_file()
@@ -1381,16 +1475,23 @@ def register_crypto_token_tracker_outputs(output, input, session):
         except:
             approved_addresses = set()
         
-        # Find unverified tokens that need handlers
-        unverified_df = df[
-            (~df['token_address'].str.lower().isin(verified_addresses)) &
-            (~df['token_address'].str.lower().isin(approved_addresses))
-        ]
+        try:
+            rejected_tokens = load_rejected_tokens_file()
+            rejected_addresses = {addr.lower() for addr in rejected_tokens}
+        except:
+            rejected_addresses = set()
+        
+        # Find unverified tokens that need handlers (excluding verified, approved and rejected)
+        verified_mask = df['token_address'].apply(is_verified_token)
+        approved_mask = df['token_address'].str.lower().isin(approved_addresses)
+        rejected_mask = df['token_address'].str.lower().isin(rejected_addresses)
+        
+        unverified_df = df[~verified_mask & ~approved_mask & ~rejected_mask]
         
         if not unverified_df.empty:
             unique_tokens = unverified_df['token_address'].unique()
-            # Filter out None values and empty strings
-            unique_tokens = [addr for addr in unique_tokens if addr is not None and addr != '' and str(addr).lower() != 'none']
+            # Filter out None values, empty strings, and ETH tokens
+            unique_tokens = [addr for addr in unique_tokens if not is_eth_token(addr)]
             current_registered = registered_token_handlers.get()
             
             for token_addr in unique_tokens:
@@ -1470,6 +1571,26 @@ def register_crypto_token_tracker_outputs(output, input, session):
     def handle_token_rejection(token_address):
         """Handle rejection of a specific token"""
         try:
+            # Load current rejected tokens
+            try:
+                rejected_tokens = load_rejected_tokens_file()
+            except:
+                rejected_tokens = set()
+            
+            # Check if already rejected
+            if token_address in rejected_tokens:
+                logger.info(f"Token {token_address} already in rejected list")
+                return
+            
+            # Add to rejected tokens set
+            rejected_tokens.add(token_address)
+            
+            # Save updated rejected tokens to S3
+            if save_rejected_tokens_file(rejected_tokens):
+                logger.info(f"✅ Successfully saved {len(rejected_tokens)} rejected tokens to S3")
+            else:
+                logger.error(f"Failed to save rejected tokens to S3")
+            
             # Remove transactions with this token from fetched data
             current_df = fetched_transactions.get()
             filtered_df = current_df[current_df['token_address'] != token_address]
@@ -1478,6 +1599,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
             # Get token info for logging
             token_info = get_token_info_from_address(token_address)
             logger.info(f"❌ Rejected token: {token_info['name']} ({token_address})")
+            
+            # Trigger reactive update for UI refresh
+            rejected_tokens_updated.set(rejected_tokens_updated.get() + 1)
             
         except Exception as e:
             logger.error(f"Error rejecting token {token_address}: {e}")
@@ -1490,10 +1614,14 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Get token info for logging
             token_info = get_token_info_from_address(token_address)
-            logger.info(f"🔍 Etherscan URL for {token_info['name']} ({token_address}): {etherscan_url}")
+            logger.info(f"🔍 Opening Etherscan for {token_info['name']} ({token_address})")
             
-            # In a real web environment, this would open the URL in a new tab
-            # For now, the URL is logged so users can copy it
+            # Open URL in new tab using JavaScript injection
+            ui.insert_ui(
+                ui.tags.script(f'window.open("{etherscan_url}", "_blank");'),
+                selector="body",
+                where="afterEnd"
+            )
             
         except Exception as e:
             logger.error(f"Error generating Etherscan link for token {token_address}: {e}")
@@ -1637,6 +1765,96 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
         except Exception as e:
             logger.error(f"Error viewing approved tokens: {e}")
+    
+    # Handle view all rejected tokens
+    @reactive.effect
+    @reactive.event(input.view_rejected_tokens)
+    def view_rejected_tokens():
+        try:
+            # Load rejected tokens
+            rejected_tokens = load_rejected_tokens_file()
+            
+            if not rejected_tokens:
+                # Show modal with no tokens message
+                m = ui.modal(
+                    ui.div(
+                        ui.p("No rejected tokens found.", class_="text-muted"),
+                        ui.p("Rejected tokens will appear here after you reject them from the approval interface.", class_="small")
+                    ),
+                    title="Rejected Tokens",
+                    size="lg",
+                    easy_close=True,
+                    footer=ui.modal_button("Close")
+                )
+                ui.modal_show(m)
+                return
+            
+            # Create table data for rejected tokens
+            table_rows = []
+            for i, token_addr in enumerate(sorted(rejected_tokens), 1):
+                token_info = get_token_info_from_address(token_addr)
+                table_rows.append(
+                    ui.tags.tr(
+                        ui.tags.td(str(i), style="width: 50px;"),
+                        ui.tags.td(
+                            ui.div(
+                                ui.strong(token_info['name']),
+                                ui.br(),
+                                ui.span(token_info['symbol'], class_="text-muted small")
+                            )
+                        ),
+                        ui.tags.td(
+                            ui.div(
+                                ui.code(token_addr, class_="small"),
+                                ui.br(),
+                                ui.span(f"Source: {token_info['source']}", class_="text-muted small")
+                            )
+                        ),
+                        ui.tags.td(
+                            ui.div(
+                                ui.tags.a(
+                                    ui.HTML('<i class="bi bi-box-arrow-up-right"></i> Etherscan'),
+                                    href=f"https://etherscan.io/token/{token_addr}",
+                                    target="_blank",
+                                    class_="btn btn-sm btn-outline-primary"
+                                ),
+                                style="text-align: right;"
+                            )
+                        )
+                    )
+                )
+            
+            # Create modal with rejected tokens table
+            m = ui.modal(
+                ui.div(
+                    ui.p(f"Total rejected tokens: {len(rejected_tokens)}", class_="mb-3"),
+                    ui.div(
+                        ui.tags.table(
+                            ui.tags.thead(
+                                ui.tags.tr(
+                                    ui.tags.th("#", style="width: 50px;"),
+                                    ui.tags.th("Token"),
+                                    ui.tags.th("Address"),
+                                    ui.tags.th("Actions", style="text-align: right;")
+                                )
+                            ),
+                            ui.tags.tbody(*table_rows),
+                            class_="table table-hover table-sm"
+                        ),
+                        style="max-height: 500px; overflow-y: auto;"
+                    )
+                ),
+                title="All Rejected Tokens",
+                size="xl",
+                easy_close=True,
+                footer=ui.modal_button("Close")
+            )
+            ui.modal_show(m)
+            
+            logger.info(f"Displaying {len(rejected_tokens)} rejected tokens in modal")
+            
+        except Exception as e:
+            logger.error(f"Error viewing rejected tokens: {e}")
     
     # Handle legacy token approval (removed - no longer needed with new UI)
     # The approve_selected_token button no longer exists in the new 2-tab UI
@@ -2037,8 +2255,211 @@ def register_crypto_token_tracker_outputs(output, input, session):
             for _, row in df.iterrows():
                 token_addr = str(row.get('token_address', ''))
                 
-                # Determine status
-                if token_addr.lower() in verified_addresses:
+                # Determine status using helper functions
+                if is_verified_token(row.get('token_address', '')):
+                    status = "✅ Verified"
+                elif token_addr.lower() in approved_addresses:
+                    status = "☑️ Approved" 
+                else:
+                    status = "⚠️ Needs Review"
+                
+                formatted_row = {
+                    'tx_hash': row.get('tx_hash', ''),
+                    'date': row.get('date', ''),
+                    'token_name': row.get('token_name', row.get('token_symbol', 'Unknown')),
+                    'token_amount': row.get('token_amount', 0),
+                    'token_value_usd': row.get('token_value_usd', 0),
+                    'token_value_eth': row.get('token_value_eth', 0),
+                    'direction': row.get('direction', 'Unknown'),
+                    'from_address': row.get('from_address', ''),
+                    'to_address': row.get('to_address', ''),
+                    'status': status,
+                    '_sort_priority': 0 if status == "⚠️ Needs Review" else (1 if status == "☑️ Approved" else 2)
+                }
+                formatted_data.append(formatted_row)
+            
+            # Sort the same way as review_transactions_table
+            formatted_df = pd.DataFrame(formatted_data)
+            if not formatted_df.empty:
+                formatted_df = formatted_df.sort_values(['_sort_priority', 'date'], ascending=[True, False])
+                formatted_df = formatted_df.head(100)  # Same limit as table
+            
+            # Now get the correct row
+            if selected_idx < len(formatted_df):
+                tx_row = formatted_df.iloc[selected_idx]
+                tx_hash = tx_row['tx_hash']
+                etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
+            else:
+                tx_hash = ""
+                etherscan_url = ""
+        else:
+            tx_hash = ""
+            etherscan_url = ""
+        
+        if tx_hash:
+            
+            # Get additional transaction details for display
+            date_str = tx_row.get('date', 'Unknown')
+            if hasattr(date_str, 'strftime'):
+                date_str = date_str.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(date_str, str):
+                try:
+                    date_str = pd.to_datetime(date_str).strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+            
+            token_name = tx_row.get('token_name', 'Unknown')
+            direction = tx_row.get('direction', 'Unknown')
+            amount = tx_row.get('token_amount', 0)
+            value_usd = tx_row.get('token_value_usd', 0)
+            value_eth = tx_row.get('token_value_eth', 0)
+            from_addr = tx_row.get('from_address', '')
+            to_addr = tx_row.get('to_address', '')
+            
+            return ui.div(
+                # Transaction header
+                ui.div(
+                    ui.HTML('<i class="bi bi-receipt text-success"></i>'),
+                    ui.strong("Transaction Selected", class_="text-success ms-2"),
+                    class_="d-flex align-items-center mb-3"
+                ),
+                
+                # Transaction details
+                ui.div(
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Hash</small>'),
+                        ui.div(ui.code(tx_hash, class_="small"), class_="mt-1"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Date</small>'),
+                        ui.div(date_str, class_="mt-1 small"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Token</small>'),
+                        ui.div(token_name, class_="mt-1 small fw-bold"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Direction</small>'),
+                        ui.div(
+                            ui.span(direction, class_="badge bg-success" if direction == "IN" else "badge bg-danger"),
+                            class_="mt-1"
+                        ),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Amount</small>'),
+                        ui.div(f"{amount:,.6f}", class_="mt-1 small font-monospace"),
+                        class_="mb-2"
+                    ),
+                    ui.div(
+                        ui.HTML('<small class="text-muted">Value</small>'),
+                        ui.div(
+                            ui.div(f"{value_eth:.6f} ETH", class_="small font-monospace"),
+                            ui.div(f"${value_usd:,.2f}", class_="small font-monospace text-success"),
+                            class_="mt-1"
+                        ),
+                        class_="mb-3"
+                    ),
+                ),
+                
+                # Etherscan link
+                ui.hr(),
+                ui.div(
+                    ui.HTML(f'<a href="{etherscan_url}" target="_blank" class="btn btn-primary w-100">'),
+                    ui.HTML('<i class="bi bi-box-arrow-up-right me-2"></i>View on Etherscan'),
+                    ui.HTML('</a>'),
+                    class_="text-center"
+                )
+            )
+        
+        return ui.div(
+            ui.div(
+                ui.HTML('<i class="bi bi-exclamation-triangle text-warning"></i>'),
+                ui.p("Invalid selection", class_="text-warning mb-0 ms-2"),
+                class_="d-flex align-items-center"
+            ),
+            ui.p("Unable to retrieve transaction details. Please try selecting a different transaction.", class_="small text-muted mt-2")
+        )
+    
+    # Review transaction details card (duplicate of transaction_details_card for Review section)
+    @output
+    @render.ui
+    def review_transaction_details_card():
+        df = fetched_transactions.get()
+        
+        if df.empty:
+            return ui.div(
+                ui.div(
+                    ui.HTML('<i class="bi bi-info-circle text-muted"></i>'),
+                    ui.p("No transactions available", class_="text-muted mb-0 ms-2"),
+                    class_="d-flex align-items-center"
+                ),
+                ui.p("Please fetch transactions first.", class_="small text-muted mt-2")
+            )
+        
+        # Get selected rows from either review or ready table
+        try:
+            # Check current_selection first (this tracks both tables)
+            selection_info = current_selection.get()
+            print(f"DEBUG review_transaction_details_card: current_selection = {selection_info}")
+            
+            has_selection = selection_info["table"] is not None and len(selection_info["rows"]) > 0
+            selected_rows = selection_info["rows"]
+            selected_table = selection_info["table"]
+            
+            # Fallback to input-based approach for review table
+            if not has_selection:
+                try:
+                    cell_selection_input = input.review_transactions_table_cell_selection()
+                    selected_rows = list(cell_selection_input.get("rows", [])) if cell_selection_input else []
+                    has_selection = len(selected_rows) > 0
+                    selected_table = "review" if has_selection else None
+                    print(f"DEBUG review_transaction_details_card: fallback input cell_selection = {cell_selection_input}")
+                except:
+                    pass
+            
+            print(f"DEBUG review_transaction_details_card: has_selection = {has_selection}, selected_table = {selected_table}, selected_rows = {selected_rows}")
+            
+        except Exception as e:
+            print(f"DEBUG: Error getting selection: {e}")
+            has_selection = False
+            selected_rows = []
+            selected_table = None
+        
+        if not has_selection:
+            return ui.div(
+                ui.div(
+                    ui.HTML('<i class="bi bi-hand-index text-primary"></i>'),
+                    ui.p("Select a transaction", class_="text-primary mb-0 ms-2"),
+                    class_="d-flex align-items-center"
+                ),
+                ui.p("Click on a transaction row to view details and access Etherscan.", class_="small text-muted mt-2")
+            )
+        
+        # Get the selected transaction data
+        if has_selection and len(selected_rows) > 0:
+            # Fallback to manual reconstruction if using cell_selection
+            selected_idx = selected_rows[0]
+            
+            # We need to reconstruct the formatted data to match what's displayed in review_transactions_table
+            # Get verified and approved addresses
+            verified_addresses = {addr.lower() for addr in VERIFIED_TOKENS.values()}
+            try:
+                approved_tokens = load_approved_tokens_file()
+                approved_addresses = {addr.lower() for addr in approved_tokens}
+            except:
+                approved_addresses = set()
+            
+            # Recreate the formatted data (same logic as review_transactions_table)
+            formatted_data = []
+            for _, row in df.iterrows():
+                token_addr = str(row.get('token_address', ''))
+                
+                # Determine status using helper functions
+                if is_verified_token(row.get('token_address', '')):
                     status = "✅ Verified"
                 elif token_addr.lower() in approved_addresses:
                     status = "☑️ Approved" 

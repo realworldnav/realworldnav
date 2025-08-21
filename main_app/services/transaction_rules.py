@@ -57,6 +57,7 @@ class TransactionRuleEngine:
             'rule_4_dropped': 0,
             'rule_5_applied': 0,
             'rule_6_applied': 0,
+            'rule_7_applied': 0,
             'total_processed': 0
         }
     
@@ -124,20 +125,33 @@ class TransactionRuleEngine:
         # Debug hash to track
         debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
         
-        logger.info(f"Starting rule processing for {len(transactions)} transactions")
+        logger.info(f"🚀🚀🚀 RULE ENGINE: Starting rule processing for {len(transactions)} transactions 🚀🚀🚀")
         self.rule_stats['total_processed'] = len(transactions)
         
         # Check if debug hash is in the transactions
         debug_tx = None
+        logger.info(f"🚀🚀🚀 RULE ENGINE: Starting with {len(transactions)} transactions, searching for {debug_hash} 🚀🚀🚀")
+        
+        # List all transaction hashes for debugging
+        all_hashes = [tx.get('tx_hash', 'NO_HASH') for tx in transactions]
+        logger.info(f"🚀 RULE ENGINE: All transaction hashes: {all_hashes[:10]}..." if len(all_hashes) > 10 else f"🚀 RULE ENGINE: All transaction hashes: {all_hashes}")
+        
         for tx in transactions:
-            if tx.get('tx_hash', '').lower() == debug_hash.lower():
+            tx_hash = tx.get('tx_hash', '').lower()
+            if tx_hash == debug_hash.lower():
                 debug_tx = tx
-                logger.info(f"🔍 DEBUG HASH FOUND: {debug_hash}")
-                logger.info(f"🔍 Initial transaction data: {debug_tx}")
+                logger.info(f"🚀🚀🚀 RULE ENGINE: DEBUG HASH FOUND! {debug_hash} 🚀🚀🚀")
+                logger.info(f"🚀 Initial transaction data: {debug_tx}")
                 break
         
         if not debug_tx:
-            logger.info(f"🔍 DEBUG HASH NOT FOUND: {debug_hash} not in {len(transactions)} transactions")
+            logger.info(f"🚀 RULE ENGINE: DEBUG HASH NOT FOUND: {debug_hash} not in {len(transactions)} transactions")
+            # Check for partial matches
+            partial_matches = [tx.get('tx_hash', '') for tx in transactions if debug_hash[:20].lower() in tx.get('tx_hash', '').lower()]
+            if partial_matches:
+                logger.info(f"🚀 RULE ENGINE: Partial matches found: {partial_matches}")
+            else:
+                logger.info(f"🚀 RULE ENGINE: No partial matches found for debug hash")
         
         # Convert to DataFrame for easier processing
         df = pd.DataFrame(transactions)
@@ -151,14 +165,16 @@ class TransactionRuleEngine:
         
         # Apply rules in order (critical for correctness)
         def debug_after_rule(df, rule_name):
-            if debug_tx:
-                debug_rows = df[df['tx_hash'].str.lower() == debug_hash.lower()]
-                if not debug_rows.empty:
-                    logger.info(f"🔍 After {rule_name}: {len(debug_rows)} rows for debug hash")
-                    for idx, row in debug_rows.iterrows():
-                        logger.info(f"🔍 {rule_name} - Row {idx}: side={row.get('side')}, qty={row.get('qty')}, asset={row.get('asset')}, from={row.get('from_address')}, to={row.get('to_address')}")
-                else:
-                    logger.info(f"🔍 After {rule_name}: DEBUG HASH NOT FOUND in {len(df)} rows")
+            debug_rows = df[df['tx_hash'].str.lower() == debug_hash.lower()]
+            if not debug_rows.empty:
+                logger.info(f"🚀🚀 After {rule_name}: FOUND {len(debug_rows)} rows for debug hash! 🚀🚀")
+                for idx, row in debug_rows.iterrows():
+                    logger.info(f"🚀 {rule_name} - Row {idx}: side={row.get('side')}, qty={row.get('qty')}, asset={row.get('asset')}, from={row.get('from_address')}, to={row.get('to_address')}")
+            else:
+                logger.info(f"🚀 After {rule_name}: DEBUG HASH NOT FOUND in {len(df)} rows")
+                # Show sample of what hashes we do have
+                sample_hashes = df['tx_hash'].head(3).tolist() if 'tx_hash' in df.columns and not df.empty else []
+                logger.info(f"🚀 Sample hashes after {rule_name}: {sample_hashes}")
         
         df = self._apply_rule_0_wallet_filtering(df)
         debug_after_rule(df, "Rule 0 - Wallet Filtering")
@@ -181,18 +197,23 @@ class TransactionRuleEngine:
         df = self._apply_rule_6_token_burns(df)
         debug_after_rule(df, "Rule 6 - Token Burns")
         
+        df = self._apply_rule_7_direction_based_correction(df)
+        debug_after_rule(df, "Rule 7 - Direction-Based Correction")
+        
         # Convert back to list of dictionaries
         result = df.to_dict('records')
         
         # Final debug for our tracked hash
-        if debug_tx:
-            final_debug_txs = [tx for tx in result if tx.get('tx_hash', '').lower() == debug_hash.lower()]
-            if final_debug_txs:
-                logger.info(f"🔍 FINAL RESULT: {len(final_debug_txs)} transactions for debug hash")
-                for i, tx in enumerate(final_debug_txs):
-                    logger.info(f"🔍 Final TX {i}: side={tx.get('side')}, qty={tx.get('qty')}, asset={tx.get('asset')}, from={tx.get('from_address')}, to={tx.get('to_address')}")
-            else:
-                logger.info(f"🔍 FINAL RESULT: DEBUG HASH NOT FOUND in {len(result)} final transactions")
+        final_debug_txs = [tx for tx in result if tx.get('tx_hash', '').lower() == debug_hash.lower()]
+        if final_debug_txs:
+            logger.info(f"🚀🚀🚀 RULE ENGINE FINAL RESULT: FOUND {len(final_debug_txs)} transactions for debug hash! 🚀🚀🚀")
+            for i, tx in enumerate(final_debug_txs):
+                logger.info(f"🚀 Final TX {i}: side={tx.get('side')}, qty={tx.get('qty')}, asset={tx.get('asset')}, from={tx.get('from_address')}, to={tx.get('to_address')}")
+        else:
+            logger.info(f"🚀 RULE ENGINE FINAL RESULT: DEBUG HASH NOT FOUND in {len(result)} final transactions")
+            # Show sample of final hashes
+            sample_final_hashes = [tx.get('tx_hash', 'NO_HASH') for tx in result[:3]]
+            logger.info(f"🚀 Sample final hashes: {sample_final_hashes}")
         
         logger.info(f"Rule processing complete: {len(result)} transactions after rules")
         self._log_rule_stats()
@@ -484,6 +505,117 @@ class TransactionRuleEngine:
         
         return df
     
+    def _apply_rule_7_direction_based_correction(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Rule 7: Direction-based buy/sell correction.
+        
+        Corrects basic direction logic for token purchases and sales.
+        The initial blockchain service logic incorrectly classifies:
+        - Tokens going OUT as "sell" (wrong if we're buying tokens with ETH)
+        - Tokens coming IN as "buy" (wrong if we're selling tokens for ETH)
+        
+        This rule analyzes the context to determine correct classification:
+        - If tokens are transferred to our wallet from a DeFi contract → buy
+        - If tokens are transferred from our wallet to a DeFi contract → sell
+        - Special handling for common DeFi patterns
+        """
+        if df.empty:
+            return df
+        
+        correction_count = 0
+        debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
+        
+        # Ensure required columns exist
+        required_cols = ['tx_hash', 'from_address', 'to_address', 'wallet_address', 'side', 'qty', 'event_type']
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = ''
+        
+        # Normalize addresses for comparison
+        df['from_address'] = df['from_address'].fillna('').astype(str).str.lower()
+        df['to_address'] = df['to_address'].fillna('').astype(str).str.lower() 
+        df['wallet_address'] = df['wallet_address'].fillna('').astype(str).str.lower()
+        
+        # Get our fund wallets for comparison
+        known_wallets = set()
+        if self.wallet_mapping is not None and not self.wallet_mapping.empty:
+            for _, row in self.wallet_mapping.iterrows():
+                wallet_addr = row.get('wallet_address', '')
+                if wallet_addr:
+                    known_wallets.add(wallet_addr.lower())
+        
+        for idx, row in df.iterrows():
+            tx_hash = row.get('tx_hash', '').lower()
+            from_addr = row.get('from_address', '').lower()
+            to_addr = row.get('to_address', '').lower()
+            wallet_addr = row.get('wallet_address', '').lower()
+            current_side = row.get('side', '')
+            current_qty = row.get('qty', 0)
+            event_type = row.get('event_type', '')
+            
+            # Debug specific transaction
+            is_debug = tx_hash == debug_hash
+            if is_debug:
+                logger.info(f"🔧 RULE 7 DEBUG: Processing {debug_hash}")
+                logger.info(f"🔧 Before: side={current_side}, qty={current_qty}")
+                logger.info(f"🔧 from_addr={from_addr}, to_addr={to_addr}, wallet_addr={wallet_addr}")
+                logger.info(f"🔧 event_type={event_type}")
+            
+            # Only process Transfer events for now
+            if event_type != 'Transfer':
+                continue
+                
+            # Skip if this wallet is not one of our known wallets
+            if wallet_addr not in known_wallets:
+                continue
+            
+            # Determine correct classification based on transaction flow
+            new_side = None
+            new_qty = None
+            
+            # Case 1: Tokens coming INTO our wallet (from external address)
+            if to_addr == wallet_addr and from_addr not in known_wallets:
+                # This is likely a buy (receiving tokens)
+                if current_side != 'buy':
+                    new_side = 'buy'
+                    new_qty = abs(current_qty)  # Make quantity positive
+                    if is_debug:
+                        logger.info(f"🔧 RULE 7 DEBUG: Tokens coming TO our wallet → BUY")
+            
+            # Case 2: Tokens going OUT of our wallet (to external address)  
+            elif from_addr == wallet_addr and to_addr not in known_wallets:
+                # This could be a sell, but need to check context
+                # For now, keep as sell if it's already marked as sell
+                if current_side != 'sell':
+                    new_side = 'sell'
+                    new_qty = -abs(current_qty)  # Make quantity negative
+                    if is_debug:
+                        logger.info(f"🔧 RULE 7 DEBUG: Tokens going FROM our wallet → SELL")
+            
+            # Case 3: Intercompany transfers (between our wallets)
+            elif from_addr in known_wallets and to_addr in known_wallets:
+                # These should be handled by internal transaction splitting
+                if is_debug:
+                    logger.info(f"🔧 RULE 7 DEBUG: Intercompany transfer - no change needed")
+                continue
+            
+            # Apply correction if needed
+            if new_side and new_side != current_side:
+                df.at[idx, 'side'] = new_side
+                df.at[idx, 'qty'] = new_qty
+                correction_count += 1
+                
+                if is_debug:
+                    logger.info(f"🔧 RULE 7 DEBUG: CORRECTED! {current_side} → {new_side}, qty: {current_qty} → {new_qty}")
+                
+                logger.info(f"Rule 7: Corrected tx {tx_hash[:10]}... from {current_side} to {new_side}")
+        
+        self.rule_stats['rule_7_applied'] = correction_count
+        if correction_count > 0:
+            logger.info(f"Rule 7: Applied direction-based corrections to {correction_count} transactions")
+        
+        return df
+    
     def _log_rule_stats(self):
         """Log comprehensive rule application statistics."""
         stats = self.rule_stats
@@ -496,6 +628,7 @@ class TransactionRuleEngine:
         logger.info(f"Rule 4 (Phishing filtering) - Dropped: {stats['rule_4_dropped']}")
         logger.info(f"Rule 5 (Token mints) - Applied: {stats['rule_5_applied']}")
         logger.info(f"Rule 6 (Token burns) - Applied: {stats['rule_6_applied']}")
+        logger.info(f"Rule 7 (Direction-based correction) - Applied: {stats['rule_7_applied']}")
         logger.info("==========================================")
     
     def get_rule_stats(self) -> Dict[str, int]:

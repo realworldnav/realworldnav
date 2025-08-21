@@ -208,6 +208,9 @@ class BlockchainService:
         all_transactions = []
         total_wallets = len(wallets)
         
+        debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
+        logger.info(f"🔍 FETCH: Starting transaction fetch for {total_wallets} wallets, looking for debug hash: {debug_hash}")
+        
         # Use thread pool for parallel fetching
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_wallet = {
@@ -246,13 +249,36 @@ class BlockchainService:
             # Debug specific hash before rule processing
             debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
             debug_rows = df[df['tx_hash'].str.lower() == debug_hash.lower()]
+            
             if not debug_rows.empty:
-                logger.info(f"🔍 BLOCKCHAIN SERVICE: Found debug hash before rules")
+                logger.info(f"🔍🔍🔍 BLOCKCHAIN SERVICE: Found debug hash before rules! 🔍🔍🔍")
                 for idx, row in debug_rows.iterrows():
                     logger.info(f"🔍 BEFORE RULES: side={row.get('side')}, qty={row.get('qty')}, direction={row.get('direction')}, event_type={row.get('event_type')}, from={row.get('from_address')}, to={row.get('to_address')}, token_symbol={row.get('token_symbol')}")
+            else:
+                # Check all hashes to see what we actually have
+                all_hashes = df['tx_hash'].tolist()
+                logger.info(f"🔍 BLOCKCHAIN SERVICE: Debug hash NOT FOUND in {len(df)} transactions")
+                logger.info(f"🔍 Sample transaction hashes: {all_hashes[:5] if all_hashes else 'No transactions'}")
+                # Check if any hash contains part of our debug hash
+                partial_matches = [h for h in all_hashes if debug_hash[:20].lower() in str(h).lower()]
+                if partial_matches:
+                    logger.info(f"🔍 Partial matches found: {partial_matches}")
             
-            processed_transactions = self.rule_engine.apply_fifo_rules(df.to_dict('records'))
+            # Convert to records and pass to rule engine
+            transaction_records = df.to_dict('records')
+            logger.info(f"🔍 BLOCKCHAIN SERVICE: Passing {len(transaction_records)} records to rule engine")
+            
+            processed_transactions = self.rule_engine.apply_fifo_rules(transaction_records)
             df = pd.DataFrame(processed_transactions)
+            
+            # Debug specific hash after rule processing
+            debug_rows_after = df[df['tx_hash'].str.lower() == debug_hash.lower()]
+            if not debug_rows_after.empty:
+                logger.info(f"🔍🔍🔍 BLOCKCHAIN SERVICE: Debug hash found AFTER rules! 🔍🔍🔍")
+                for idx, row in debug_rows_after.iterrows():
+                    logger.info(f"🔍 AFTER RULES: side={row.get('side')}, qty={row.get('qty')}, asset={row.get('asset')}, from={row.get('from_address')}, to={row.get('to_address')}, token_symbol={row.get('token_symbol')}")
+            else:
+                logger.info(f"🔍 BLOCKCHAIN SERVICE: Debug hash NOT FOUND after rules processing")
             
             # Apply internal transaction splitting (following master_fifo.py rules)
             df = self._split_internal_transactions(df)
@@ -476,11 +502,15 @@ class BlockchainService:
             
             # Debug specific transaction
             debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
-            if log['transactionHash'].hex().lower() == debug_hash.lower():
-                logger.info(f"🔍 DECODE_LOG: Processing debug hash {debug_hash}")
-                logger.info(f"🔍 DECODE_LOG: event_type={event_type}, direction={direction}, from_addr={from_addr}, to_addr={to_addr}")
-                logger.info(f"🔍 DECODE_LOG: wallet_checksum={wallet_checksum}, qty={qty}, side={side}")
-                logger.info(f"🔍 DECODE_LOG: token_symbol={token_symbol}, token_address={token_address}")
+            tx_hash_str = log['transactionHash'].hex().lower() if hasattr(log['transactionHash'], 'hex') else str(log['transactionHash']).lower()
+            
+            if tx_hash_str == debug_hash.lower():
+                logger.info(f"🔴🔴🔴 DECODE_LOG: FOUND DEBUG HASH {debug_hash} 🔴🔴🔴")
+                logger.info(f"🔴 DECODE_LOG: event_type={event_type}, direction={direction}, from_addr={from_addr}, to_addr={to_addr}")
+                logger.info(f"🔴 DECODE_LOG: wallet_checksum={wallet_checksum}, qty={qty}, side={side}")
+                logger.info(f"🔴 DECODE_LOG: token_symbol={token_symbol}, token_address={token_address}")
+                logger.info(f"🔴 DECODE_LOG: tx_hash_str={tx_hash_str}, target_wallet={target_wallet}")
+                logger.info(f"🔴 DECODE_LOG: value={value}, token_amount={token_amount}")
             
             # New structure with required fields following master_fifo.py format
             return {

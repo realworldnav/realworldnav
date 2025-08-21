@@ -289,6 +289,7 @@ def fifo_tracker_content():
                                 6,
                                 ui.output_ui("fifo_fund_filter_choices"),
                                 ui.output_ui("fifo_wallet_filter_choices"),
+                                ui.output_ui("fifo_token_filter_choices"),
                             ),
                             ui.column(
                                 6,
@@ -1158,12 +1159,21 @@ def register_crypto_tracker_outputs(output, input, session):
                 )
             )
         
-        # Calculate summary statistics (ETH-based)
-        total_realized_gain_eth = fifo_df['realized_gain_eth'].sum()
-        total_proceeds_eth = fifo_df['proceeds_eth'].sum()
-        total_cost_basis_eth = fifo_df['cost_basis_sold_eth'].sum()
-        unique_assets = fifo_df['asset'].nunique()
-        total_transactions = len(fifo_df)
+        # Apply token filter to summary statistics if set
+        display_df = fifo_df.copy()
+        try:
+            token_filter = input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else "all"
+            if token_filter and token_filter != "all" and 'asset' in display_df.columns:
+                display_df = display_df[display_df['asset'] == token_filter]
+        except Exception as e:
+            logger.debug(f"Could not apply token filter to summary: {e}")
+        
+        # Calculate summary statistics (ETH-based) on filtered data
+        total_realized_gain_eth = display_df['realized_gain_eth'].sum()
+        total_proceeds_eth = display_df['proceeds_eth'].sum()
+        total_cost_basis_eth = display_df['cost_basis_sold_eth'].sum()
+        unique_assets = display_df['asset'].nunique()
+        total_transactions = len(display_df)
         
         # Calculate USD equivalents if price_eth is available
         if 'price_eth' in fifo_df.columns and fifo_df['price_eth'].sum() > 0:
@@ -1179,10 +1189,19 @@ def register_crypto_tracker_outputs(output, input, session):
         gain_color = "text-success" if total_realized_gain_eth >= 0 else "text-danger"
         gain_icon = "bi-arrow-up" if total_realized_gain_eth >= 0 else "bi-arrow-down"
         
+        # Add filter indicator
+        filter_text = ""
+        try:
+            token_filter = input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else "all"
+            if token_filter and token_filter != "all":
+                filter_text = f" - Filtered: {token_filter}"
+        except:
+            pass
+        
         return ui.div(
             ui.div(
                 ui.HTML('<i class="bi bi-graph-up text-success"></i>'),
-                ui.h5("FIFO Results", class_="text-success ms-2"),
+                ui.h5(f"FIFO Results{filter_text}", class_="text-success ms-2"),
                 class_="d-flex align-items-center mb-3"
             ),
             ui.row(
@@ -1564,6 +1583,15 @@ def register_crypto_tracker_outputs(output, input, session):
         
         # Format positions for display
         display_df = positions_df.copy()
+        
+        # Apply token filter if set
+        try:
+            token_filter = input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else "all"
+            if token_filter and token_filter != "all" and 'asset' in display_df.columns:
+                display_df = display_df[display_df['asset'] == token_filter]
+                logger.info(f"Applied token filter '{token_filter}' to positions: {len(display_df)} positions")
+        except Exception as e:
+            logger.debug(f"Could not apply token filter to positions: {e}")
         
         # Format wallet address (shortened)
         if 'wallet_address' in display_df.columns:
@@ -1970,6 +1998,7 @@ def register_crypto_tracker_outputs(output, input, session):
             metadata = {
                 'fund_filter': input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else 'all',
                 'wallet_filter': input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else 'all',
+                'token_filter': input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else 'all',
                 'date_range_start': input.fifo_date_range()[0].isoformat() if hasattr(input, 'fifo_date_range') and input.fifo_date_range() else None,
                 'date_range_end': input.fifo_date_range()[1].isoformat() if hasattr(input, 'fifo_date_range') and input.fifo_date_range() else None,
                 'user_action': 'manual_save'
@@ -2204,6 +2233,7 @@ def register_crypto_tracker_outputs(output, input, session):
         try:
             fund_filter = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
             wallet_filter = input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else "all"
+            token_filter = input.fifo_token_filter() if hasattr(input, 'fifo_token_filter') else "all"
             
             if fund_filter and fund_filter != "all":
                 final_df = final_df[final_df['fund_id'] == fund_filter]
@@ -2211,6 +2241,11 @@ def register_crypto_tracker_outputs(output, input, session):
             if wallet_filter and wallet_filter != "all":
                 # Use startswith matching since wallet_filter is truncated
                 final_df = final_df[final_df['wallet_address'].str.startswith(wallet_filter[:6], na=False)]
+            
+            if token_filter and token_filter != "all":
+                # Filter by the selected token
+                final_df = final_df[final_df['asset'] == token_filter]
+                logger.info(f"Applied token filter '{token_filter}': {len(final_df)} transactions")
                 
         except Exception as e:
             logger.debug(f"Could not apply display filters: {e}")
@@ -2502,7 +2537,7 @@ def register_crypto_tracker_outputs(output, input, session):
                     class_="d-flex align-items-center mb-2"
                 ),
                 ui.p(
-                    "All blockchain transactions are processed through 6 comprehensive rules to ensure accurate buy/sell classification and FIFO compatibility.",
+                    "All blockchain transactions are processed through 7 comprehensive rules to ensure accurate buy/sell classification and FIFO compatibility.",
                     class_="small text-muted mb-0"
                 )
             )
@@ -2567,6 +2602,12 @@ def register_crypto_tracker_outputs(output, input, session):
                             <strong class="text-primary">Rule 6: Token Burns</strong>
                             <p class="small text-muted mb-1">Add ETH receipt transactions for token burns to 0x0</p>
                             <span class="badge bg-primary">Economics</span>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong class="text-success">Rule 7: Direction-Based Correction</strong>
+                            <p class="small text-muted mb-1">Correct buy/sell classification based on transaction flow context</p>
+                            <span class="badge bg-success">Core Logic</span>
                         </div>
                         
                         <div class="alert alert-info mt-3">
@@ -2797,6 +2838,70 @@ def register_crypto_tracker_outputs(output, input, session):
                 "fifo_wallet_filter",
                 "Wallet:",
                 choices={"all": "All Wallets"},
+                selected="all"
+            )
+    
+    @output
+    @render.ui
+    def fifo_token_filter_choices():
+        """Dynamic token selector based on unique tokens in FIFO ledger"""
+        try:
+            # Get current FIFO data to extract unique tokens
+            fifo_df = fifo_results.get()
+            
+            # Start with "All Tokens" option
+            choices = {"all": "All Tokens"}
+            
+            # If we have FIFO data, extract unique tokens
+            if not fifo_df.empty and 'asset' in fifo_df.columns:
+                unique_tokens = fifo_df['asset'].dropna().unique()
+                unique_tokens = sorted(unique_tokens)  # Sort alphabetically
+                
+                # Add each unique token to choices
+                for token in unique_tokens:
+                    choices[token] = token
+                
+                logger.info(f"Found {len(unique_tokens)} unique tokens in FIFO ledger")
+            else:
+                # If no FIFO data yet, try to get from staged transactions
+                try:
+                    from .crypto_token_fetch import get_staged_transactions_global
+                    staged_df = get_staged_transactions_global()
+                    
+                    if not staged_df.empty:
+                        # Look for asset/token columns
+                        token_columns = [col for col in staged_df.columns if col.lower() in ['asset', 'token', 'token_name', 'symbol']]
+                        if token_columns:
+                            token_col = token_columns[0]
+                            unique_tokens = staged_df[token_col].dropna().unique()
+                            unique_tokens = sorted(unique_tokens)
+                            
+                            for token in unique_tokens:
+                                choices[token] = token
+                                
+                            logger.info(f"Found {len(unique_tokens)} unique tokens in staged transactions")
+                except Exception as e:
+                    logger.debug(f"Could not get tokens from staged transactions: {e}")
+            
+            # Get current selection to preserve it if valid
+            current_selection = "all"
+            if hasattr(input, 'fifo_token_filter'):
+                user_selection = input.fifo_token_filter()
+                if user_selection in choices:
+                    current_selection = user_selection
+            
+            return ui.input_select(
+                "fifo_token_filter",
+                "Token:",
+                choices=choices,
+                selected=current_selection
+            )
+        except Exception as e:
+            logger.error(f"Error creating token filter: {e}")
+            return ui.input_select(
+                "fifo_token_filter", 
+                "Token:",
+                choices={"all": "All Tokens"},
                 selected="all"
             )
     
