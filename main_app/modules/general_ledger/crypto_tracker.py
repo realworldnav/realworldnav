@@ -468,6 +468,32 @@ def register_crypto_tracker_outputs(output, input, session):
     from .crypto_token_fetch import register_crypto_token_tracker_outputs
     register_crypto_token_tracker_outputs(output, input, session)
     
+    # Create reactive bridge for global staged transactions
+    staged_transactions_reactive_trigger = reactive.value(0)
+    
+    def _sync_global_staged_trigger():
+        """Bridge global trigger to reactive trigger - called on demand only"""
+        from .crypto_token_fetch import get_staged_transactions_trigger_global
+        global_trigger = get_staged_transactions_trigger_global()
+        current_reactive = staged_transactions_reactive_trigger.get()
+        
+        if global_trigger != current_reactive:
+            print(f"🔗 REACTIVE SYNC: Global trigger {global_trigger} differs from reactive {current_reactive} - syncing...")
+            staged_transactions_reactive_trigger.set(global_trigger)
+            print(f"✅ REACTIVE SYNC: Updated reactive trigger to {global_trigger}")
+        
+        return global_trigger
+    
+    # Periodic sync effect (runs separately from render functions)
+    @reactive.effect
+    def _periodic_sync_effect():
+        """Periodic sync effect that doesn't interfere with render functions"""
+        reactive.invalidate_later(3.0)  # Check every 3 seconds
+        try:
+            _sync_global_staged_trigger()
+        except Exception as e:
+            print(f"🔗 Periodic sync error: {e}")
+    
     # Overview Tab Outputs
     @output
     @render.ui
@@ -1283,9 +1309,10 @@ def register_crypto_tracker_outputs(output, input, session):
             from .crypto_token_fetch import get_staged_transactions_global, get_staged_transactions_trigger_global
             
             # Create reactive dependency on the trigger to ensure updates
-            trigger_value = get_staged_transactions_trigger_global()
-            print(f"🔄 Transactions ready table triggered with value: {trigger_value}")
-            print(f"🔍 DEBUG: Attempting to retrieve staged transactions...")
+            trigger_value = staged_transactions_reactive_trigger.get()
+            print(f"🔄 REACTIVE TABLE: transactions_ready_table triggered with reactive value: {trigger_value}")
+            
+            print(f"🔍 REACTIVE TABLE: Attempting to retrieve staged transactions...")
             
             # Add more detailed debugging
             try:
@@ -1529,10 +1556,11 @@ def register_crypto_tracker_outputs(output, input, session):
         try:
             from .crypto_token_fetch import get_staged_transactions_trigger_global
             
-            # Force a reactive invalidation by calling the trigger function
+            # Force a reactive invalidation by updating the reactive trigger
             # This will cause the transactions_ready_table to re-render
-            trigger_value = get_staged_transactions_trigger_global()
-            print(f"🔄 Manual refresh triggered for staged transactions (trigger: {trigger_value})")
+            global_trigger = get_staged_transactions_trigger_global()
+            staged_transactions_reactive_trigger.set(global_trigger)
+            print(f"🔄 Manual refresh triggered - synced reactive trigger to global value: {global_trigger}")
             
             # Note: In a more robust implementation, we might want to:
             # 1. Clear and reload from S3 storage

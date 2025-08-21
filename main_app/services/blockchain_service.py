@@ -432,6 +432,11 @@ class BlockchainService:
                 token_address, token_symbol
             )
             
+            # Filter out rejected and blacklisted tokens immediately
+            if token_classification['status'] in [TOKEN_STATUS['REJECTED'], TOKEN_STATUS['BLACKLISTED']]:
+                logger.info(f"🚫 Excluding {token_classification['status']} token {token_symbol} ({token_address}) from transaction {log['transactionHash'].hex()}")
+                return None
+            
             # Determine transaction direction
             wallet_checksum = to_checksum_address(target_wallet)
             

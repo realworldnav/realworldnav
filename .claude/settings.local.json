@@ -15,7 +15,8 @@
       "Bash(del crypto_tracker.py crypto_tracker_backup.py)",
       "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\main_app\\modules\\general_ledger\\__pycache__\\crypto_tracker*.pyc\")",
       "WebFetch(domain:shiny.posit.co)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\test_rejected_token_filter.py\")"
     ],
     "deny": [],
     "ask": [],
