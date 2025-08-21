@@ -388,10 +388,10 @@ def fifo_tracker_content():
             )
         ),
         
-        # Main FIFO Ledger with Transaction Details
+        # Main FIFO Ledger - Full Width
         ui.row(
             ui.column(
-                8,
+                12,
                 ui.card(
                     ui.card_header(ui.HTML('<i class="bi bi-journal-bookmark"></i> FIFO Ledger')),
                     ui.card_body(
@@ -400,14 +400,18 @@ def fifo_tracker_content():
                     )
                 ),
                 class_="mt-3"
-            ),
+            )
+        ),
+        
+        # Transaction Details Card - Below Table
+        ui.row(
             ui.column(
-                4,
+                12,
                 ui.card(
                     ui.card_header(ui.HTML('<i class="bi bi-info-circle"></i> Transaction Details')),
                     ui.card_body(
                         ui.output_ui("fifo_transaction_details_card"),
-                        style="min-height: 500px;"
+                        style="min-height: 300px;"
                     )
                 ),
                 class_="mt-3"
@@ -1331,10 +1335,7 @@ def register_crypto_tracker_outputs(output, input, session):
                     
                     # Handle wallet address - could be wallet_id, wallet_address, from_address, to_address
                     wallet = row.get('wallet_id', row.get('wallet_address', row.get('from_address', row.get('to_address', ''))))
-                    if pd.notna(wallet) and len(str(wallet)) > 10:
-                        wallet_display = f"{str(wallet)[:6]}...{str(wallet)[-4:]}"
-                    else:
-                        wallet_display = str(wallet) if pd.notna(wallet) else '-'
+                    wallet_display = str(wallet) if pd.notna(wallet) else '-'
                     
                     # Handle token name
                     token = row.get('token_name', row.get('asset', row.get('token_symbol', '-')))
@@ -1524,10 +1525,10 @@ def register_crypto_tracker_outputs(output, input, session):
         display_df['Side'] = display_df['side']
         display_df['Token'] = display_df['asset']
         
-        # Format wallet address (shortened)
+        # Format wallet address (full)
         if 'wallet_address' in display_df.columns:
             display_df['Wallet'] = display_df['wallet_address'].apply(
-                lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and str(x) else "-"
+                lambda x: str(x) if pd.notna(x) and str(x) else "-"
             )
         else:
             display_df['Wallet'] = '-'
@@ -1860,15 +1861,17 @@ def register_crypto_tracker_outputs(output, input, session):
             # Apply wallet filter
             wallet_filter = input.fifo_wallet_filter() if hasattr(input, 'fifo_wallet_filter') else "all"
             if wallet_filter and wallet_filter != "all":
-                # wallet_filter contains first 10 chars of address, so we need partial matching
+                # wallet_filter now contains full lowercase address for exact matching
                 wallet_columns = [col for col in transactions_df.columns if 'wallet' in col.lower() or 'address' in col.lower()]
                 if wallet_columns:
                     wallet_col = wallet_columns[0]
-                    # Use startswith matching for wallet filter
+                    # Use exact matching for wallet filter on lowercase addresses
+                    before_count = len(transactions_df)
                     transactions_df = transactions_df[
-                        transactions_df[wallet_col].astype(str).str.startswith(wallet_filter)
+                        transactions_df[wallet_col].astype(str).str.lower() == wallet_filter.lower()
                     ]
-                    logger.info(f"Filtered to wallet starting with '{wallet_filter}': {len(transactions_df)} transactions")
+                    print(f"🔍 FIFO CALC DEBUG: Wallet filter '{wallet_filter}' reduced from {before_count} to {len(transactions_df)} transactions")
+                    logger.info(f"Filtered to wallet '{wallet_filter}': {len(transactions_df)} transactions")
             
             # Filter by date range
             date_range = input.fifo_date_range()
@@ -2212,10 +2215,10 @@ def register_crypto_tracker_outputs(output, input, session):
         if 'date' in display_df.columns:
             display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # Shorten wallet addresses for better display
+        # Keep full wallet addresses for better filtering visibility
         if 'wallet_address' in display_df.columns:
             display_df['wallet_address'] = display_df['wallet_address'].apply(
-                lambda x: f"{str(x)[:6]}...{str(x)[-4:]}" if pd.notna(x) and len(str(x)) > 10 else str(x)
+                lambda x: str(x) if pd.notna(x) else "-"
             )
         
         # Shorten transaction hashes for better display  
@@ -2239,8 +2242,8 @@ def register_crypto_tracker_outputs(output, input, session):
                 final_df = final_df[final_df['fund_id'] == fund_filter]
             
             if wallet_filter and wallet_filter != "all":
-                # Use startswith matching since wallet_filter is truncated
-                final_df = final_df[final_df['wallet_address'].str.startswith(wallet_filter[:6], na=False)]
+                # Use exact matching since wallet_filter now contains full address (both lowercase)
+                final_df = final_df[final_df['wallet_address'].str.lower() == wallet_filter.lower()]
             
             if token_filter and token_filter != "all":
                 # Filter by the selected token
@@ -2328,7 +2331,7 @@ def register_crypto_tracker_outputs(output, input, session):
             
             for _, row in balance_pivot.iterrows():
                 wallet_address = row['wallet_address']
-                wallet_display = f"{wallet_address[:6]}...{wallet_address[-4:]}" if len(wallet_address) > 10 else wallet_address
+                wallet_display = wallet_address
                 fund_display = fund_mapping.get(wallet_address, 'Unknown Fund')
                 
                 # Create row data
@@ -2642,163 +2645,72 @@ def register_crypto_tracker_outputs(output, input, session):
             logger.warning(f"Could not load wallet mapping file: {e}")
             return pd.DataFrame()
     
-    @reactive.calc
-    def get_available_fund_choices():
-        """Get fund choices from wallet mapping and staged transactions"""
-        choices = {"all": "All Funds"}
-        
-        try:
-            # Get funds from wallet mapping
-            wallet_df = get_wallet_mapping_data()
-            if not wallet_df.empty:
-                # Look for fund_id column or similar
-                fund_columns = [col for col in wallet_df.columns if 'fund' in col.lower()]
-                if fund_columns:
-                    fund_col = fund_columns[0]  # Use first fund-related column
-                    unique_funds = wallet_df[fund_col].dropna().unique()
-                    for fund in sorted(unique_funds):
-                        if pd.notna(fund) and str(fund).strip():
-                            choices[str(fund)] = str(fund)
-            
-            # Also check staged transactions as fallback
-            try:
-                from .crypto_token_fetch import get_staged_transactions_global
-                staged_df = get_staged_transactions_global()
-                if not staged_df.empty:
-                    fund_columns = [col for col in staged_df.columns if 'fund' in col.lower()]
-                    if fund_columns:
-                        fund_col = fund_columns[0]
-                        unique_funds = staged_df[fund_col].dropna().unique()
-                        for fund in sorted(unique_funds):
-                            if pd.notna(fund) and str(fund).strip() and str(fund) not in choices:
-                                choices[str(fund)] = str(fund)
-            except ImportError:
-                # Module might not be available yet
-                pass
-                            
-        except Exception as e:
-            logger.warning(f"Error getting fund choices: {e}")
-        
-        return choices
+    # Note: Removed get_available_fund_choices() and get_available_wallet_choices() 
+    # These are now replaced by dynamic data-driven filters that extract unique values 
+    # directly from FIFO ledger data and staged transactions
     
-    @reactive.calc  
-    def get_available_wallet_choices():
-        """Get wallet choices with friendly names from wallet mapping, filtered by selected fund"""
-        choices = {"all": "All Wallets"}
-        
-        try:
-            # Get the currently selected fund
-            selected_fund = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
-            
-            wallet_df = get_wallet_mapping_data()
-            if not wallet_df.empty and isinstance(wallet_df, pd.DataFrame):
-                
-                # Filter wallets by selected fund if not "all"
-                if selected_fund != "all" and 'fund_id' in wallet_df.columns:
-                    wallet_df = wallet_df[wallet_df['fund_id'] == selected_fund]
-                    print(f"🔍 Filtered wallets for fund '{selected_fund}': {len(wallet_df)} wallets")
-                
-                # Look for wallet address and friendly name columns
-                address_columns = [col for col in wallet_df.columns if 'address' in col.lower() or 'wallet' in col.lower()]
-                name_columns = [col for col in wallet_df.columns if 'name' in col.lower() or 'friendly' in col.lower() or 'display' in col.lower()]
-                
-                if address_columns and name_columns:
-                    address_col = address_columns[0]
-                    name_col = name_columns[0]
-                    
-                    for _, row in wallet_df.iterrows():
-                        try:
-                            address = row.get(address_col)
-                            friendly_name = row.get(name_col)
-                            
-                            if pd.notna(address) and pd.notna(friendly_name):
-                                # Use first 10 chars of address as key, friendly name as display
-                                address_key = str(address)[:10] if len(str(address)) > 10 else str(address)
-                                display_name = f"{friendly_name} ({str(address)[:6]}...{str(address)[-4:]})" if len(str(address)) > 10 else f"{friendly_name} ({address})"
-                                choices[address_key] = display_name
-                        except Exception as row_error:
-                            # Skip problematic rows
-                            continue
-                
-                # If no friendly names, fall back to just addresses
-                elif address_columns:
-                    address_col = address_columns[0]
-                    unique_addresses = wallet_df[address_col].dropna().unique()
-                    for address in sorted(unique_addresses):
-                        try:
-                            if pd.notna(address) and str(address).strip():
-                                address_key = str(address)[:10] if len(str(address)) > 10 else str(address)
-                                display_name = f"{str(address)[:6]}...{str(address)[-4:]}" if len(str(address)) > 10 else str(address)
-                                choices[address_key] = display_name
-                        except Exception:
-                            # Skip problematic addresses
-                            continue
-                            
-        except Exception as e:
-            logger.warning(f"Error getting wallet choices: {e}")
-        
-        return choices
-    
-    @reactive.effect
-    def update_fund_filter_choices():
-        """Update fund filter choices reactively"""
-        try:
-            choices = get_available_fund_choices()
-            # Note: In Shiny, we can't directly update select choices from server
-            # This would need to be handled differently in the UI
-            logger.debug(f"Fund choices available: {list(choices.keys())}")
-        except Exception as e:
-            logger.error(f"Error updating fund filter: {e}")
-    
-    @reactive.effect  
-    def update_wallet_filter_choices():
-        """Update wallet filter choices reactively when fund changes"""
-        try:
-            # This effect will run whenever the fund filter changes
-            selected_fund = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
-            choices = get_available_wallet_choices()
-            logger.debug(f"Wallet choices for fund '{selected_fund}': {len(choices)} options")
-            
-            # Reset wallet selection to "all" when fund changes
-            # This ensures the wallet filter doesn't retain invalid selections
-            if hasattr(input, 'fifo_wallet_filter'):
-                current_wallet = input.fifo_wallet_filter()
-                if current_wallet not in choices:
-                    # Current wallet selection is not valid for this fund, reset to "all"
-                    print(f"🔄 Resetting wallet filter to 'all' for fund '{selected_fund}'")
-                    
-        except Exception as e:
-            logger.error(f"Error updating wallet filter: {e}")
-    
-    @reactive.effect
-    @reactive.event(input.fifo_fund_filter)
-    def reset_wallet_on_fund_change():
-        """Reset wallet filter when fund changes"""
-        try:
-            selected_fund = input.fifo_fund_filter()
-            print(f"🔄 Fund changed to: {selected_fund}")
-            # The wallet filter will automatically update due to reactive dependency
-        except Exception as e:
-            logger.error(f"Error handling fund change: {e}")
+    # Note: Removed old reactive effects for updating filter choices
+    # The new data-driven filter functions are self-contained and reactive
     
     @output
     @render.ui
     def fifo_fund_filter_choices():
-        """Dynamic fund selector based on wallet mapping and staged transaction data"""
+        """Dynamic fund selector based on unique funds in FIFO ledger data"""
         try:
-            choices = get_available_fund_choices()
-            current_selection = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
+            # Get current FIFO data to extract unique funds
+            fifo_df = fifo_results.get()
+            
+            # Start with "All Funds" option
+            choices = {"all": "All Funds"}
+            
+            # If we have FIFO data, extract unique funds
+            if not fifo_df.empty and 'fund_id' in fifo_df.columns:
+                unique_funds = fifo_df['fund_id'].dropna().unique()
+                unique_funds = sorted(unique_funds)  # Sort alphabetically
+                
+                # Add each unique fund to choices
+                for fund in unique_funds:
+                    choices[fund] = fund
+                
+                logger.info(f"Found {len(unique_funds)} unique funds in FIFO ledger")
+            else:
+                # If no FIFO data yet, try to get from staged transactions
+                try:
+                    from .crypto_token_fetch import get_staged_transactions_global
+                    staged_df = get_staged_transactions_global()
+                    
+                    if not staged_df.empty:
+                        # Look for fund columns
+                        fund_columns = [col for col in staged_df.columns if col.lower() in ['fund_id', 'fund', 'Fund']]
+                        if fund_columns:
+                            fund_col = fund_columns[0]
+                            unique_funds = staged_df[fund_col].dropna().unique()
+                            unique_funds = sorted(unique_funds)
+                            
+                            for fund in unique_funds:
+                                choices[fund] = fund
+                                
+                            logger.info(f"Found {len(unique_funds)} unique funds in staged transactions")
+                except Exception as e:
+                    logger.debug(f"Could not get funds from staged transactions: {e}")
+            
+            # Get current selection to preserve it if valid
+            current_selection = "all"
+            if hasattr(input, 'fifo_fund_filter'):
+                user_selection = input.fifo_fund_filter()
+                if user_selection in choices:
+                    current_selection = user_selection
             
             return ui.input_select(
                 "fifo_fund_filter",
                 "Fund:",
                 choices=choices,
-                selected=current_selection if current_selection in choices else "all"
+                selected=current_selection
             )
         except Exception as e:
             logger.error(f"Error creating fund filter: {e}")
             return ui.input_select(
-                "fifo_fund_filter",
+                "fifo_fund_filter", 
                 "Fund:",
                 choices={"all": "All Funds"},
                 selected="all"
@@ -2807,13 +2719,65 @@ def register_crypto_tracker_outputs(output, input, session):
     @output
     @render.ui  
     def fifo_wallet_filter_choices():
-        """Dynamic wallet selector with friendly names from wallet mapping, filtered by fund"""
+        """Dynamic wallet selector based on unique wallets in FIFO ledger data"""
         try:
             # Get the currently selected fund to trigger reactivity
             selected_fund = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
             
-            # Get wallet choices filtered by the selected fund
-            choices = get_available_wallet_choices()
+            # Get current FIFO data to extract unique wallets
+            fifo_df = fifo_results.get()
+            
+            # Start with "All Wallets" option
+            choices = {"all": "All Wallets"}
+            
+            # If we have FIFO data, extract unique wallets
+            if not fifo_df.empty and 'wallet_address' in fifo_df.columns:
+                # Filter by fund first if not "all"
+                wallet_df = fifo_df.copy()
+                if selected_fund != "all" and 'fund_id' in wallet_df.columns:
+                    wallet_df = wallet_df[wallet_df['fund_id'] == selected_fund]
+                
+                unique_wallets = wallet_df['wallet_address'].dropna().unique()
+                unique_wallets = sorted(unique_wallets)  # Sort alphabetically
+                
+                # Add each unique wallet to choices with full address
+                for wallet in unique_wallets:
+                    wallet_str = str(wallet).lower()
+                    # Use full address as key and display (no truncation)
+                    choices[wallet_str] = wallet_str
+                
+                logger.info(f"Found {len(unique_wallets)} unique wallets for fund '{selected_fund}'")
+            else:
+                # If no FIFO data yet, try to get from staged transactions
+                try:
+                    from .crypto_token_fetch import get_staged_transactions_global
+                    staged_df = get_staged_transactions_global()
+                    
+                    if not staged_df.empty:
+                        # Look for wallet columns
+                        wallet_columns = [col for col in staged_df.columns if 'wallet' in col.lower() or col in ['from_address', 'to_address']]
+                        if wallet_columns:
+                            wallet_col = wallet_columns[0]
+                            
+                            # Filter by fund first if not "all"
+                            wallet_df = staged_df.copy()
+                            if selected_fund != "all":
+                                fund_columns = [col for col in staged_df.columns if col.lower() in ['fund_id', 'fund', 'Fund']]
+                                if fund_columns:
+                                    fund_col = fund_columns[0]
+                                    wallet_df = wallet_df[wallet_df[fund_col] == selected_fund]
+                            
+                            unique_wallets = wallet_df[wallet_col].dropna().unique()
+                            unique_wallets = sorted(unique_wallets)
+                            
+                            for wallet in unique_wallets:
+                                wallet_str = str(wallet).lower()
+                                # Use full address as key and display (no truncation)
+                                choices[wallet_str] = wallet_str
+                                
+                            logger.info(f"Found {len(unique_wallets)} unique wallets in staged transactions")
+                except Exception as e:
+                    logger.debug(f"Could not get wallets from staged transactions: {e}")
             
             # Always reset to "all" when fund changes to avoid invalid selections
             current_selection = "all"
@@ -3092,11 +3056,8 @@ def register_crypto_tracker_outputs(output, input, session):
                 except:
                     pass
             
-            # Format wallet address (shortened)
-            if len(wallet_address) > 10:
-                wallet_display = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-            else:
-                wallet_display = wallet_address
+            # Format wallet address (full)
+            wallet_display = wallet_address
             
             # Create Etherscan URL
             etherscan_url = f"https://etherscan.io/tx/{tx_hash}" if tx_hash else ""

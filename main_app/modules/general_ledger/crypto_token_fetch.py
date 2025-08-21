@@ -2766,6 +2766,14 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 if 'token_amount' not in fifo_df.columns and 'qty' in fifo_df.columns:
                     fifo_df['token_amount'] = fifo_df['qty'].abs()
                     print(f"   🔄 Mapped 'qty' → 'token_amount' (absolute values)")
+                
+                # Normalize wallet addresses to lowercase for consistent filtering
+                wallet_address_columns = [col for col in fifo_df.columns if 'wallet' in col.lower() or col in ['from_address', 'to_address']]
+                for col in wallet_address_columns:
+                    if col in fifo_df.columns:
+                        original_count = fifo_df[col].count()
+                        fifo_df[col] = fifo_df[col].astype(str).str.lower()
+                        print(f"   🔄 Normalized '{col}' to lowercase ({original_count} addresses)")
                     
                 # Step 4: Format dates and add missing fields
                 progress.set(60, message="Formatting dates and fields...", detail="Ensuring all required fields are present")
