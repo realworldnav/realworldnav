@@ -206,9 +206,12 @@ def enhanced_financial_reporting_ui():
 import os
 default_client = os.environ.get('REALWORLDNAV_CLIENT', 'drip_capital')
 
-client_selector = shiny_ui.input_select("client", "Select Client", {
-    "drip_capital": "Drip Capital"
-}, selected=default_client, width="100%")
+client_selector = shiny_ui.div(
+    shiny_ui.input_select("client", "Select Client", {
+        "drip_capital": "Drip Capital"
+    }, selected=default_client, width="100%"),
+    class_="custom-dropdown"
+)
 
 # Fund selector will be reactive based on client selection
 fund_selector = shiny_ui.output_ui("dynamic_fund_selector")
@@ -272,6 +275,45 @@ app_ui = shiny_ui.page_sidebar(
     
     # Main content area
     shiny_ui.div(
+        # Custom dropdown styling
+        shiny_ui.tags.style("""
+            /* Custom dropdown styling with chevron arrow */
+            .custom-dropdown select {
+                appearance: none !important;
+                -webkit-appearance: none !important;
+                -moz-appearance: none !important;
+                background-image: url('/dropdown.png') !important;
+                background-repeat: no-repeat !important;
+                background-position: right 12px center !important;
+                background-size: 14px 14px !important;
+                padding-right: 40px !important;
+                border: 1px solid #dee2e6 !important;
+                border-radius: 0.375rem !important;
+                font-size: 0.875rem !important;
+                line-height: 1.5 !important;
+                color: #212529 !important;
+                background-color: #fff !important;
+                transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out !important;
+            }
+            
+            .custom-dropdown select:focus {
+                border-color: #86b7fe !important;
+                outline: 0 !important;
+                box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25) !important;
+            }
+            
+            .custom-dropdown select:hover {
+                border-color: #b3d7ff !important;
+            }
+            
+            /* Ensure the dropdown arrow works in different themes */
+            [data-bs-theme="dark"] .custom-dropdown select {
+                background-color: #212529 !important;
+                color: #fff !important;
+                border-color: #495057 !important;
+            }
+        """),
+        
         # Dynamic theme styles - make this reactive
         shiny_ui.output_ui("theme_styles"),
         

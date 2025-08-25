@@ -26,7 +26,7 @@ def register_outputs(output, input, gl_data, selected_date):
     
     @reactive.calc
     def trial_balance_data():
-        """Calculate trial balance data"""
+        """Calculate trial balance data using COA-first approach to ensure ALL non-zero accounts are captured"""
         df = gl_data()
         if df.empty:
             return pd.DataFrame()
@@ -37,58 +37,97 @@ def register_outputs(output, input, gl_data, selected_date):
         # Get comparison date (previous month end)
         comp_date = get_previous_period_date(report_date, 'month')
         
-        # Generate trial balances for both dates
-        current_tb = generate_trial_balance_from_gl(df, report_date)
-        comparison_tb = generate_trial_balance_from_gl(df, comp_date)
+        # CRITICAL: Load COA first as master account list (like Fund Accounting does)
+        from ...s3_utils import load_COA_file
+        from .tb_generator import categorize_account
         
-        if current_tb.empty:
+        coa_df = load_COA_file()
+        if coa_df.empty:
             return pd.DataFrame()
         
-        # Merge the two trial balances
-        if not comparison_tb.empty:
-            merged_tb = pd.merge(
-                current_tb,
-                comparison_tb[['GL_Acct_Number', 'Balance']],
-                on='GL_Acct_Number',
-                how='outer',
-                suffixes=('_current', '_comparison')
-            )
-            
-            # Fill missing values
-            merged_tb['Balance_current'] = merged_tb['Balance_current'].fillna(0)
-            merged_tb['Balance_comparison'] = merged_tb['Balance_comparison'].fillna(0)
-            
-            # Ensure we have GL_Acct_Name and Category
-            if 'GL_Acct_Name' not in merged_tb.columns:
-                from ...s3_utils import load_COA_file
-                coa_df = load_COA_file()
-                coa_dict = dict(zip(coa_df['GL_Acct_Number'], coa_df['GL_Acct_Name']))
-                merged_tb['GL_Acct_Name'] = merged_tb['GL_Acct_Number'].apply(
-                    lambda x: coa_dict.get(int(x), f"Account {int(x)}")
-                )
-            
-            if 'Category' not in merged_tb.columns:
-                from .tb_generator import categorize_account
-                merged_tb['Category'] = merged_tb['GL_Acct_Number'].apply(categorize_account)
-        else:
-            # No comparison data
-            merged_tb = current_tb.copy()
-            merged_tb['Balance_current'] = merged_tb['Balance']
-            merged_tb['Balance_comparison'] = 0
+        # Ensure GL data has proper account mapping
+        if 'GL_Acct_Number' not in df.columns:
+            print("ERROR - Financial Reporting TB: No GL_Acct_Number column found in GL data")
+            return pd.DataFrame()
         
-        # Calculate change
-        merged_tb['Change'] = merged_tb['Balance_current'] - merged_tb['Balance_comparison']
+        # Build trial balance using COA-first approach
+        print(f"DEBUG - Financial Reporting TB: Building trial balance for {len(coa_df)} COA accounts")
+        
+        tb_accounts = []
+        coa_dict = dict(zip(coa_df['GL_Acct_Number'], coa_df['GL_Acct_Name']))
+        
+        # For each account in COA, check if it has activity in GL data
+        for _, coa_row in coa_df.iterrows():
+            gl_acct_number = coa_row['GL_Acct_Number']
+            gl_acct_name = coa_row['GL_Acct_Name']
+            
+            # Get all transactions for this account (regardless of date filtering for now)
+            account_gl_data = df[df['GL_Acct_Number'] == gl_acct_number].copy()
+            
+            if account_gl_data.empty:
+                continue  # Skip accounts with no transactions
+            
+            # Ensure proper timezone handling for date comparisons
+            account_dates = pd.to_datetime(account_gl_data['date'], errors='coerce')
+            
+            # Convert comparison dates to match GL data timezone if needed
+            report_dt = pd.to_datetime(report_date)
+            comp_dt = pd.to_datetime(comp_date)
+            
+            # If GL dates are timezone-aware, make comparison dates timezone-aware too
+            if account_dates.dt.tz is not None:
+                if report_dt.tz is None:
+                    report_dt = pd.Timestamp(report_dt, tz='UTC')
+                if comp_dt.tz is None:
+                    comp_dt = pd.Timestamp(comp_dt, tz='UTC')
+            
+            # Calculate balance for current period (up to report_date)
+            current_data = account_gl_data[account_dates <= report_dt]
+            
+            if not current_data.empty:
+                current_debits = pd.to_numeric(current_data['debit_crypto'], errors='coerce').fillna(0).sum()
+                current_credits = pd.to_numeric(current_data['credit_crypto'], errors='coerce').fillna(0).sum()
+                current_balance = current_debits - current_credits
+            else:
+                current_balance = 0.0
+            
+            # Calculate balance for comparison period (up to comp_date)
+            comp_data = account_gl_data[account_dates <= comp_dt]
+            
+            if not comp_data.empty:
+                comp_debits = pd.to_numeric(comp_data['debit_crypto'], errors='coerce').fillna(0).sum()
+                comp_credits = pd.to_numeric(comp_data['credit_crypto'], errors='coerce').fillna(0).sum()
+                comp_balance = comp_debits - comp_credits
+            else:
+                comp_balance = 0.0
+            
+            # Include account if either period has non-zero balance
+            if abs(current_balance) > 0.000001 or abs(comp_balance) > 0.000001:
+                # Get original account name for display (first occurrence in GL data)
+                original_name = account_gl_data['account_name'].iloc[0] if 'account_name' in account_gl_data.columns else gl_acct_name
+                
+                tb_accounts.append({
+                    'GL_Acct_Number': gl_acct_number,
+                    'GL_Acct_Name': gl_acct_name,
+                    'original_account_name': original_name,
+                    'Category': categorize_account(gl_acct_number),
+                    'Balance_current': round(current_balance, 6),
+                    'Balance_comparison': round(comp_balance, 6),
+                    'Change': round(current_balance - comp_balance, 6)
+                })
+        
+        if not tb_accounts:
+            print("DEBUG - Financial Reporting TB: No accounts with non-zero balances found")
+            return pd.DataFrame()
+        
+        # Convert to DataFrame
+        merged_tb = pd.DataFrame(tb_accounts)
         
         # Sort by account number
         merged_tb['GL_Acct_Number'] = pd.to_numeric(merged_tb['GL_Acct_Number'], errors='coerce')
         merged_tb = merged_tb.sort_values('GL_Acct_Number')
         
-        # Filter out rows where all balances are zero
-        merged_tb = merged_tb[
-            (np.abs(merged_tb['Balance_current']) > 0.000001) |
-            (np.abs(merged_tb['Balance_comparison']) > 0.000001) |
-            (np.abs(merged_tb['Change']) > 0.000001)
-        ]
+        print(f"DEBUG - Financial Reporting TB: Final trial balance has {len(merged_tb)} accounts")
         
         return merged_tb, report_date, comp_date
     

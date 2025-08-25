@@ -61,17 +61,18 @@ def generate_trial_balance_from_gl(gl_df: pd.DataFrame, as_of_date: datetime) ->
         if col in filtered_gl.columns:
             filtered_gl[col] = pd.to_numeric(filtered_gl[col], errors='coerce').fillna(0)
     
-    # Group by account number and original account name, sum debits/credits
+    # Group by account number ONLY to avoid duplicate rows (like Fund Accounting does)
+    account_totals = filtered_gl.groupby('GL_Acct_Number').agg({
+        'debit_crypto': 'sum',
+        'credit_crypto': 'sum'
+    }).reset_index()
+    
+    # Add original account name after grouping to maintain display names
     if 'original_account_name' in filtered_gl.columns:
-        account_totals = filtered_gl.groupby(['GL_Acct_Number', 'original_account_name']).agg({
-            'debit_crypto': 'sum',
-            'credit_crypto': 'sum'
-        }).reset_index()
+        # Get the first occurrence of each account's original name for display
+        account_name_mapping = filtered_gl.groupby('GL_Acct_Number')['original_account_name'].first()
+        account_totals['original_account_name'] = account_totals['GL_Acct_Number'].map(account_name_mapping)
     else:
-        account_totals = filtered_gl.groupby('GL_Acct_Number').agg({
-            'debit_crypto': 'sum',
-            'credit_crypto': 'sum'
-        }).reset_index()
         account_totals['original_account_name'] = account_totals['GL_Acct_Number'].apply(
             lambda x: coa_dict.get(int(x), f"Account {int(x)}")
         )
