@@ -16,7 +16,8 @@
       "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\main_app\\modules\\general_ledger\\__pycache__\\crypto_tracker*.pyc\")",
       "WebFetch(domain:shiny.posit.co)",
       "WebSearch",
-      "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\test_rejected_token_filter.py\")"
+      "Bash(del \"C:\\Users\\charl\\Documents\\GitHub\\realworldnav\\test_rejected_token_filter.py\")",
+      "Bash(sed:*)"
     ],
     "deny": [],
     "ask": [],

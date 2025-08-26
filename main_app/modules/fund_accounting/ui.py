@@ -88,7 +88,7 @@ def pcap_ui():
                                 choices={"ETH": "ETH", "USD": "USD"},
                                 selected="ETH"
                             ),
-                            class_="dropdown-with-arrow"
+                            class_="custom-dropdown"
                         )
                     )
                 ),
@@ -125,15 +125,18 @@ def pcap_ui():
         ui.card(
             ui.card_header("View Options"),
             ui.card_body(
-                ui.input_select(
-                    "pcap_view_mode",
-                    "View Mode:",
-                    choices={
-                        "detailed": "Detailed Line Items",
-                        "summary": "Summary View",
-                        "comparison": "LP Comparison"
-                    },
-                    selected="detailed"
+                ui.div(
+                    ui.input_select(
+                        "pcap_view_mode",
+                        "View Mode:",
+                        choices={
+                            "detailed": "Detailed Line Items",
+                            "summary": "Summary View",
+                            "comparison": "LP Comparison"
+                        },
+                        selected="detailed"
+                    ),
+                    class_="custom-dropdown"
                 )
             ),
             class_="mt-4"

@@ -624,7 +624,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
                 choices=funds,
                 selected="fund_i_class_B_ETH"  # Default to Fund I - Class B (matches GL data)
             ),
-            class_="dropdown-with-arrow"
+            class_="custom-dropdown"
         )
     
     @output
@@ -669,7 +669,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
                 choices=lp_choices,
                 selected="ALL"  # Default to all LPs
             ),
-            class_="dropdown-with-arrow"
+            class_="custom-dropdown"
         )
     
     # Old PCAP generation disabled - now using GL-based PCAP

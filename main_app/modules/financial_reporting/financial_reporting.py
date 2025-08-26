@@ -204,11 +204,14 @@ def financial_reporting_ui():
                                 )
                             ),
                             shiny_ui.column(3, 
-                                shiny_ui.input_select(
-                                    "fr_currency",
-                                    "Currency",
-                                    choices={"ETH": "ETH (Ethereum)", "USD": "USD (US Dollar)"},
-                                    selected="ETH"
+                                shiny_ui.div(
+                                    shiny_ui.input_select(
+                                        "fr_currency",
+                                        "Currency",
+                                        choices={"ETH": "ETH (Ethereum)", "USD": "USD (US Dollar)"},
+                                        selected="ETH"
+                                    ),
+                                    class_="custom-dropdown"
                                 )
                             ),
                             shiny_ui.column(5, 

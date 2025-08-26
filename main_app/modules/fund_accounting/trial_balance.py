@@ -1,6 +1,8 @@
 from shiny import ui as shiny_ui, render, reactive
 import pandas as pd
 from datetime import datetime, timedelta
+from decimal import Decimal
+from pandas.tseries.offsets import MonthEnd
 from ...s3_utils import load_GL_file, load_COA_file
 from shiny.render import DataGrid, data_frame
 import json
@@ -13,6 +15,33 @@ try:
 except ImportError:
     HAS_WEASYPRINT = False
 import io
+
+def clean_date_utc(date_val):
+    """Clean and convert dates to UTC timezone"""
+    if pd.isna(date_val):
+        return pd.NaT
+
+    date_str = str(date_val).strip()
+
+    # Try direct conversion first
+    try:
+        parsed_date = pd.to_datetime(date_str, errors='raise')
+        # Ensure UTC timezone
+        if parsed_date.tz is None:
+            return parsed_date.tz_localize('UTC')
+        else:
+            return parsed_date.tz_convert('UTC')
+    except:
+        # If that fails, try extracting just the date part
+        if len(date_str) >= 10:
+            date_part = date_str[:10]  # YYYY-MM-DD
+            try:
+                parsed_date = pd.to_datetime(date_part, errors='raise')
+                # Localize to UTC (assume midnight UTC)
+                return parsed_date.tz_localize('UTC')
+            except:
+                pass
+        return pd.NaT
 
 def trial_balance_ui():
     return shiny_ui.page_fluid(
@@ -234,12 +263,15 @@ def register_outputs(output, input, selected_fund):
             
             if gl_df.empty:
                 print(f"DEBUG - TRIAL BALANCE FUND SELECTOR: GL data is empty!")
-                return shiny_ui.input_select(
-                    "tb_selected_fund",
-                    "Fund:",
-                    choices={"": "No funds available"},
-                    selected="",
-                    width="100%"
+                return shiny_ui.div(
+                    shiny_ui.input_select(
+                        "tb_selected_fund",
+                        "Fund:",
+                        choices={"": "No funds available"},
+                        selected="",
+                        width="100%"
+                    ),
+                    class_="custom-dropdown"
                 )
             
             print(f"DEBUG - TRIAL BALANCE FUND SELECTOR: GL columns: {list(gl_df.columns)}")
@@ -269,27 +301,33 @@ def register_outputs(output, input, selected_fund):
             default_fund = list(fund_choices.keys())[0] if fund_choices else ""
             print(f"DEBUG - TRIAL BALANCE FUND SELECTOR: Default fund: {default_fund}")
             
-            return shiny_ui.input_select(
-                "tb_selected_fund",
-                "Fund:",
-                choices=fund_choices,
-                selected=default_fund,
-                width="100%"
+            return shiny_ui.div(
+                shiny_ui.input_select(
+                    "tb_selected_fund",
+                    "Fund:",
+                    choices=fund_choices,
+                    selected=default_fund,
+                    width="100%"
+                ),
+                class_="custom-dropdown"
             )
             
         except Exception as e:
             print(f"Error in tb_fund_selector: {e}")
-            return shiny_ui.input_select(
-                "tb_selected_fund",
-                "Fund:",
-                choices={"": "Error loading funds"},
-                selected="",
-                width="100%"
+            return shiny_ui.div(
+                shiny_ui.input_select(
+                    "tb_selected_fund",
+                    "Fund:",
+                    choices={"": "Error loading funds"},
+                    selected="",
+                    width="100%"
+                ),
+                class_="custom-dropdown"
             )
     
     @reactive.calc
     def get_trial_balance_data():
-        """Generate trial balance data from GL transactions"""
+        """Generate trial balance data from GL transactions using pivot table approach"""
         print(f"DEBUG - TRIAL BALANCE: Starting get_trial_balance_data()")
         try:
             print(f"DEBUG - TRIAL BALANCE: Loading GL and COA data...")
@@ -331,216 +369,262 @@ def register_outputs(output, input, selected_fund):
                 print(f"DEBUG - TRIAL BALANCE: Missing date inputs - start: {start_date}, end: {end_date}")
                 return {"data": pd.DataFrame({"Message": ["Please select date range and click Generate"]}), "unbalanced_days": []}
             
+            # Make a working copy
+            df = gl_df.copy()
+            
+            # Apply enhanced date cleaning with UTC
+            print(f"DEBUG - TRIAL BALANCE: Applying UTC date cleaning...")
+            df['date'] = df['date'].apply(clean_date_utc)
+            
+            # Verify all dates are UTC
+            print(f"✅ Date timezone after cleaning: {df['date'].dt.tz}")
+            print(f"📅 Sample cleaned dates: {df['date'].head()}")
+            
+            # Check for any remaining NaT dates
+            nat_count = df['date'].isna().sum()
+            print(f"📊 NaT dates after cleaning: {nat_count}")
+            
+            if nat_count > 0:
+                print("⚠️  Records with NaT dates:")
+                nat_records = df[df['date'].isna()]
+                # Check which columns are available for debugging
+                debug_cols = []
+                if 'GL_Acct_Number' in nat_records.columns:
+                    debug_cols.append('GL_Acct_Number')
+                if 'account_name' in nat_records.columns:
+                    debug_cols.append('account_name')
+                debug_cols.append('date')
+                print(nat_records[debug_cols].head())
+                # Remove NaT records
+                df = df[df['date'].notna()]
+            
             # Convert to datetime for processing
             print(f"DEBUG - TRIAL BALANCE: Converting dates to datetime...")
             start_dt = pd.to_datetime(start_date)
             end_dt = pd.to_datetime(end_date)
-            print(f"DEBUG - TRIAL BALANCE: Converted dates - start_dt: {start_dt}, end_dt: {end_dt}")
+            
+            # Make dates UTC aware to match GL data
+            start_dt = pd.Timestamp(start_dt, tz='UTC')
+            end_dt = pd.Timestamp(end_dt, tz='UTC')
+            print(f"DEBUG - TRIAL BALANCE: UTC dates - start_dt: {start_dt}, end_dt: {end_dt}")
             
             if start_dt > end_dt:
                 print(f"DEBUG - TRIAL BALANCE: ERROR - Start date after end date!")
                 return {"data": pd.DataFrame({"Error": ["Start date must be before end date"]}), "unbalanced_days": []}
             
-            # Filter GL data for date range with timezone-aware handling
-            print(f"DEBUG - TRIAL BALANCE: Processing GL date column...")
-            gl_df['date'] = pd.to_datetime(gl_df['date'], errors='coerce')
-            print(f"DEBUG - TRIAL BALANCE: GL date range: {gl_df['date'].min()} to {gl_df['date'].max()}")
-            
-            # Convert comparison dates to match GL data timezone
-            if gl_df['date'].dt.tz is not None:
-                # GL data is timezone-aware (UTC), convert our dates to UTC
-                print(f"DEBUG - TRIAL BALANCE: Converting dates to UTC to match GL data timezone")
-                start_dt = pd.Timestamp(start_dt, tz='UTC')
-                end_dt = pd.Timestamp(end_dt, tz='UTC')
-                print(f"DEBUG - TRIAL BALANCE: UTC dates - start_dt: {start_dt}, end_dt: {end_dt}")
-            
             # Filter by date range
             print(f"DEBUG - TRIAL BALANCE: Filtering GL data by date range...")
-            print(f"DEBUG - TRIAL BALANCE: GL data shape before date filter: {gl_df.shape}")
-            gl_filtered = gl_df[
-                (gl_df['date'] >= start_dt) & 
-                (gl_df['date'] <= end_dt)
-            ].copy()
-            print(f"DEBUG - TRIAL BALANCE: GL data shape after date filter: {gl_filtered.shape}")
+            print(f"DEBUG - TRIAL BALANCE: GL data shape before date filter: {df.shape}")
+            df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)].copy()
+            print(f"DEBUG - TRIAL BALANCE: GL data shape after date filter: {df.shape}")
             
             # Filter by fund if specified
             print(f"DEBUG - TRIAL BALANCE: Checking fund filter - selected_fund: '{selected_fund}'")
-            print(f"DEBUG - TRIAL BALANCE: GL columns: {list(gl_filtered.columns)}")
             if selected_fund and selected_fund != "ALL" and selected_fund != "":
-                if 'fund' in gl_filtered.columns:
+                if 'fund' in df.columns:
                     print(f"DEBUG - TRIAL BALANCE: Filtering by fund: {selected_fund}")
-                    unique_funds = gl_filtered['fund'].unique()
-                    print(f"DEBUG - TRIAL BALANCE: Available funds in GL data: {unique_funds}")
-                    gl_filtered = gl_filtered[gl_filtered['fund'] == selected_fund]
-                    print(f"DEBUG - TRIAL BALANCE: GL data shape after fund filter: {gl_filtered.shape}")
-                elif 'fund_id' in gl_filtered.columns:
-                    print(f"DEBUG - TRIAL BALANCE: Using 'fund_id' column for filtering")
-                    unique_fund_ids = gl_filtered['fund_id'].unique()
-                    print(f"DEBUG - TRIAL BALANCE: Available fund_ids: {unique_fund_ids}")
+                    df = df[df['fund'] == selected_fund]
+                    print(f"DEBUG - TRIAL BALANCE: GL data shape after fund filter: {df.shape}")
+                elif 'fund_id' in df.columns:
                     print(f"DEBUG - TRIAL BALANCE: Filtering by fund_id: {selected_fund}")
-                    gl_filtered = gl_filtered[gl_filtered['fund_id'] == selected_fund]
-                    print(f"DEBUG - TRIAL BALANCE: GL data shape after fund_id filter: {gl_filtered.shape}")
+                    df = df[df['fund_id'] == selected_fund]
+                    print(f"DEBUG - TRIAL BALANCE: GL data shape after fund_id filter: {df.shape}")
                 else:
                     print(f"DEBUG - TRIAL BALANCE: WARNING - No 'fund' or 'fund_id' column in GL data")
             else:
                 print(f"DEBUG - TRIAL BALANCE: No fund filter applied (using all funds)")
             
-            if gl_filtered.empty:
+            if df.empty:
                 print(f"DEBUG - TRIAL BALANCE: ERROR - No GL transactions found after filtering!")
                 return {"data": pd.DataFrame({"Message": ["No GL transactions found in selected date range"]}), "unbalanced_days": []}
             
-            # Generate date range columns
-            print(f"DEBUG - TRIAL BALANCE: Generating date range columns...")
-            date_range = pd.date_range(start=start_dt, end=end_dt, freq='D')
-            date_columns = [dt.strftime('%Y-%m-%d') for dt in date_range]
-            print(f"DEBUG - TRIAL BALANCE: Date columns ({len(date_columns)}): {date_columns[:5]}...{date_columns[-5:] if len(date_columns) > 5 else ''}")
+            # Check available columns and handle missing ones
+            print(f"DEBUG - TRIAL BALANCE: Available columns: {list(df.columns)}")
             
-            # Get all accounts from COA that have activity
-            print(f"DEBUG - TRIAL BALANCE: Getting active accounts from COA...")
-            active_accounts = set(gl_filtered['account_name'].unique())
-            print(f"DEBUG - TRIAL BALANCE: Active accounts ({len(active_accounts)}): {list(active_accounts)[:5]}...")
+            # Ensure GL_Acct_Number exists - if not, try to derive it or use a placeholder
+            if 'GL_Acct_Number' not in df.columns:
+                print(f"DEBUG - TRIAL BALANCE: GL_Acct_Number not found, using COA to map account_name to GL_Acct_Number")
+                # Merge with COA to get GL_Acct_Number
+                try:
+                    df = df.merge(
+                        coa_df[['account_name', 'GL_Acct_Number']].dropna(),
+                        on='account_name',
+                        how='left'
+                    )
+                    print(f"DEBUG - TRIAL BALANCE: After COA merge, GL_Acct_Number available for {df['GL_Acct_Number'].notna().sum()} records")
+                except Exception as e:
+                    print(f"DEBUG - TRIAL BALANCE: COA merge failed: {e}")
+                    # Create fallback account numbers
+                    df['GL_Acct_Number'] = df.index.astype(str)
             
-            print(f"DEBUG - TRIAL BALANCE: Checking COA for matching accounts...")
-            print(f"DEBUG - TRIAL BALANCE: COA account_name column available: {'account_name' in coa_df.columns}")
-            if 'account_name' in coa_df.columns:
-                print(f"DEBUG - TRIAL BALANCE: COA account names: {list(coa_df['account_name'].unique())[:5]}...")
+            # Convert debit/credit to Decimal for precision
+            print(f"DEBUG - TRIAL BALANCE: Converting amounts to Decimal...")
+            for col in ['debit_crypto', 'credit_crypto']:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .apply(lambda x: Decimal(x) if (x.replace('.', '', 1).replace('-', '', 1).replace('e', '', 1).replace('+', '', 1).isdigit()) else Decimal(0))
+                )
             
-            trial_balance_accounts = coa_df[coa_df['account_name'].isin(active_accounts)].copy()
-            print(f"DEBUG - TRIAL BALANCE: Trial balance accounts found in COA: {len(trial_balance_accounts)}")
+            # Compute net_debit_credit at 18-decimal precision
+            df['net_debit_credit_crypto'] = (df['debit_crypto'] - df['credit_crypto']).round(18)
             
-            if trial_balance_accounts.empty:
-                print(f"DEBUG - TRIAL BALANCE: ERROR - No matching accounts found in COA!")
-                return {"data": pd.DataFrame({"Message": ["No matching accounts found in COA"]}), "unbalanced_days": []}
+            # Extract "day" (midnight UTC) for grouping
+            df['day'] = df['date'].dt.normalize()
             
-            # Initialize trial balance structure
-            print(f"DEBUG - TRIAL BALANCE: Initializing trial balance structure...")
-            tb_data = []
+            # Check for specific accounts before pivot (like GP incentive)
+            print(f"\n🔍 CHECK BEFORE PIVOT:")
+            incentive_before = df[df['account_name'].str.contains('Incentive', case=False, na=False)]
+            if not incentive_before.empty:
+                print(f"Incentive records before pivot: {len(incentive_before)}")
+                print("Incentive amounts before pivot:")
+                print(incentive_before.groupby('account_name')['net_debit_credit_crypto'].sum())
             
-            # Track daily totals for balance checking
-            daily_debits = {date_str: 0.0 for date_str in date_columns}
-            daily_credits = {date_str: 0.0 for date_str in date_columns}
-            print(f"DEBUG - TRIAL BALANCE: Processing {len(trial_balance_accounts)} accounts...")
+            # Build a pivot_table (account × day) in one go
+            print(f"DEBUG - TRIAL BALANCE: Creating pivot table...")
+            print(f"DEBUG - TRIAL BALANCE: Columns before pivot: {list(df.columns)}")
+            print(f"DEBUG - TRIAL BALANCE: Has GL_Acct_Number: {'GL_Acct_Number' in df.columns}")
+            print(f"DEBUG - TRIAL BALANCE: Has account_name: {'account_name' in df.columns}")
+            print(f"DEBUG - TRIAL BALANCE: Has day: {'day' in df.columns}")
+            print(f"DEBUG - TRIAL BALANCE: Has net_debit_credit_crypto: {'net_debit_credit_crypto' in df.columns}")
             
-            account_count = 0
-            for _, coa_row in trial_balance_accounts.iterrows():
-                account_count += 1
-                account_name = coa_row['account_name']
-                gl_acct_number = coa_row['GL_Acct_Number']
-                
-                if account_count <= 3:  # Only debug first 3 accounts to avoid spam
-                    print(f"DEBUG - TRIAL BALANCE: Processing account {account_count}: '{account_name}' ({gl_acct_number})")
-                
-                # Get transactions for this account
-                account_transactions = gl_filtered[gl_filtered['account_name'] == account_name]
-                
-                if account_count <= 3:
-                    print(f"DEBUG - TRIAL BALANCE: Account '{account_name}' has {len(account_transactions)} transactions")
-                
-                if account_transactions.empty:
-                    if account_count <= 3:
-                        print(f"DEBUG - TRIAL BALANCE: Skipping account '{account_name}' - no transactions")
-                    continue
-                
-                # Calculate running balance for each date
-                row_data = {
-                    'GL_Acct_Number': gl_acct_number,
-                    'account_name': account_name
-                }
-                
-                running_balance = 0
-                has_activity = False
-                
-                for date_str in date_columns:
-                    date_dt = pd.to_datetime(date_str)
-                    
-                    # Convert date to match GL data timezone
-                    if account_transactions['date'].dt.tz is not None:
-                        date_dt = pd.Timestamp(date_dt, tz='UTC')
-                    
-                    # Get transactions up to this date
-                    transactions_to_date = account_transactions[
-                        account_transactions['date'] <= date_dt
-                    ]
-                    
-                    # Get transactions just for this specific date for daily totals
-                    transactions_this_date = account_transactions[
-                        account_transactions['date'].dt.date == date_dt.date()
-                    ]
-                    
-                    if transactions_to_date.empty:
-                        row_data[date_str] = 0.0
-                    else:
-                        # Calculate cumulative balance using proper accounting principles
-                        total_debits = pd.to_numeric(transactions_to_date['debit_crypto'], errors='coerce').fillna(0).sum()
-                        total_credits = pd.to_numeric(transactions_to_date['credit_crypto'], errors='coerce').fillna(0).sum()
-                        
-                        # Determine normal balance based on account type
-                        first_digit = str(gl_acct_number)[0]
-                        if first_digit in ['1', '8']:  # Assets, Expenses
-                            balance = total_debits - total_credits
-                        else:  # Liabilities, Equity, Income
-                            balance = total_credits - total_debits
-                        
-                        row_data[date_str] = round(balance, 6)
-                        
-                        if abs(balance) > 0.0001:
-                            has_activity = True
-                    
-                    # Track daily debits and credits for this specific date
-                    if not transactions_this_date.empty:
-                        day_debits = pd.to_numeric(transactions_this_date['debit_crypto'], errors='coerce').fillna(0).sum()
-                        day_credits = pd.to_numeric(transactions_this_date['credit_crypto'], errors='coerce').fillna(0).sum()
-                        daily_debits[date_str] += day_debits
-                        daily_credits[date_str] += day_credits
-                
-                # Only include accounts with meaningful activity
-                if has_activity:
-                    tb_data.append(row_data)
+            # Use only columns that exist for the pivot table
+            if 'GL_Acct_Number' in df.columns:
+                pivot_index = ['GL_Acct_Number', 'account_name']
+                print(f"DEBUG - TRIAL BALANCE: Using both GL_Acct_Number and account_name as index")
+            else:
+                pivot_index = ['account_name']
+                print(f"DEBUG - TRIAL BALANCE: Using only account_name as index (GL_Acct_Number not available)")
             
-            print(f"DEBUG - TRIAL BALANCE: Finished processing accounts. Total accounts with activity: {len(tb_data)}")
+            acct_by_day = (
+                df
+                .pivot_table(
+                    index=pivot_index,
+                    columns='day',
+                    values='net_debit_credit_crypto',
+                    aggfunc='sum',
+                    fill_value=Decimal(0),
+                )
+            )
             
-            if not tb_data:
-                print(f"DEBUG - TRIAL BALANCE: ERROR - No accounts with activity in selected period!")
-                return {"data": pd.DataFrame({"Message": ["No accounts with activity in selected period"]}), "unbalanced_days": []}
+            print(f"DEBUG - TRIAL BALANCE: Pivot table shape: {acct_by_day.shape}")
             
-            # Create DataFrame and sort by account number
-            print(f"DEBUG - TRIAL BALANCE: Creating final DataFrame...")
-            tb_df = pd.DataFrame(tb_data)
-            print(f"DEBUG - TRIAL BALANCE: DataFrame created with shape: {tb_df.shape}")
-            tb_df = tb_df.sort_values('GL_Acct_Number')
-            print(f"DEBUG - TRIAL BALANCE: DataFrame sorted by GL_Acct_Number")
+            # Determine the date range for the trial balance
+            min_txn_day = df['day'].min()
+            max_txn_day = df['day'].max()
             
-            # Calculate net debit/credit row and check for unbalanced days
-            net_row = {
-                'GL_Acct_Number': '*** NET ***',
-                'account_name': 'Daily Net (Debits - Credits)'
-            }
+            print(f"\n📅 Date range: {min_txn_day} to {max_txn_day}")
             
+            # "floor" min_txn_day to the 1st day of that same month (keep UTC timezone)
+            month_start = min_txn_day.replace(day=1)
+            
+            # "ceiling" max_txn_day to the last day of that same month
+            month_end = max_txn_day.replace(day=1) + MonthEnd(0)
+            
+            print(f"📅 Extended range: {month_start} to {month_end}")
+            
+            # Build a DatetimeIndex for every day between month_start and month_end (UTC)
+            all_days = pd.date_range(start=month_start, end=month_end, freq='D', tz='UTC')
+            
+            # Reindex acct_by_day's columns so that every date in all_days appears
+            acct_by_day = acct_by_day.reindex(columns=all_days, fill_value=Decimal(0))
+            
+            # Take the cumulative sum across days for cumulative balances
+            print(f"DEBUG - TRIAL BALANCE: Calculating cumulative sum...")
+            trial_balance = acct_by_day.cumsum(axis=1)
+            
+            print(f"DEBUG - TRIAL BALANCE: Trial balance shape after cumsum: {trial_balance.shape}")
+            
+            # Add a "Net Debit (Credit)" row (summing all accounts) - this is DAILY NET not cumulative
+            print(f"DEBUG - TRIAL BALANCE: Adding NET row...")
+            # For NET row, we want daily activity, not cumulative
+            net_row_values = acct_by_day.sum(axis=0)  # Sum each day's activity across all accounts
+            trial_balance.loc[('Net Debit (Credit)', ''), :] = net_row_values
+            
+            # Zero-out near-zero entries and round to 18 decimals
+            threshold = Decimal('1e-18')
+            trial_balance = trial_balance.where(trial_balance.abs() >= threshold, Decimal(0))
+            trial_balance = trial_balance.round(18)
+            
+            # Flatten the column-Index from Timestamp to "YYYY-MM-DD" strings (UTC)
+            trial_balance.columns = trial_balance.columns.strftime("%Y-%m-%d")
+            
+            # Reset the MultiIndex
+            trial_balance = trial_balance.reset_index()
+            
+            # Ensure GL_Acct_Number column exists for downstream code
+            if 'GL_Acct_Number' not in trial_balance.columns:
+                print(f"DEBUG - TRIAL BALANCE: Adding GL_Acct_Number column using account_name")
+                # Create GL_Acct_Number from account_name or use index
+                trial_balance['GL_Acct_Number'] = trial_balance.index.astype(str)
+            
+            # Rename the blank GL_Acct_Name for the Net row
+            mask = trial_balance['GL_Acct_Number'] == 'Net Debit (Credit)'
+            trial_balance.loc[mask, 'account_name'] = 'Daily Net (Debits - Credits)'
+            trial_balance.loc[mask, 'GL_Acct_Number'] = '*** NET ***'
+            
+            # Convert date columns to float for display
+            date_cols = trial_balance.columns.drop(['GL_Acct_Number', 'account_name'])
+            
+            for col in date_cols:
+                def _to_float(s):
+                    try:
+                        return float(s)
+                    except:
+                        return 0.0
+                trial_balance[col] = trial_balance[col].apply(_to_float)
+            
+            # Filter to only show dates in the requested range
+            print(f"DEBUG - TRIAL BALANCE: Filtering columns to requested date range...")
+            start_str = start_dt.strftime("%Y-%m-%d")
+            end_str = end_dt.strftime("%Y-%m-%d")
+            
+            # Get columns that are within the requested date range
+            date_columns_to_keep = []
+            for col in date_cols:
+                if start_str <= col <= end_str:
+                    date_columns_to_keep.append(col)
+            
+            # Keep only the account columns and the date columns within range
+            columns_to_keep = ['GL_Acct_Number', 'account_name'] + date_columns_to_keep
+            trial_balance = trial_balance[columns_to_keep]
+            
+            print(f"DEBUG - TRIAL BALANCE: Final shape after date filtering: {trial_balance.shape}")
+            
+            # Calculate unbalanced days
             unbalanced_days = []
             BALANCE_THRESHOLD = 0.0001
             
-            for date_str in date_columns:
-                daily_net = daily_debits[date_str] - daily_credits[date_str]
-                net_row[date_str] = round(daily_net, 6)
-                
-                # Check if day is balanced within threshold
-                if abs(daily_net) > BALANCE_THRESHOLD:
-                    unbalanced_days.append({
-                        'date': date_str,
-                        'net_amount': daily_net,
-                        'debits': daily_debits[date_str],
-                        'credits': daily_credits[date_str]
-                    })
+            # Get the NET row to check for unbalanced days
+            net_row_data = trial_balance[trial_balance['GL_Acct_Number'] == '*** NET ***']
             
-            # Add net row to DataFrame
-            print(f"DEBUG - TRIAL BALANCE: Adding NET row to DataFrame...")
-            tb_df = pd.concat([tb_df, pd.DataFrame([net_row])], ignore_index=True)
-            print(f"DEBUG - TRIAL BALANCE: Final DataFrame shape with NET row: {tb_df.shape}")
-            print(f"DEBUG - TRIAL BALANCE: Final DataFrame columns: {list(tb_df.columns)}")
+            if not net_row_data.empty:
+                for date_col in date_columns_to_keep:
+                    daily_net = net_row_data[date_col].values[0]
+                    
+                    # Check if day is balanced within threshold
+                    if abs(daily_net) > BALANCE_THRESHOLD:
+                        unbalanced_days.append({
+                            'date': date_col,
+                            'net_amount': daily_net,
+                            'debits': 0,  # We don't track individual debits/credits in new approach
+                            'credits': 0
+                        })
+            
             print(f"DEBUG - TRIAL BALANCE: Unbalanced days: {len(unbalanced_days)}")
             
+            # Final check for specific accounts
+            final_check = trial_balance[
+                trial_balance['account_name'].str.contains('Incentive', case=False, na=False)
+            ]
+            
+            if not final_check.empty:
+                print(f"✅ Incentive accounts successfully included in trial balance!")
+                print("Incentive accounts:")
+                print(final_check[['GL_Acct_Number', 'account_name']])
+            
             print(f"DEBUG - TRIAL BALANCE: Returning final result...")
-            return {"data": tb_df, "unbalanced_days": unbalanced_days}
+            return {"data": trial_balance, "unbalanced_days": unbalanced_days}
             
         except Exception as e:
             print(f"Error in get_trial_balance_data: {e}")

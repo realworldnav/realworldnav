@@ -85,22 +85,28 @@ def transaction_history_content():
                 ui.card(
                     ui.card_header("Filters"),
                     ui.card_body(
-                        ui.input_select(
-                            "history_token_filter",
-                            "Token:",
-                            choices={"all": "All Tokens"},
-                            selected="all"
+                        ui.div(
+                            ui.input_select(
+                                "history_token_filter",
+                                "Token:",
+                                choices={"all": "All Tokens"},
+                                selected="all"
+                            ),
+                            class_="custom-dropdown"
                         ),
-                        ui.input_select(
-                            "history_type_filter",
-                            "Transaction Type:",
-                            choices={
-                                "all": "All Types",
-                                "buy": "Buys Only", 
-                                "sell": "Sells Only",
-                                "transfer": "Transfers Only"
-                            },
-                            selected="all"
+                        ui.div(
+                            ui.input_select(
+                                "history_type_filter",
+                                "Transaction Type:",
+                                choices={
+                                    "all": "All Types",
+                                    "buy": "Buys Only", 
+                                    "sell": "Sells Only",
+                                    "transfer": "Transfers Only"
+                                },
+                                selected="all"
+                            ),
+                            class_="custom-dropdown"
                         ),
                         ui.input_date_range(
                             "history_date_range",
@@ -1211,11 +1217,14 @@ def register_crypto_tracker_outputs(output, input, session):
             # Fallback choices
             token_choices = {"": "All Tokens", "ETH": "Ethereum", "USDC": "USD Coin"}
         
-        return ui.input_select(
-            "fifo_token_select",
-            "Token:",
-            choices=token_choices,
-            selected=""
+        return ui.div(
+            ui.input_select(
+                "fifo_token_select",
+                "Token:",
+                choices=token_choices,
+                selected=""
+            ),
+            class_="custom-dropdown"
         )
     
     @output

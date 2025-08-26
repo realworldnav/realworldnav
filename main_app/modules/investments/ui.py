@@ -33,11 +33,11 @@ def loan_portfolio_ui():
             ui.card_header("Filters"),
             ui.card_body(
                 ui.layout_columns(
-                    ui.input_selectize("loan_select", "Loan ID:", ["All Loans"], options={"create": False}),
+                    ui.div(ui.input_selectize("loan_select", "Loan ID:", ["All Loans"], options={"create": False}), class_="custom-dropdown"),
                     ui.output_ui("loan_date_range_ui"),
-                    ui.input_selectize("event_filter", "Event Type:", ["All Events"], options={"create": False}),
-                    ui.input_selectize("function_filter", "Function:", ["All Functions"], options={"create": False}),
-                    ui.input_selectize("platform_filter", "Platform:", ["All Platforms"], options={"create": False}),
+                    ui.div(ui.input_selectize("event_filter", "Event Type:", ["All Events"], options={"create": False}), class_="custom-dropdown"),
+                    ui.div(ui.input_selectize("function_filter", "Function:", ["All Functions"], options={"create": False}), class_="custom-dropdown"),
+                    ui.div(ui.input_selectize("platform_filter", "Platform:", ["All Platforms"], options={"create": False}), class_="custom-dropdown"),
                     col_widths=[2, 3, 2, 2, 3]
                 )
             )
@@ -104,8 +104,8 @@ def nft_portfolio_ui():
             ui.card_body(
                 ui.layout_columns(
                     ui.output_ui("nft_date_range_ui"),
-                    ui.input_selectize("nft_acquisition_filter", "Acquisition Type:", ["All Types"], options={"create": False}),
-                    ui.input_selectize("nft_collection_filter", "Collection:", ["All Collections"], options={"create": False}),
+                    ui.div(ui.input_selectize("nft_acquisition_filter", "Acquisition Type:", ["All Types"], options={"create": False}), class_="custom-dropdown"),
+                    ui.div(ui.input_selectize("nft_collection_filter", "Collection:", ["All Collections"], options={"create": False}), class_="custom-dropdown"),
                     col_widths=[4, 4, 4]
                 ),
                 style="padding: 0.75rem 1rem;"
@@ -191,12 +191,15 @@ def cryptocurrencies_ui():
                 ui.div(
                     ui.h6("Digital Asset Holdings", class_="mb-0", style="color: var(--bs-dark); font-weight: 600;"),
                     ui.div(
-                        ui.input_select(
-                            "crypto_filter", 
-                            "", 
-                            choices={"all": "All Assets", "major": "Major Assets (>1 ETH)", "minor": "Minor Assets (<1 ETH)"}, 
-                            selected="all",
-                            width="180px"
+                        ui.div(
+                            ui.input_select(
+                                "crypto_filter", 
+                                "", 
+                                choices={"all": "All Assets", "major": "Major Assets (>1 ETH)", "minor": "Minor Assets (<1 ETH)"}, 
+                                selected="all",
+                                width="180px"
+                            ),
+                            class_="custom-dropdown"
                         ),
                         style="margin-left: auto;"
                     ),

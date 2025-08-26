@@ -17,6 +17,7 @@ from io import BytesIO, StringIO
 import gzip
 import hashlib
 from pathlib import Path
+import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
 
@@ -189,17 +190,22 @@ class PersistenceManager:
                 logger.info(f"No existing transactions file for fund {self.fund_id}")
                 return pd.DataFrame()
             
-            # Load parquet from S3
+            # Load parquet from S3 using PyArrow
             obj = self.s3_client.get_object(Bucket=self.bucket, Key=self.transactions_key)
-            df = pd.read_parquet(BytesIO(obj['Body'].read()))
+            table = pq.read_table(BytesIO(obj['Body'].read()))
+            df = table.to_pandas()
             
-            # Convert date columns back to datetime
-            if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
-            if 'created_at' in df.columns:
-                df['created_at'] = pd.to_datetime(df['created_at'])
-            if 'last_modified' in df.columns:
-                df['last_modified'] = pd.to_datetime(df['last_modified'])
+            # Convert date columns back to datetime with UTC awareness
+            date_columns = ['date', 'created_at', 'last_modified']
+            for col in date_columns:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], utc=True)
+            
+            # Cast financial columns to Decimal
+            decimal_columns = ['token_amount', 'eth_value', 'usd_value', 'gas_fee_eth', 'gas_fee_usd']
+            for col in decimal_columns:
+                if col in df.columns:
+                    df[col] = df[col].apply(lambda x: Decimal(str(x)) if pd.notna(x) else Decimal('0'))
             
             logger.info(f"Loaded {len(df)} transactions for fund {self.fund_id}")
             return df
@@ -267,17 +273,26 @@ class PersistenceManager:
                 logger.info(f"No existing FIFO lots file for fund {self.fund_id}")
                 return pd.DataFrame()
             
-            # Load parquet from S3
+            # Load parquet from S3 using PyArrow
             obj = self.s3_client.get_object(Bucket=self.bucket, Key=self.lots_key)
-            df = pd.read_parquet(BytesIO(obj['Body'].read()))
+            table = pq.read_table(BytesIO(obj['Body'].read()))
+            df = table.to_pandas()
             
-            # Convert date columns back to datetime
-            if 'purchase_date' in df.columns:
-                df['purchase_date'] = pd.to_datetime(df['purchase_date'])
-            if 'created_at' in df.columns:
-                df['created_at'] = pd.to_datetime(df['created_at'])
-            if 'last_modified' in df.columns:
-                df['last_modified'] = pd.to_datetime(df['last_modified'])
+            # Convert date columns back to datetime with UTC awareness
+            date_columns = ['purchase_date', 'created_at', 'last_modified']
+            for col in date_columns:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], utc=True)
+            
+            # Cast financial columns to Decimal
+            decimal_columns = [
+                'original_quantity', 'remaining_quantity', 
+                'cost_basis_eth', 'cost_basis_usd',
+                'unrealized_gain_eth', 'unrealized_gain_usd'
+            ]
+            for col in decimal_columns:
+                if col in df.columns:
+                    df[col] = df[col].apply(lambda x: Decimal(str(x)) if pd.notna(x) else Decimal('0'))
             
             logger.info(f"Loaded {len(df)} FIFO lots for fund {self.fund_id}")
             return df

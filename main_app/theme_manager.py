@@ -792,7 +792,7 @@ class ThemeManager:
                     selected=self.current_theme,
                     width="100%"
                 ),
-                class_="dropdown-with-arrow"
+                class_="custom-dropdown"
             ),
             class_="selector-section"
         )

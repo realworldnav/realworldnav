@@ -151,7 +151,7 @@ def register_outputs(output, input, session, selected_fund):
 
                 elif col.lower() == "account_name":
                     choices = sorted(load_COA_file()["GL_Acct_Name"].dropna().unique())
-                    elements.append(ui.input_selectize(input_id, col, choices=choices, selected=val_str))
+                    elements.append(ui.div(ui.input_selectize(input_id, col, choices=choices, selected=val_str), class_="custom-dropdown"))
                 else:
                     elements.append(ui.input_text(input_id, col, val_str))
             except Exception as e:
@@ -299,11 +299,14 @@ def register_outputs(output, input, session, selected_fund):
                         "Fund ID:",
                         value=selected_fund()
                     ),
-                    ui.input_selectize(
-                        "new_wallet_id",
-                        "Wallet:",
-                        wallet_choices,
-                        selected=list(wallet_choices.keys())[0] if wallet_choices else ""
+                    ui.div(
+                        ui.input_selectize(
+                            "new_wallet_id",
+                            "Wallet:",
+                            wallet_choices,
+                            selected=list(wallet_choices.keys())[0] if wallet_choices else ""
+                        ),
+                        class_="custom-dropdown"
                     ),
                     col_widths=[6, 6]
                 ),
@@ -313,11 +316,14 @@ def register_outputs(output, input, session, selected_fund):
                         "Cryptocurrency:",
                         value="ETH"
                     ),
-                    ui.input_selectize(
-                        "new_account_name",
-                        "Account Name:",
-                        account_choices,
-                        selected=list(account_choices.keys())[0] if account_choices else ""
+                    ui.div(
+                        ui.input_selectize(
+                            "new_account_name",
+                            "Account Name:",
+                            account_choices,
+                            selected=list(account_choices.keys())[0] if account_choices else ""
+                        ),
+                        class_="custom-dropdown"
                     ),
                     col_widths=[6, 6]
                 ),
@@ -578,11 +584,14 @@ def register_outputs(output, input, session, selected_fund):
                         "Hash Monetize:",
                         value=""
                     ),
-                    ui.input_selectize(
-                        "new_intercompany",
-                        "Intercompany:",
-                        {"": "", "Yes": "Yes", "No": "No"},
-                        selected=""
+                    ui.div(
+                        ui.input_selectize(
+                            "new_intercompany",
+                            "Intercompany:",
+                            {"": "", "Yes": "Yes", "No": "No"},
+                            selected=""
+                        ),
+                        class_="custom-dropdown"
                     ),
                     col_widths=[6, 6]
                 ),

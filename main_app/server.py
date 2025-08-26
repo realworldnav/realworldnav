@@ -301,7 +301,7 @@ def server(input, output, session):
                     selected=default_fund,  # Use the environment variable default
                     width="100%"
                 ),
-                class_="dropdown-with-arrow"
+                class_="custom-dropdown"
             )
         return ui.div("No funds available")
     

@@ -400,8 +400,8 @@ def nft_ui():
         ui.h2("🖼️ NFT Collateral", class_="mt-3"),
         ui.layout_sidebar(
             ui.sidebar(
-                ui.input_selectize("nft_contract_filter", "Filter by Contract:", ["All Contracts"], options={"create": False}),
-                ui.input_selectize("nft_collection_filter", "Filter by Collection:", ["All Collections"], options={"create": False}),
+                ui.div(ui.input_selectize("nft_contract_filter", "Filter by Contract:", ["All Contracts"], options={"create": False}), class_="custom-dropdown"),
+                ui.div(ui.input_selectize("nft_collection_filter", "Filter by Collection:", ["All Collections"], options={"create": False}), class_="custom-dropdown"),
                 ui.input_numeric("nft_token_id", "Token ID:", value=None, min=0),
                 ui.input_action_button("nft_refresh", "Refresh NFT Data", class_="btn-primary")
             ),

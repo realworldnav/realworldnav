@@ -35,28 +35,37 @@ def journal_entries_content():
     return ui.div(
         # --- Filters: Account & Wallet ---
         ui.layout_columns(
-            ui.input_selectize(
-                "gl_account_filter",
-                "Filter by GL Account Name",
-                choices=[],
-                selected="All Accounts"
+            ui.div(
+                ui.input_selectize(
+                    "gl_account_filter",
+                    "Filter by GL Account Name",
+                    choices=[],
+                    selected="All Accounts"
+                ),
+                class_="custom-dropdown"
             ),
-            ui.input_selectize(
-                "wallet_filter",
-                "Filter by Wallet",
-                choices=[],
-                selected="All Wallets"
+            ui.div(
+                ui.input_selectize(
+                    "wallet_filter",
+                    "Filter by Wallet",
+                    choices=[],
+                    selected="All Wallets"
+                ),
+                class_="custom-dropdown"
             ),
         ),
 
         # --- Column Selector + Buttons ---
         ui.layout_columns(
-            ui.input_selectize(
-                "gl_column_selector",
-                "Show Columns",
-                choices=[],       # filled dynamically
-                selected=[],      # defaults set server-side
-                multiple=True
+            ui.div(
+                ui.input_selectize(
+                    "gl_column_selector",
+                    "Show Columns",
+                    choices=[],       # filled dynamically
+                    selected=[],      # defaults set server-side
+                    multiple=True
+                ),
+                class_="custom-dropdown"
             ),
             ui.input_action_button("apply_columns", "Apply Columns", class_="mt-4"),
             ui.input_action_button("reset_columns", "Reset Columns", class_="mt-4")

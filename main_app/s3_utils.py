@@ -4,6 +4,38 @@ from functools import lru_cache
 from io import BytesIO
 from io import StringIO
 import io
+import pyarrow.parquet as pq
+from decimal import Decimal, InvalidOperation
+import re
+
+def safe_to_decimal(value):
+    """Safely convert a value to Decimal, handling various edge cases"""
+    if pd.isna(value) or value is None:
+        return Decimal('0')
+    
+    # Convert to string and clean up
+    str_value = str(value).strip().lower()
+    
+    # Handle common invalid cases
+    if str_value in ['', 'nan', 'none', 'null', 'na']:
+        return Decimal('0')
+    
+    try:
+        # Try direct conversion
+        return Decimal(str_value)
+    except (ValueError, TypeError, InvalidOperation):
+        # If conversion fails, try to extract numeric part
+        # Extract numeric characters, decimal point, and minus sign
+        numeric_part = re.sub(r'[^0-9.-]', '', str_value)
+        
+        if numeric_part and numeric_part not in ['-', '.', '-.']:
+            try:
+                return Decimal(numeric_part)
+            except (ValueError, TypeError, InvalidOperation):
+                pass
+        
+        # If all else fails, return 0
+        return Decimal('0')
 
 # -- Configure your bucket and TB file here
 BUCKET_NAME = "realworldnav-beta"
@@ -105,7 +137,30 @@ def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
     content = obj["Body"].read()
 
     if key.endswith(".parquet"):
-        df = pd.read_parquet(BytesIO(content))
+        # Use PyArrow for better control over data types
+        table = pq.read_table(BytesIO(content))
+        df = table.to_pandas()
+        
+        # Fix datetime columns to be UTC-aware
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], utc=True)
+        if "operating_date" in df.columns:
+            df["operating_date"] = pd.to_datetime(df["operating_date"], utc=True)
+        
+        # Cast financial columns to Decimal for precision
+        decimal_cols = [
+            'debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
+            'net_debit_credit_crypto', 'net_debit_credit_USD',
+            'eth_usd_price', 'principal_crypto', 'principal_USD',
+            'interest_rec_crypto', 'interest_rec_USD',
+            'payoff_amount_crypto', 'payoff_amount_USD',
+            'annual_interest_rate'
+        ]
+        
+        for col in decimal_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(safe_to_decimal)
+        
         df.attrs["dtypes"] = df.dtypes.to_dict()
     elif key.endswith(".xlsx"):
         df = pd.read_excel(BytesIO(content))
@@ -510,11 +565,46 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         positions_df = pd.DataFrame()
         journal_df = pd.DataFrame()
         
+        # Define decimal columns for each DataFrame type
+        fifo_decimal_cols = [
+            'quantity', 'unit_price_eth', 'unit_price_usd', 
+            'total_value_eth', 'total_value_usd',
+            'cost_basis_eth', 'cost_basis_usd',
+            'realized_gain_loss_eth', 'realized_gain_loss_usd'
+        ]
+        
+        position_decimal_cols = [
+            'quantity', 'avg_cost_eth', 'avg_cost_usd',
+            'current_value_eth', 'current_value_usd',
+            'unrealized_pnl_eth', 'unrealized_pnl_usd'
+        ]
+        
+        journal_decimal_cols = [
+            'debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
+            'net_debit_credit_crypto', 'net_debit_credit_USD',
+            'eth_usd_price', 'principal_crypto', 'principal_USD',
+            'interest_rec_crypto', 'interest_rec_USD',
+            'payoff_amount_crypto', 'payoff_amount_USD',
+            'annual_interest_rate'
+        ]
+        
         # 1. Load FIFO transactions
         if metadata.get('has_transactions', False):
             try:
                 obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_transactions.parquet")
-                fifo_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+                table = pq.read_table(BytesIO(obj["Body"].read()))
+                fifo_df = table.to_pandas()
+                
+                # Fix datetime columns
+                for col in ['date', 'created_at', 'updated_at']:
+                    if col in fifo_df.columns:
+                        fifo_df[col] = pd.to_datetime(fifo_df[col], utc=True)
+                
+                # Cast decimal columns
+                for col in fifo_decimal_cols:
+                    if col in fifo_df.columns:
+                        fifo_df[col] = fifo_df[col].apply(lambda x: Decimal(str(x)) if pd.notna(x) else Decimal('0'))
+                        
             except Exception as e:
                 print(f"Warning: Could not load FIFO transactions: {e}")
         
@@ -522,7 +612,19 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         if metadata.get('has_positions', False):
             try:
                 obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_positions.parquet")
-                positions_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+                table = pq.read_table(BytesIO(obj["Body"].read()))
+                positions_df = table.to_pandas()
+                
+                # Fix datetime columns
+                for col in ['last_update', 'first_purchase_date']:
+                    if col in positions_df.columns:
+                        positions_df[col] = pd.to_datetime(positions_df[col], utc=True)
+                
+                # Cast decimal columns
+                for col in position_decimal_cols:
+                    if col in positions_df.columns:
+                        positions_df[col] = positions_df[col].apply(lambda x: Decimal(str(x)) if pd.notna(x) else Decimal('0'))
+                        
             except Exception as e:
                 print(f"Warning: Could not load positions: {e}")
         
@@ -530,7 +632,19 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         if metadata.get('has_journal', False):
             try:
                 obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_journal.parquet")
-                journal_df = pd.read_parquet(BytesIO(obj["Body"].read()))
+                table = pq.read_table(BytesIO(obj["Body"].read()))
+                journal_df = table.to_pandas()
+                
+                # Fix datetime columns
+                for col in ['date', 'operating_date']:
+                    if col in journal_df.columns:
+                        journal_df[col] = pd.to_datetime(journal_df[col], utc=True)
+                
+                # Cast decimal columns
+                for col in journal_decimal_cols:
+                    if col in journal_df.columns:
+                        journal_df[col] = journal_df[col].apply(lambda x: Decimal(str(x)) if pd.notna(x) else Decimal('0'))
+                        
             except Exception as e:
                 print(f"Warning: Could not load journal entries: {e}")
         
