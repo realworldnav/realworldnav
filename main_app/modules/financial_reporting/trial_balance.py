@@ -7,8 +7,39 @@ from shiny import ui, render, reactive
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from pandas.tseries.offsets import MonthEnd
+import re
 from .tb_generator import generate_trial_balance_from_gl
 from .data_processor import format_currency, get_previous_period_date
+
+
+def clean_date_utc(date_val):
+    """Clean and convert dates to UTC timezone"""
+    if pd.isna(date_val):
+        return pd.NaT
+
+    date_str = str(date_val).strip()
+
+    # Try direct conversion first
+    try:
+        parsed_date = pd.to_datetime(date_str, errors='raise')
+        # Ensure UTC timezone
+        if parsed_date.tz is None:
+            return parsed_date.tz_localize('UTC')
+        else:
+            return parsed_date.tz_convert('UTC')
+    except:
+        # If that fails, try extracting just the date part
+        if len(date_str) >= 10:
+            date_part = date_str[:10]  # YYYY-MM-DD
+            try:
+                parsed_date = pd.to_datetime(date_part, errors='raise')
+                # Localize to UTC (assume midnight UTC)
+                return parsed_date.tz_localize('UTC')
+            except:
+                pass
+        return pd.NaT
 
 
 def trial_balance_ui():
@@ -26,9 +57,12 @@ def register_outputs(output, input, gl_data, selected_date):
     
     @reactive.calc
     def trial_balance_data():
-        """Calculate trial balance data using COA-first approach to ensure ALL non-zero accounts are captured"""
+        """Calculate trial balance data using enhanced pivot table approach with comparison periods"""
+        print(f"DEBUG - Financial Reporting TB: Starting trial_balance_data()")
+        
         df = gl_data()
         if df.empty:
+            print(f"DEBUG - Financial Reporting TB: GL data is empty")
             return pd.DataFrame()
         
         # Get the selected reporting date
@@ -37,99 +71,197 @@ def register_outputs(output, input, gl_data, selected_date):
         # Get comparison date (previous month end)
         comp_date = get_previous_period_date(report_date, 'month')
         
-        # CRITICAL: Load COA first as master account list (like Fund Accounting does)
+        print(f"DEBUG - Financial Reporting TB: Report date: {report_date}, Comparison date: {comp_date}")
+        
+        # Load COA for account mapping
         from ...s3_utils import load_COA_file
         from .tb_generator import categorize_account
         
         coa_df = load_COA_file()
         if coa_df.empty:
+            print(f"DEBUG - Financial Reporting TB: COA data is empty")
             return pd.DataFrame()
         
-        # Ensure GL data has proper account mapping
-        if 'GL_Acct_Number' not in df.columns:
-            print("ERROR - Financial Reporting TB: No GL_Acct_Number column found in GL data")
-            return pd.DataFrame()
-        
-        # Build trial balance using COA-first approach
-        print(f"DEBUG - Financial Reporting TB: Building trial balance for {len(coa_df)} COA accounts")
-        
-        tb_accounts = []
-        coa_dict = dict(zip(coa_df['GL_Acct_Number'], coa_df['GL_Acct_Name']))
-        
-        # For each account in COA, check if it has activity in GL data
-        for _, coa_row in coa_df.iterrows():
-            gl_acct_number = coa_row['GL_Acct_Number']
-            gl_acct_name = coa_row['GL_Acct_Name']
+        try:
+            # Make working copy and apply enhanced date cleaning
+            gl_df = df.copy()
+            print(f"DEBUG - Financial Reporting TB: GL data shape: {gl_df.shape}")
             
-            # Get all transactions for this account (regardless of date filtering for now)
-            account_gl_data = df[df['GL_Acct_Number'] == gl_acct_number].copy()
+            # Apply enhanced date cleaning with UTC
+            gl_df['date'] = gl_df['date'].apply(clean_date_utc)
             
-            if account_gl_data.empty:
-                continue  # Skip accounts with no transactions
+            # Check for any remaining NaT dates
+            nat_count = gl_df['date'].isna().sum()
+            print(f"DEBUG - Financial Reporting TB: NaT dates after cleaning: {nat_count}")
             
-            # Ensure proper timezone handling for date comparisons
-            account_dates = pd.to_datetime(account_gl_data['date'], errors='coerce')
+            if nat_count > 0:
+                # Remove NaT records
+                gl_df = gl_df[gl_df['date'].notna()]
             
-            # Convert comparison dates to match GL data timezone if needed
+            # Check available columns and handle missing ones
+            print(f"DEBUG - Financial Reporting TB: Available columns: {list(gl_df.columns)}")
+            
+            # Ensure GL_Acct_Number exists - if not, try to derive it from COA
+            if 'GL_Acct_Number' not in gl_df.columns:
+                print(f"DEBUG - Financial Reporting TB: GL_Acct_Number not found, using COA to map account_name")
+                try:
+                    gl_df = gl_df.merge(
+                        coa_df[['account_name', 'GL_Acct_Number']].dropna(),
+                        on='account_name',
+                        how='left'
+                    )
+                    print(f"DEBUG - Financial Reporting TB: After COA merge, GL_Acct_Number available for {gl_df['GL_Acct_Number'].notna().sum()} records")
+                except Exception as e:
+                    print(f"DEBUG - Financial Reporting TB: COA merge failed: {e}")
+                    return pd.DataFrame()
+            
+            # Convert debit/credit to Decimal for precision
+            print(f"DEBUG - Financial Reporting TB: Converting amounts to Decimal...")
+            for col in ['debit_crypto', 'credit_crypto']:
+                if col in gl_df.columns:
+                    gl_df[col] = (
+                        gl_df[col]
+                        .astype(str)
+                        .apply(lambda x: Decimal(x) if (x.replace('.', '', 1).replace('-', '', 1).replace('e', '', 1).replace('+', '', 1).isdigit()) else Decimal(0))
+                    )
+            
+            # Compute net_debit_credit at 18-decimal precision
+            gl_df['net_debit_credit_crypto'] = (gl_df['debit_crypto'] - gl_df['credit_crypto']).round(18)
+            
+            # Extract "day" (midnight UTC) for grouping
+            gl_df['day'] = gl_df['date'].dt.normalize()
+            
+            # Convert dates for comparison
             report_dt = pd.to_datetime(report_date)
             comp_dt = pd.to_datetime(comp_date)
             
-            # If GL dates are timezone-aware, make comparison dates timezone-aware too
-            if account_dates.dt.tz is not None:
-                if report_dt.tz is None:
-                    report_dt = pd.Timestamp(report_dt, tz='UTC')
-                if comp_dt.tz is None:
-                    comp_dt = pd.Timestamp(comp_dt, tz='UTC')
+            # Make dates UTC aware to match GL data
+            report_dt = pd.Timestamp(report_dt, tz='UTC')
+            comp_dt = pd.Timestamp(comp_dt, tz='UTC')
             
-            # Calculate balance for current period (up to report_date)
-            current_data = account_gl_data[account_dates <= report_dt]
+            print(f"DEBUG - Financial Reporting TB: UTC dates - report_dt: {report_dt}, comp_dt: {comp_dt}")
             
-            if not current_data.empty:
-                current_debits = pd.to_numeric(current_data['debit_crypto'], errors='coerce').fillna(0).sum()
-                current_credits = pd.to_numeric(current_data['credit_crypto'], errors='coerce').fillna(0).sum()
-                current_balance = current_debits - current_credits
-            else:
-                current_balance = 0.0
-            
-            # Calculate balance for comparison period (up to comp_date)
-            comp_data = account_gl_data[account_dates <= comp_dt]
-            
-            if not comp_data.empty:
-                comp_debits = pd.to_numeric(comp_data['debit_crypto'], errors='coerce').fillna(0).sum()
-                comp_credits = pd.to_numeric(comp_data['credit_crypto'], errors='coerce').fillna(0).sum()
-                comp_balance = comp_debits - comp_credits
-            else:
-                comp_balance = 0.0
-            
-            # Include account if either period has non-zero balance
-            if abs(current_balance) > 0.000001 or abs(comp_balance) > 0.000001:
-                # Get original account name for display (first occurrence in GL data)
-                original_name = account_gl_data['account_name'].iloc[0] if 'account_name' in account_gl_data.columns else gl_acct_name
+            # Function to generate trial balance for a specific date
+            def generate_tb_for_date(end_date, period_name):
+                print(f"DEBUG - Financial Reporting TB: Generating TB for {period_name} up to {end_date}")
                 
-                tb_accounts.append({
-                    'GL_Acct_Number': gl_acct_number,
-                    'GL_Acct_Name': gl_acct_name,
-                    'original_account_name': original_name,
-                    'Category': categorize_account(gl_acct_number),
-                    'Balance_current': round(current_balance, 6),
-                    'Balance_comparison': round(comp_balance, 6),
-                    'Change': round(current_balance - comp_balance, 6)
-                })
-        
-        if not tb_accounts:
-            print("DEBUG - Financial Reporting TB: No accounts with non-zero balances found")
+                # Filter data up to the specified date
+                period_df = gl_df[gl_df['date'] <= end_date].copy()
+                print(f"DEBUG - Financial Reporting TB: {period_name} data shape: {period_df.shape}")
+                
+                if period_df.empty:
+                    return pd.DataFrame()
+                
+                # Use only columns that exist for the pivot table
+                if 'GL_Acct_Number' in period_df.columns:
+                    pivot_index = ['GL_Acct_Number', 'account_name']
+                else:
+                    pivot_index = ['account_name']
+                
+                # Create pivot table with cumulative balances
+                acct_by_day = (
+                    period_df
+                    .pivot_table(
+                        index=pivot_index,
+                        columns='day',
+                        values='net_debit_credit_crypto',
+                        aggfunc='sum',
+                        fill_value=Decimal(0),
+                    )
+                )
+                
+                if acct_by_day.empty:
+                    return pd.DataFrame()
+                
+                # Take cumulative sum to get running balances
+                trial_balance = acct_by_day.cumsum(axis=1)
+                
+                # Get the final balance (last column) for each account
+                final_balances = trial_balance.iloc[:, -1].to_frame('Balance')
+                final_balances = final_balances.reset_index()
+                
+                # Ensure GL_Acct_Number column exists
+                if 'GL_Acct_Number' not in final_balances.columns:
+                    final_balances['GL_Acct_Number'] = final_balances.index.astype(str)
+                
+                # Convert to float for display
+                final_balances['Balance'] = final_balances['Balance'].apply(float)
+                
+                # Filter out near-zero balances
+                final_balances = final_balances[abs(final_balances['Balance']) > 0.000001]
+                
+                print(f"DEBUG - Financial Reporting TB: {period_name} final accounts: {len(final_balances)}")
+                return final_balances
+            
+            # Generate trial balances for both periods
+            current_tb = generate_tb_for_date(report_dt, "Current")
+            comp_tb = generate_tb_for_date(comp_dt, "Comparison")
+            
+            if current_tb.empty and comp_tb.empty:
+                print("DEBUG - Financial Reporting TB: No trial balance data for either period")
+                return pd.DataFrame()
+            
+            # Merge current and comparison balances
+            if not current_tb.empty and not comp_tb.empty:
+                merged_tb = pd.merge(
+                    current_tb[['GL_Acct_Number', 'account_name', 'Balance']],
+                    comp_tb[['GL_Acct_Number', 'Balance']],
+                    on='GL_Acct_Number',
+                    how='outer',
+                    suffixes=('_current', '_comparison')
+                )
+            elif not current_tb.empty:
+                merged_tb = current_tb.copy()
+                merged_tb['Balance_current'] = merged_tb['Balance']
+                merged_tb['Balance_comparison'] = 0.0
+            else:  # only comp_tb has data
+                merged_tb = comp_tb.copy()
+                merged_tb['Balance_current'] = 0.0
+                merged_tb['Balance_comparison'] = merged_tb['Balance']
+            
+            # Fill missing values
+            merged_tb['Balance_current'] = merged_tb.get('Balance_current', merged_tb.get('Balance', 0.0)).fillna(0.0)
+            merged_tb['Balance_comparison'] = merged_tb.get('Balance_comparison', 0.0).fillna(0.0)
+            
+            # Calculate change
+            merged_tb['Change'] = merged_tb['Balance_current'] - merged_tb['Balance_comparison']
+            
+            # Add account information from COA
+            coa_dict = dict(zip(coa_df['GL_Acct_Number'], coa_df['GL_Acct_Name']))
+            
+            # Ensure GL_Acct_Number is numeric for proper mapping and sorting
+            merged_tb['GL_Acct_Number'] = pd.to_numeric(merged_tb['GL_Acct_Number'], errors='coerce')
+            merged_tb = merged_tb[pd.notna(merged_tb['GL_Acct_Number'])]
+            
+            # Add formal account names from COA
+            merged_tb['GL_Acct_Name'] = merged_tb['GL_Acct_Number'].apply(
+                lambda x: coa_dict.get(int(x), f"Account {int(x)}")
+            )
+            
+            # Add categories
+            merged_tb['Category'] = merged_tb['GL_Acct_Number'].apply(categorize_account)
+            
+            # Keep original account name for display
+            if 'account_name' not in merged_tb.columns:
+                merged_tb['account_name'] = merged_tb['GL_Acct_Name']
+            merged_tb['original_account_name'] = merged_tb['account_name']
+            
+            # Sort by account number
+            merged_tb = merged_tb.sort_values('GL_Acct_Number')
+            
+            # Round values for display
+            for col in ['Balance_current', 'Balance_comparison', 'Change']:
+                merged_tb[col] = merged_tb[col].round(6)
+            
+            print(f"DEBUG - Financial Reporting TB: Final trial balance has {len(merged_tb)} accounts")
+            
+            return merged_tb, report_date, comp_date
+            
+        except Exception as e:
+            print(f"ERROR - Financial Reporting TB: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
-        
-        # Convert to DataFrame
-        merged_tb = pd.DataFrame(tb_accounts)
-        
-        # Sort by account number
-        merged_tb['GL_Acct_Number'] = pd.to_numeric(merged_tb['GL_Acct_Number'], errors='coerce')
-        merged_tb = merged_tb.sort_values('GL_Acct_Number')
-        
-        print(f"DEBUG - Financial Reporting TB: Final trial balance has {len(merged_tb)} accounts")
-        
-        return merged_tb, report_date, comp_date
     
     @output
     @render.table
