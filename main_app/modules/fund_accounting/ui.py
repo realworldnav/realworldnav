@@ -62,50 +62,48 @@ def pcap_ui():
     return ui.page_fluid(
         ui.h3("Statement of Changes in Partners' Capital", class_="mt-3"),
         
-        # PCAP Controls
+        # PCAP Excel File Selection
         ui.card(
-            ui.card_header("PCAP Generation Controls"),
+            ui.card_header("PCAP Report Selection"),
             ui.card_body(
                 ui.row(
                     ui.column(
-                        3,
-                        ui.output_ui("fund_selection")
-                    ),
-                    ui.column(
-                        3,
-                        ui.output_ui("lp_selection")
-                    ),
-                    ui.column(
-                        3,
-                        ui.output_ui("pcap_date_input")
-                    ),
-                    ui.column(
-                        3,
-                        ui.div(
-                            ui.input_select(
-                                "pcap_currency",
-                                "Currency",
-                                choices={"ETH": "ETH", "USD": "USD"},
-                                selected="ETH"
-                            ),
-                            class_="custom-dropdown"
-                        )
+                        12,
+                        ui.output_ui("pcap_file_selection")
                     )
                 ),
                 ui.row(
                     ui.column(
+                        12,
+                        ui.input_action_button(
+                            "load_pcap_file",
+                            "Load PCAP File",
+                            class_="btn-primary w-100 mt-3"
+                        )
+                    )
+                )
+            )
+        ),
+        
+        # LP Selection and PDF Generation
+        ui.card(
+            ui.card_header("LP Statement Generation"),
+            ui.card_body(
+                ui.output_ui("pcap_lp_controls"),
+                ui.row(
+                    ui.column(
                         6,
                         ui.input_action_button(
-                            "generate_pcap",
-                            "Generate PCAP",
+                            "generate_pdf",
+                            "Generate PDF Statement",
                             class_="btn-secondary w-100 mt-3"
                         )
                     ),
                     ui.column(
                         6,
-                        ui.download_button(
-                            "export_pcap_pdf",
-                            "Export PDF",
+                        ui.input_action_button(
+                            "generate_all_pdfs",
+                            "Generate All LP PDFs",
                             class_="btn-secondary w-100 mt-3"
                         )
                     )
