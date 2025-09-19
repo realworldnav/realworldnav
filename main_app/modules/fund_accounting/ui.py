@@ -93,17 +93,17 @@ def pcap_ui():
                 ui.row(
                     ui.column(
                         6,
-                        ui.input_action_button(
-                            "generate_pdf",
-                            "Generate PDF Statement",
-                            class_="btn-secondary w-100 mt-3"
+                        ui.download_button(
+                            "download_pcap_pdf",
+                            "📄 Download PDF Statement",
+                            class_="btn-primary w-100 mt-3"
                         )
                     ),
                     ui.column(
                         6,
                         ui.input_action_button(
                             "generate_all_pdfs",
-                            "Generate All LP PDFs",
+                            "📚 Generate All LP PDFs",
                             class_="btn-secondary w-100 mt-3"
                         )
                     )
@@ -114,28 +114,35 @@ def pcap_ui():
         # Results Display Area
         ui.div(
             ui.output_ui("pcap_results_header"),
-            ui.output_ui("pcap_detailed_results"),
-            ui.output_ui("pcap_summary_charts"),
             class_="mt-4"
         ),
         
-        # View Mode Selection - moved to bottom
+        # Data Preview Section
         ui.card(
-            ui.card_header("View Options"),
+            ui.card_header("PCAP Data Preview"),
             ui.card_body(
-                ui.div(
-                    ui.input_select(
-                        "pcap_view_mode",
-                        "View Mode:",
-                        choices={
-                            "detailed": "Detailed Line Items",
-                            "summary": "Summary View",
-                            "comparison": "LP Comparison"
-                        },
-                        selected="detailed"
+                ui.row(
+                    ui.column(
+                        6,
+                        ui.output_ui("pcap_preview_lp_selector")
                     ),
-                    class_="custom-dropdown"
-                )
+                    ui.column(
+                        6,
+                        ui.input_select(
+                            "pcap_view_mode",
+                            "View Mode:",
+                            choices={
+                                "detailed": "Detailed Line Items",
+                                "summary": "Summary View",
+                                "json": "JSON Preview"
+                            },
+                            selected="detailed",
+                            width="100%"
+                        )
+                    )
+                ),
+                ui.output_ui("pcap_detailed_results"),
+                ui.output_ui("pcap_summary_charts")
             ),
             class_="mt-4"
         )

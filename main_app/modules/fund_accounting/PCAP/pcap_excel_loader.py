@@ -31,6 +31,89 @@ class PCAPExcelProcessor:
         self.available_files = []
         self.available_lps = []
         
+        # Fund name lookup table
+        self.fund_name_lookup = {
+            "fund_i_class_B_ETH": "ETH Lending Fund I, LP",
+            "fund_ii_class_B_ETH": "ETH Lending Fund II, LP",
+            "holdings_class_B_ETH": "Drip Capital Holdings, LLC"
+        }
+        
+        # LP display name lookup table
+        self.lp_display_name_lookup = {
+            "fund_i_class_B_ETH": {
+                "1": "Fund I Limited Partner",  # Default for Fund I
+                "00001": "Fund I Limited Partner"
+            },
+            "fund_ii_class_B_ETH": {
+                "2": "Artha Investment Partners",
+                "3": "Mohak Agarwal",
+                "00002": "Artha Investment Partners",
+                "00003": "Mohak Agarwal"
+            },
+            "holdings_class_B_ETH": {
+                "1": "Holdings Partner"  # Default for Holdings
+            }
+        }
+    
+    def get_fund_name_from_lp(self, lp_id: str) -> str:
+        """Extract fund name from LP ID"""
+        # LP ID format is typically: LP_00001_fund_i_class_B_ETH
+        # Extract the fund part
+        for fund_id in self.fund_name_lookup.keys():
+            if fund_id in lp_id:
+                return self.fund_name_lookup[fund_id]
+        
+        # If no match found, try to get from current file
+        if self.current_file and self.current_file.get('fund_id'):
+            fund_id = self.current_file['fund_id']
+            if fund_id in self.fund_name_lookup:
+                return self.fund_name_lookup[fund_id]
+        
+        # Default fallback
+        return "ETH Lending Fund, LP"
+    
+    def get_lp_display_name(self, lp_id: str) -> str:
+        """Get display name for an LP"""
+        # Extract fund ID and partner number from LP ID
+        # LP ID format: LP_00001_fund_i_class_B_ETH or LP_00002_fund_ii_class_B_ETH
+        
+        # Find which fund this LP belongs to
+        fund_id = None
+        for fid in self.fund_name_lookup.keys():
+            if fid in lp_id:
+                fund_id = fid
+                break
+        
+        if not fund_id:
+            # Try to get from current file
+            if self.current_file and self.current_file.get('fund_id'):
+                fund_id = self.current_file['fund_id']
+        
+        if fund_id and fund_id in self.lp_display_name_lookup:
+            # Extract partner number from LP ID
+            # Look for patterns like LP_00001, LP_00002, etc.
+            import re
+            
+            # Try to extract the number part
+            number_match = re.search(r'LP[_-]?(\d+)', lp_id)
+            if number_match:
+                partner_num = number_match.group(1).lstrip('0')  # Remove leading zeros
+                full_partner_num = number_match.group(1)  # Keep with zeros
+                
+                # Check if this partner has a specific name
+                fund_partners = self.lp_display_name_lookup[fund_id]
+                
+                # Try different variations of the partner number
+                if partner_num in fund_partners:
+                    return fund_partners[partner_num]
+                elif full_partner_num in fund_partners:
+                    return fund_partners[full_partner_num]
+                elif "1" in fund_partners:  # Default for fund
+                    return fund_partners["1"]
+        
+        # If no specific name found, return the LP ID as is
+        return lp_id
+        
     def get_available_pcap_files(self) -> List[Dict]:
         """Get list of available PCAP files from S3"""
         self.available_files = list_pcap_excel_files()
@@ -142,11 +225,14 @@ class PCAPExcelProcessor:
             commitment_summary = self._parse_commitment_summary(df, lp_id)
             performance_metrics = self._parse_performance_metrics(df, lp_id)
             
+            # Get display name for the LP
+            lp_display_name = self.get_lp_display_name(lp_id) if lp_id else 'All Partners'
+            
             # Build JSON structure
             json_data = {
                 'main_date': date_str,
                 'currency': 'ETH',
-                'lp_name': lp_id or 'All Partners',
+                'lp_name': lp_display_name,  # Use display name instead of LP ID
                 'statement_of_changes': statement_of_changes,
                 'commitment_summary': commitment_summary,
                 'performance_metrics': performance_metrics
@@ -161,7 +247,8 @@ class PCAPExcelProcessor:
             return None
     
     def _extract_date_string(self) -> str:
-        """Extract formatted date from filename or use current date"""
+        """Extract formatted date from filename or Excel data"""
+        # First try to get from filename
         if self.current_file and self.current_file['date']:
             try:
                 date_obj = pd.to_datetime(self.current_file['date'], format='%Y%m%d')
@@ -169,51 +256,136 @@ class PCAPExcelProcessor:
             except:
                 pass
         
+        # Try to extract from Excel data - look for a date cell
+        if self.excel_data:
+            for sheet_name, df in self.excel_data.items():
+                # Look for date patterns in the first few rows and columns
+                for row_idx in range(min(5, len(df))):
+                    for col_idx in range(min(3, len(df.columns))):
+                        try:
+                            cell_val = df.iloc[row_idx, col_idx]
+                            if pd.notna(cell_val):
+                                # Check if it's already a datetime
+                                if pd.api.types.is_datetime64_any_dtype(type(cell_val)):
+                                    return pd.to_datetime(cell_val).strftime('%B %d, %Y')
+                                # Check if it looks like a date string
+                                cell_str = str(cell_val)
+                                if any(month in cell_str for month in ['January', 'February', 'March', 'April', 'May', 'June', 
+                                                                        'July', 'August', 'September', 'October', 'November', 'December']):
+                                    return cell_str
+                                # Try parsing as date
+                                if '/' in cell_str or '-' in cell_str:
+                                    parsed_date = pd.to_datetime(cell_str, errors='coerce')
+                                    if pd.notna(parsed_date):
+                                        return parsed_date.strftime('%B %d, %Y')
+                        except:
+                            continue
+        
         return datetime.now().strftime('%B %d, %Y')
     
     def _parse_statement_of_changes(self, df: pd.DataFrame, lp_id: str = None) -> List[Dict]:
         """Parse statement of changes from DataFrame"""
         statement_items = []
         
-        # Define the expected line items in order
-        line_items = [
-            'Beginning Balance',
-            'Capital contributions',
-            'Management fees',
-            'Interest expense',
-            'Capital distributions',
-            'Other income',
-            'Operating expenses',
-            'Interest income',
-            'Provision for bad debt',
-            'Income allocated from investments',
-            'Realized gain (loss)',
-            'Change in unrealized gain (loss)',
-            'Ending Capital'
-        ]
+        print(f"Parsing statement of changes from DataFrame with columns: {list(df.columns)}")
+        print(f"DataFrame shape: {df.shape}")
+        print(f"First few rows:\n{df.head()}")
         
-        # Try to find each line item in the DataFrame
-        for item in line_items:
-            row_data = {'label': item, 'mtd': 0.0, 'qtd': 0.0, 'ytd': 0.0, 'itd': 0.0}
+        # Check if DataFrame has column headers or if we need to use first row
+        # Common column patterns in PCAP Excel files
+        period_columns = ['MTD', 'QTD', 'YTD', 'ITD', 'Month to Date', 'Quarter to Date', 'Year to Date', 'Inception to Date']
+        
+        # Find which columns contain the period data
+        mtd_col = None
+        qtd_col = None
+        ytd_col = None
+        itd_col = None
+        
+        for col in df.columns:
+            col_upper = str(col).upper()
+            if 'MTD' in col_upper or 'MONTH' in col_upper:
+                mtd_col = col
+            elif 'QTD' in col_upper or 'QUARTER' in col_upper:
+                qtd_col = col
+            elif 'YTD' in col_upper or 'YEAR' in col_upper:
+                ytd_col = col
+            elif 'ITD' in col_upper or 'INCEPTION' in col_upper or 'CUMULATIVE' in col_upper:
+                itd_col = col
+        
+        # If no period columns found in headers, check if first row contains headers
+        if not any([mtd_col, qtd_col, ytd_col, itd_col]) and len(df) > 0:
+            first_row = df.iloc[0]
+            for idx, val in enumerate(first_row):
+                val_upper = str(val).upper()
+                if 'MTD' in val_upper or 'MONTH' in val_upper:
+                    mtd_col = df.columns[idx]
+                elif 'QTD' in val_upper or 'QUARTER' in val_upper:
+                    qtd_col = df.columns[idx]
+                elif 'YTD' in val_upper or 'YEAR' in val_upper:
+                    ytd_col = df.columns[idx]
+                elif 'ITD' in val_upper or 'INCEPTION' in val_upper:
+                    itd_col = df.columns[idx]
+        
+        # Define the expected line items with possible variations
+        line_items_map = {
+            'Beginning Balance': ['beginning balance', 'opening balance', 'starting balance', 'beginning_balance', 'beg_bal'],
+            'Capital contributions': ['capital contribution', 'contribution', 'capital_contribution', 'cap_contrib'],
+            'Management fees': ['management fee', 'mgmt fee', 'management_fee', 'mgmt_fee'],
+            'Interest expense': ['interest expense', 'interest_expense'],
+            'Capital distributions': ['capital distribution', 'distribution', 'capital_distribution', 'cap_dist'],
+            'Other income': ['other income', 'other_income'],
+            'Operating expenses': ['operating expense', 'operating_expense', 'op_expense'],
+            'Interest income': ['interest income', 'interest_income'],
+            'Provision for bad debt': ['provision for bad debt', 'bad debt', 'provision_bad_debt'],
+            'Income allocated from investments': ['income allocated', 'investment income', 'income_from_investments'],
+            'Realized gain (loss)': ['realized gain', 'realized loss', 'realized_gain_loss'],
+            'Change in unrealized gain (loss)': ['unrealized gain', 'unrealized loss', 'unrealized_gain_loss', 'change_unrealized'],
+            'Ending Capital': ['ending capital', 'ending balance', 'closing balance', 'ending_balance', 'end_bal']
+        }
+        
+        # Process each expected line item
+        for label, search_terms in line_items_map.items():
+            row_data = {'label': label, 'mtd': 0.0, 'qtd': 0.0, 'ytd': 0.0, 'itd': 0.0}
             
-            # Search for the item in the first column
+            # Search for the item in the DataFrame
+            found = False
             for idx, row in df.iterrows():
-                first_col = str(row.iloc[0]) if len(row) > 0 else ''
-                if item.lower() in first_col.lower():
-                    # Found the row, extract values
-                    # Assuming columns are: Description, MTD, QTD, YTD, ITD
+                # Get the description (usually first column)
+                desc = str(row.iloc[0]).lower() if len(row) > 0 else ''
+                
+                # Check if this row matches any of our search terms
+                if any(term in desc for term in search_terms):
+                    found = True
+                    print(f"Found '{label}' at row {idx}: {desc}")
+                    
+                    # Extract values from identified columns
                     try:
-                        if len(row) > 1 and pd.notna(row.iloc[1]):
-                            row_data['mtd'] = float(row.iloc[1])
-                        if len(row) > 2 and pd.notna(row.iloc[2]):
-                            row_data['qtd'] = float(row.iloc[2])
-                        if len(row) > 3 and pd.notna(row.iloc[3]):
-                            row_data['ytd'] = float(row.iloc[3])
-                        if len(row) > 4 and pd.notna(row.iloc[4]):
-                            row_data['itd'] = float(row.iloc[4])
-                    except (ValueError, TypeError):
-                        pass
+                        if mtd_col and mtd_col in df.columns:
+                            val = row[mtd_col]
+                            if pd.notna(val) and val != '-':
+                                row_data['mtd'] = float(val)
+                        
+                        if qtd_col and qtd_col in df.columns:
+                            val = row[qtd_col]
+                            if pd.notna(val) and val != '-':
+                                row_data['qtd'] = float(val)
+                        
+                        if ytd_col and ytd_col in df.columns:
+                            val = row[ytd_col]
+                            if pd.notna(val) and val != '-':
+                                row_data['ytd'] = float(val)
+                        
+                        if itd_col and itd_col in df.columns:
+                            val = row[itd_col]
+                            if pd.notna(val) and val != '-':
+                                row_data['itd'] = float(val)
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing values for {label}: {e}")
+                    
                     break
+            
+            if not found:
+                print(f"Warning: Could not find line item '{label}' in DataFrame")
             
             statement_items.append(row_data)
         
@@ -222,36 +394,139 @@ class PCAPExcelProcessor:
     def _parse_commitment_summary(self, df: pd.DataFrame, lp_id: str = None) -> Dict:
         """Parse commitment summary from DataFrame"""
         summary = {
-            'Total commitments': '0.000000',
-            'Capital called': '0.000000',
-            'Remaining commitments': '0.000000'
+            'Total commitments': '-',
+            'Capital called': '-',
+            'Remaining commitments': '-'
         }
         
-        # Try to find commitment data in the DataFrame
-        # This will need to be customized based on actual Excel structure
+        # Look for commitment data in the DataFrame
+        commitment_search_terms = {
+            'Total commitments': ['total commitment', 'commitment amount', 'committed capital'],
+            'Capital called': ['capital called', 'called capital', 'capital contribution', 'paid in capital'],
+            'Remaining commitments': ['remaining commitment', 'uncalled capital', 'unfunded commitment']
+        }
+        
+        for label, search_terms in commitment_search_terms.items():
+            for idx, row in df.iterrows():
+                desc = str(row.iloc[0]).lower() if len(row) > 0 else ''
+                
+                if any(term in desc for term in search_terms):
+                    # Found the row, get the value (usually in the last column or second column)
+                    try:
+                        # Try last column first (common for summary values)
+                        val = row.iloc[-1]
+                        if pd.isna(val) or val == '-':
+                            # Try second column
+                            val = row.iloc[1] if len(row) > 1 else 0
+                        
+                        if pd.notna(val) and val != '-':
+                            summary[label] = f"{float(val):.6f}"
+                    except (ValueError, TypeError, IndexError):
+                        pass
+                    break
+        
+        # If we found capital contributions in statement_of_changes, use that as capital called
+        if summary['Capital called'] == '-' and self.excel_data:
+            # Try to get from the ITD column of Capital contributions
+            for idx, row in df.iterrows():
+                desc = str(row.iloc[0]).lower() if len(row) > 0 else ''
+                if 'capital contribution' in desc:
+                    try:
+                        # Get ITD value (usually last or 5th column)
+                        if len(row) > 4:
+                            val = row.iloc[4]
+                            if pd.notna(val) and val != '-':
+                                summary['Capital called'] = f"{abs(float(val)):.6f}"
+                    except (ValueError, TypeError):
+                        pass
+                    break
         
         return summary
     
     def _parse_performance_metrics(self, df: pd.DataFrame, lp_id: str = None) -> Dict:
         """Parse performance metrics from DataFrame"""
         metrics = {
-            'Net IRR': '0.00%',
-            'Gross MOIC': '0.000000',
-            'NAV per unit': '0.000000'
+            'Net IRR': '-',
+            'Gross MOIC': '-',
+            'NAV per unit': '-'
         }
         
-        # Try to find performance data in the DataFrame
-        # This will need to be customized based on actual Excel structure
+        # Look for performance metrics in the DataFrame
+        metrics_search_terms = {
+            'Net IRR': ['net irr', 'irr', 'internal rate', 'rate of return'],
+            'Gross MOIC': ['gross moic', 'moic', 'multiple', 'multiple on invested'],
+            'NAV per unit': ['nav per unit', 'net asset value', 'unit price', 'price per unit']
+        }
+        
+        for label, search_terms in metrics_search_terms.items():
+            for idx, row in df.iterrows():
+                desc = str(row.iloc[0]).lower() if len(row) > 0 else ''
+                
+                if any(term in desc for term in search_terms):
+                    # Found the row, get the value
+                    try:
+                        # Try last column first
+                        val = row.iloc[-1]
+                        if pd.isna(val) or val == '-':
+                            # Try second column
+                            val = row.iloc[1] if len(row) > 1 else 0
+                        
+                        if pd.notna(val) and val != '-':
+                            if 'IRR' in label:
+                                # Format as percentage
+                                if isinstance(val, str) and '%' in val:
+                                    metrics[label] = val
+                                else:
+                                    metrics[label] = f"{float(val):.2f}%"
+                            else:
+                                # Format as decimal
+                                metrics[label] = f"{float(val):.6f}"
+                    except (ValueError, TypeError, IndexError):
+                        pass
+                    break
+        
+        # Calculate Gross MOIC if we have the data
+        if metrics['Gross MOIC'] == '-' and self.excel_data:
+            try:
+                # MOIC = (Distributions + Current NAV) / Contributions
+                distributions = 0
+                contributions = 0
+                ending_capital = 0
+                
+                for idx, row in df.iterrows():
+                    desc = str(row.iloc[0]).lower() if len(row) > 0 else ''
+                    
+                    # Get ITD values
+                    if 'capital distribution' in desc and len(row) > 4:
+                        val = row.iloc[4]
+                        if pd.notna(val) and val != '-':
+                            distributions = abs(float(val))
+                    elif 'capital contribution' in desc and len(row) > 4:
+                        val = row.iloc[4]
+                        if pd.notna(val) and val != '-':
+                            contributions = abs(float(val))
+                    elif 'ending capital' in desc or 'ending balance' in desc:
+                        if len(row) > 4:
+                            val = row.iloc[4]
+                            if pd.notna(val) and val != '-':
+                                ending_capital = float(val)
+                
+                if contributions > 0:
+                    moic = (distributions + ending_capital) / contributions
+                    metrics['Gross MOIC'] = f"{moic:.6f}"
+                    
+            except Exception as e:
+                print(f"Error calculating MOIC: {e}")
         
         return metrics
     
-    def generate_pdf(self, lp_id: str, fund_name: str, output_dir: str = None) -> str:
+    def generate_pdf(self, lp_id: str, fund_name: str = None, output_dir: str = None) -> str:
         """
         Generate PDF statement for an LP
         
         Args:
             lp_id: LP identifier
-            fund_name: Name of the fund
+            fund_name: Name of the fund (optional, will auto-detect from LP ID)
             output_dir: Directory to save PDF (defaults to temp directory)
             
         Returns:
@@ -265,6 +540,11 @@ class PCAPExcelProcessor:
                 print(f"No data available for LP: {lp_id}")
                 return None
             
+            # Auto-detect fund name if not provided
+            if not fund_name:
+                fund_name = self.get_fund_name_from_lp(lp_id)
+                print(f"Auto-detected fund name: {fund_name}")
+            
             # Set up paths
             base_path = Path(__file__).parent.parent / "PDF Creator"
             template_dir = base_path / "templates"
@@ -277,10 +557,10 @@ class PCAPExcelProcessor:
             json_data = self._format_numbers(json_data)
             
             # Render HTML
+            # Note: lp_name is already in json_data, don't pass it again
             html_output = template.render(
                 **json_data,
                 fund_name=fund_name,
-                lp_name=lp_id,
                 css_path=str(base_path),
                 generated_on=datetime.now().strftime("%B %d, %Y")
             )
@@ -327,12 +607,12 @@ class PCAPExcelProcessor:
         
         return format_value(data)
     
-    def generate_all_lp_pdfs(self, fund_name: str, output_dir: str = None) -> List[str]:
+    def generate_all_lp_pdfs(self, fund_name: str = None, output_dir: str = None) -> List[str]:
         """
         Generate PDF statements for all LPs
         
         Args:
-            fund_name: Name of the fund
+            fund_name: Name of the fund (optional, will auto-detect from LP IDs)
             output_dir: Directory to save PDFs
             
         Returns:
@@ -341,7 +621,9 @@ class PCAPExcelProcessor:
         pdf_files = []
         
         for lp_id in self.available_lps:
-            pdf_path = self.generate_pdf(lp_id, fund_name, output_dir)
+            # Auto-detect fund name for each LP if not provided
+            lp_fund_name = fund_name if fund_name else self.get_fund_name_from_lp(lp_id)
+            pdf_path = self.generate_pdf(lp_id, lp_fund_name, output_dir)
             if pdf_path:
                 pdf_files.append(pdf_path)
         

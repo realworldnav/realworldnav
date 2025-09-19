@@ -7,6 +7,7 @@ from shiny import ui, render, reactive, module
 from datetime import datetime
 import tempfile
 import os
+import io
 from pathlib import Path
 
 # Import PCAP processor
@@ -24,6 +25,7 @@ def register_pcap_outputs(output, input, session=None):
     available_lps = reactive.value([])
     selected_file = reactive.value(None)
     pdf_generation_status = reactive.value("")
+    last_generated_pdf_path = reactive.value(None)
     
     @reactive.calc
     def load_available_files():
@@ -78,9 +80,19 @@ def register_pcap_outputs(output, input, session=None):
                 ui.p("The file may contain only summary data", class_="text-muted")
             )
         
-        # Create LP choices
-        lp_choices = {lp: lp for lp in lps}
+        # Create LP choices with display names
+        lp_choices = {}
+        for lp in lps:
+            display_name = processor.get_lp_display_name(lp)
+            # Show both display name and LP ID for clarity
+            if display_name != lp:
+                lp_choices[lp] = f"{display_name} ({lp})"
+            else:
+                lp_choices[lp] = lp
         lp_choices["ALL"] = "All LPs"
+        
+        # Auto-detect fund name from first LP
+        default_fund_name = processor.get_fund_name_from_lp(lps[0]) if lps else "ETH Lending Fund, LP"
         
         return ui.div(
             ui.row(
@@ -95,15 +107,36 @@ def register_pcap_outputs(output, input, session=None):
                 ),
                 ui.column(
                     6,
-                    ui.input_text(
-                        "fund_name_input",
-                        "Fund Name:",
-                        value="ETH Lending Fund I, LP",
-                        placeholder="Enter fund name for PDF"
-                    )
+                    ui.output_ui("fund_name_display")
                 )
             ),
             ui.p(f"Found {len(lps)} LP(s) in the Excel file", class_="text-muted mt-2")
+        )
+    
+    @output
+    @render.ui
+    def fund_name_display():
+        """Display auto-detected fund name"""
+        processor = pcap_processor.get()
+        if not processor:
+            return ui.div()
+        
+        selected_lp = input.pcap_lp_select() if hasattr(input, 'pcap_lp_select') else None
+        
+        if selected_lp and selected_lp != "ALL":
+            fund_name = processor.get_fund_name_from_lp(selected_lp)
+        else:
+            # Default fund name based on file
+            fund_name = processor.get_fund_name_from_lp("")
+        
+        return ui.div(
+            ui.input_text(
+                "fund_name_input",
+                "Fund Name (auto-detected):",
+                value=fund_name,
+                placeholder="Fund name for PDF"
+            ),
+            ui.p("✓ Auto-detected from LP/Fund ID", class_="text-success small mt-1")
         )
     
     @reactive.effect
@@ -141,49 +174,49 @@ def register_pcap_outputs(output, input, session=None):
                 duration=5
             )
     
-    @reactive.effect
-    @reactive.event(input.generate_pdf)
-    def generate_single_pdf():
-        """Generate PDF for selected LP"""
+    @render.download(filename=lambda: f"PCAP_Statement_{input.pcap_lp_select()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+    def download_pcap_pdf():
+        """Download PDF for selected LP"""
         processor = pcap_processor.get()
         
         if not processor or not processor.excel_data:
-            ui.notification_show("Please load a PCAP file first", type="warning")
+            # Return empty if no data
+            yield io.BytesIO(b"Error: No PCAP file loaded").getvalue()
             return
         
         lp_id = input.pcap_lp_select()
-        fund_name = input.fund_name_input()
+        # Get fund name from input (which is auto-populated based on LP)
+        fund_name = input.fund_name_input() if hasattr(input, 'fund_name_input') else None
+        
+        # If no fund name from input, auto-detect
+        if not fund_name:
+            fund_name = processor.get_fund_name_from_lp(lp_id)
         
         if lp_id == "ALL":
-            ui.notification_show("Please select a specific LP for single PDF generation", type="warning")
+            # Return error message
+            yield io.BytesIO(b"Error: Please select a specific LP").getvalue()
             return
         
-        ui.notification_show(f"Generating PDF for {lp_id}...", type="message", duration=2)
-        
         try:
-            # Generate PDF
-            output_dir = Path("main_app/modules/fund_accounting/PCAP/PCAP/generated_reports")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            pdf_path = processor.generate_pdf(lp_id, fund_name, str(output_dir))
-            
-            if pdf_path:
-                ui.notification_show(
-                    f"PDF generated successfully: {Path(pdf_path).name}",
-                    type="success",
-                    duration=5
-                )
-                pdf_generation_status.set(f"Last generated: {Path(pdf_path).name}")
-            else:
-                ui.notification_show(
-                    "Failed to generate PDF. Check console for details.",
-                    type="error"
-                )
+            # Generate PDF to temp directory
+            with tempfile.TemporaryDirectory() as temp_dir:
+                pdf_path = processor.generate_pdf(lp_id, fund_name, temp_dir)
+                
+                if pdf_path and os.path.exists(pdf_path):
+                    # Read the PDF file and return its contents
+                    with open(pdf_path, 'rb') as f:
+                        pdf_content = f.read()
+                    
+                    # Update status
+                    pdf_generation_status.set(f"Downloaded: {lp_id} at {datetime.now().strftime('%H:%M:%S')}")
+                    
+                    yield pdf_content
+                else:
+                    yield io.BytesIO(b"Error: Failed to generate PDF").getvalue()
+                    
         except Exception as e:
-            ui.notification_show(
-                f"Error generating PDF: {str(e)}",
-                type="error"
-            )
+            print(f"Error in download handler: {e}")
+            yield io.BytesIO(f"Error: {str(e)}".encode()).getvalue()
     
     @reactive.effect
     @reactive.event(input.generate_all_pdfs)
@@ -195,7 +228,8 @@ def register_pcap_outputs(output, input, session=None):
             ui.notification_show("Please load a PCAP file first", type="warning")
             return
         
-        fund_name = input.fund_name_input()
+        # Get fund name from input or let it auto-detect for each LP
+        fund_name = input.fund_name_input() if hasattr(input, 'fund_name_input') else None
         
         ui.notification_show(
             f"Generating PDFs for {len(processor.available_lps)} LPs...",
@@ -204,7 +238,7 @@ def register_pcap_outputs(output, input, session=None):
         )
         
         try:
-            # Generate PDFs
+            # Generate PDFs (fund_name will be auto-detected for each LP if None)
             output_dir = Path("main_app/modules/fund_accounting/PCAP/PCAP/generated_reports")
             output_dir.mkdir(parents=True, exist_ok=True)
             
@@ -252,36 +286,87 @@ def register_pcap_outputs(output, input, session=None):
     
     @output
     @render.ui
-    def pcap_detailed_results():
-        """Display detailed PCAP data"""
+    def pcap_preview_lp_selector():
+        """Create LP selector for preview"""
         processor = pcap_processor.get()
-        view_mode = input.pcap_view_mode() if hasattr(input, 'pcap_view_mode') else 'detailed'
         
         if not processor or not processor.excel_data:
             return ui.div()
         
+        # Get all sheet names for preview with display names
+        sheet_choices = {}
+        for sheet in processor.excel_data.keys():
+            # Try to get display name if it's an LP sheet
+            if sheet in processor.available_lps:
+                display_name = processor.get_lp_display_name(sheet)
+                if display_name != sheet:
+                    sheet_choices[sheet] = f"{display_name} ({sheet})"
+                else:
+                    sheet_choices[sheet] = sheet
+            else:
+                # Non-LP sheets (like Summary, General_Partner, etc.)
+                sheet_choices[sheet] = sheet
+        
+        # Select first LP sheet by default if available
+        default_sheet = processor.available_lps[0] if processor.available_lps else list(sheet_choices.keys())[0]
+        
+        return ui.input_select(
+            "preview_lp_select",
+            "Select Sheet to Preview:",
+            choices=sheet_choices,
+            selected=default_sheet,
+            width="100%"
+        )
+    
+    @output
+    @render.ui
+    def pcap_detailed_results():
+        """Display detailed PCAP data for selected LP"""
+        processor = pcap_processor.get()
+        view_mode = input.pcap_view_mode() if hasattr(input, 'pcap_view_mode') else 'detailed'
+        
+        if not processor or not processor.excel_data:
+            return ui.div(ui.p("No data loaded. Please load a PCAP file first.", class_="text-muted"))
+        
+        # Get selected sheet for preview
+        selected_sheet = input.preview_lp_select() if hasattr(input, 'preview_lp_select') else list(processor.excel_data.keys())[0]
+        
+        if selected_sheet not in processor.excel_data:
+            return ui.div(ui.p(f"Sheet '{selected_sheet}' not found", class_="text-warning"))
+        
+        df = processor.excel_data[selected_sheet]
+        
         if view_mode == 'detailed':
-            # Show first sheet data as a preview
-            first_sheet = list(processor.excel_data.keys())[0]
-            df = processor.excel_data[first_sheet]
-            
-            return ui.card(
-                ui.card_header(f"Preview: {first_sheet}"),
-                ui.card_body(
-                    ui.p(f"Showing first 10 rows of {len(df)} total rows"),
-                    ui.HTML(df.head(10).to_html(classes="table table-striped", index=False))
-                )
+            # Show detailed data
+            return ui.div(
+                ui.h5(f"Sheet: {selected_sheet}"),
+                ui.p(f"Showing {min(20, len(df))} of {len(df)} rows", class_="text-muted"),
+                ui.HTML(df.head(20).to_html(classes="table table-striped table-sm", index=False))
             )
         elif view_mode == 'summary':
-            # Show summary statistics
-            return ui.card(
-                ui.card_header("Summary Statistics"),
-                ui.card_body(
-                    ui.p("Summary view - statistics about the PCAP data"),
-                    ui.p(f"Total sheets: {len(processor.excel_data)}"),
-                    ui.p(f"LP-specific sheets: {len(processor.available_lps)}")
-                )
+            # Show summary statistics for the selected sheet
+            return ui.div(
+                ui.h5(f"Summary: {selected_sheet}"),
+                ui.p(f"Total rows: {len(df)}", class_="mb-1"),
+                ui.p(f"Total columns: {len(df.columns)}", class_="mb-1"),
+                ui.p(f"Data types: {', '.join(df.dtypes.unique().astype(str))}", class_="mb-1"),
+                ui.hr(),
+                ui.h6("Column Names:"),
+                ui.p(", ".join(df.columns), class_="text-muted")
             )
+        elif view_mode == 'json':
+            # Show JSON preview
+            json_data = processor.parse_excel_to_json(selected_sheet if selected_sheet in processor.available_lps else None)
+            if json_data:
+                import json
+                json_str = json.dumps(json_data, indent=2)
+                return ui.div(
+                    ui.h5(f"JSON Preview: {selected_sheet}"),
+                    ui.pre(json_str[:2000] + "..." if len(json_str) > 2000 else json_str, 
+                          style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; overflow-x: auto;")
+                )
+            else:
+                return ui.div(ui.p("Unable to generate JSON preview", class_="text-warning"))
         else:
             return ui.div()
     

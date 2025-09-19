@@ -18,10 +18,13 @@ def gl_data_for_fund(selected_fund=None):
             original_shape = gl_df.shape[0]
             
             if 'fund_id' in gl_df.columns and fund_id in gl_df['fund_id'].values:
-                gl_df = gl_df[gl_df['fund_id'] == fund_id]
+                gl_df = gl_df[gl_df['fund_id'] == fund_id].copy()  # Make explicit copy
             elif 'counterparty_fund_id' in gl_df.columns and fund_id in gl_df['counterparty_fund_id'].values:
-                gl_df = gl_df[gl_df['counterparty_fund_id'] == fund_id]
+                gl_df = gl_df[gl_df['counterparty_fund_id'] == fund_id].copy()  # Make explicit copy
             # Fund not found in available columns, use all data
+    else:
+        # Make a copy to avoid modifying the cached DataFrame
+        gl_df = gl_df.copy()
     
     # Create a mapping function to normalize account names
     def normalize_account_name(name):
@@ -42,8 +45,10 @@ def gl_data_for_fund(selected_fund=None):
         
         return mappings.get(normalized, normalized)
     
-    # Create normalized columns for matching
+    # Create normalized columns for matching - now safe since gl_df is a copy
     gl_df['account_name_norm'] = gl_df['account_name'].apply(normalize_account_name)
+    # Make a copy of coa_df too to avoid modifying the cached version
+    coa_df = coa_df.copy()
     coa_df['GL_Acct_Name_norm'] = coa_df['GL_Acct_Name'].apply(lambda x: str(x) if pd.notna(x) else x)
     
     
