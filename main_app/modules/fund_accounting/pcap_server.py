@@ -293,19 +293,29 @@ def register_pcap_outputs(output, input, session=None):
         if not processor or not processor.excel_data:
             return ui.div()
         
-        # Get all sheet names for preview with display names
+        # Only show relevant sheets for preview
         sheet_choices = {}
-        for sheet in processor.excel_data.keys():
-            # Try to get display name if it's an LP sheet
-            if sheet in processor.available_lps:
-                display_name = processor.get_lp_display_name(sheet)
-                if display_name != sheet:
-                    sheet_choices[sheet] = f"{display_name} ({sheet})"
+        
+        # Add the combined/summary sheet first if it exists
+        for summary_name in ['All_LPs_Combined', 'All LPs Combined', 'All_Partners', 'Summary']:
+            if summary_name in processor.excel_data:
+                sheet_choices[summary_name] = f"📊 {summary_name} (Summary)"
+                break
+        
+        # Add LP sheets with display names
+        for lp in processor.available_lps:
+            if lp in processor.excel_data:
+                display_name = processor.get_lp_display_name(lp)
+                if display_name != lp:
+                    sheet_choices[lp] = f"👤 {display_name} ({lp})"
                 else:
-                    sheet_choices[sheet] = sheet
-            else:
-                # Non-LP sheets (like Summary, General_Partner, etc.)
-                sheet_choices[sheet] = sheet
+                    sheet_choices[lp] = f"👤 {lp}"
+        
+        # If no sheets available, show a message
+        if not sheet_choices:
+            return ui.div(
+                ui.p("No LP sheets available for preview", class_="text-muted")
+            )
         
         # Select first LP sheet by default if available
         default_sheet = processor.available_lps[0] if processor.available_lps else list(sheet_choices.keys())[0]

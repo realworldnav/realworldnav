@@ -51,51 +51,95 @@ class PCAPExcelProcessor:
                 "00003": "Mohak Agarwal"
             },
             "holdings_class_B_ETH": {
-                "1": "Holdings Partner"  # Default for Holdings
+                "1": "ETH Lending Fund I LP",  # Holdings_00001_fund_i_class_B_ETH
+                "00001": "ETH Lending Fund I LP",  # Holdings_00001_fund_i_class_B_ETH
+                "2": "ETH Lending Fund II LP",  # Holdings_00002_fund_ii_class_B_ETH
+                "00002": "ETH Lending Fund II LP",  # Holdings_00002_fund_ii_class_B_ETH
+                "2001": "ETH Lending Fund I LP",  # Reporting ID 2001
+                "2002": "ETH Lending Fund II LP"  # Reporting ID 2002
             }
         }
     
     def get_fund_name_from_lp(self, lp_id: str) -> str:
-        """Extract fund name from LP ID"""
-        # LP ID format is typically: LP_00001_fund_i_class_B_ETH
-        # Extract the fund part
-        for fund_id in self.fund_name_lookup.keys():
-            if fund_id in lp_id:
-                return self.fund_name_lookup[fund_id]
-        
-        # If no match found, try to get from current file
+        """Extract fund name from LP ID with priority-based detection"""
+        # First priority: Use current file context
         if self.current_file and self.current_file.get('fund_id'):
             fund_id = self.current_file['fund_id']
             if fund_id in self.fund_name_lookup:
+                print(f"Using fund from file context: {fund_id}")
+                return self.fund_name_lookup[fund_id]
+        
+        # Second priority: Check for specific fund patterns in order of specificity
+        lp_id_lower = lp_id.lower()
+        
+        # Check for holdings first (most specific)
+        if 'holdings' in lp_id_lower:
+            print(f"Detected Holdings fund from LP: {lp_id}")
+            return self.fund_name_lookup['holdings_class_B_ETH']
+        
+        # Check for fund_ii before fund_i (more specific first)
+        if 'fund_ii' in lp_id_lower or 'fund_2' in lp_id_lower:
+            print(f"Detected Fund II from LP: {lp_id}")
+            return self.fund_name_lookup['fund_ii_class_B_ETH']
+        
+        if 'fund_i' in lp_id_lower or 'fund_1' in lp_id_lower:
+            print(f"Detected Fund I from LP: {lp_id}")
+            return self.fund_name_lookup['fund_i_class_B_ETH']
+        
+        # Third priority: Try exact substring match
+        for fund_id in self.fund_name_lookup.keys():
+            if fund_id in lp_id:
+                print(f"Found exact fund match: {fund_id}")
                 return self.fund_name_lookup[fund_id]
         
         # Default fallback
+        print(f"No fund detected for LP {lp_id}, using default")
         return "ETH Lending Fund, LP"
     
     def get_lp_display_name(self, lp_id: str) -> str:
-        """Get display name for an LP"""
+        """Get display name for an LP with improved fund detection"""
         # Extract fund ID and partner number from LP ID
-        # LP ID format: LP_00001_fund_i_class_B_ETH or LP_00002_fund_ii_class_B_ETH
+        # LP ID format: LP_00001_fund_i_class_B_ETH or Holdings_00002_fund_ii_class_B_
         
-        # Find which fund this LP belongs to
+        # Determine which fund this LP belongs to using same priority logic
         fund_id = None
-        for fid in self.fund_name_lookup.keys():
-            if fid in lp_id:
-                fund_id = fid
-                break
+        lp_id_lower = lp_id.lower()
         
+        # First priority: Use current file context
+        if self.current_file and self.current_file.get('fund_id'):
+            fund_id = self.current_file['fund_id']
+            print(f"Using fund from file context for display name: {fund_id}")
+        
+        # Second priority: Check for specific patterns
         if not fund_id:
-            # Try to get from current file
-            if self.current_file and self.current_file.get('fund_id'):
-                fund_id = self.current_file['fund_id']
+            if 'holdings' in lp_id_lower:
+                fund_id = 'holdings_class_B_ETH'
+            elif 'fund_ii' in lp_id_lower or 'fund_2' in lp_id_lower:
+                fund_id = 'fund_ii_class_B_ETH'
+            elif 'fund_i' in lp_id_lower or 'fund_1' in lp_id_lower:
+                fund_id = 'fund_i_class_B_ETH'
+            else:
+                # Try exact match
+                for fid in self.fund_name_lookup.keys():
+                    if fid in lp_id:
+                        fund_id = fid
+                        break
         
         if fund_id and fund_id in self.lp_display_name_lookup:
             # Extract partner number from LP ID
-            # Look for patterns like LP_00001, LP_00002, etc.
+            # Look for patterns like LP_00001, Holdings_00002, etc.
             import re
             
-            # Try to extract the number part
-            number_match = re.search(r'LP[_-]?(\d+)', lp_id)
+            # Try to extract the number part (more flexible pattern)
+            # First check for reporting IDs (2001, 2002, etc)
+            if lp_id.startswith('20'):
+                number_match = re.match(r'^(\d+)$', lp_id)
+            else:
+                number_match = re.search(r'(?:LP|Holdings|Partner)[_-]?(\d+)', lp_id, re.IGNORECASE)
+                if not number_match:
+                    # Try just finding any sequence of digits
+                    number_match = re.search(r'(\d+)', lp_id)
+            
             if number_match:
                 partner_num = number_match.group(1).lstrip('0')  # Remove leading zeros
                 full_partner_num = number_match.group(1)  # Keep with zeros
@@ -153,18 +197,62 @@ class PCAPExcelProcessor:
             return False
     
     def _extract_lp_list(self) -> List[str]:
-        """Extract list of LPs from Excel sheet names"""
+        """Extract list of LPs from All_LPs_Combined sheet"""
         if not self.excel_data:
             return []
         
-        lp_sheets = []
-        for sheet_name in self.excel_data.keys():
-            # Skip summary/metadata sheets
-            if sheet_name.lower() not in ['summary', 'all partners', 'pcap', 'metadata', 'totals']:
-                # Assume other sheets are LP-specific
-                lp_sheets.append(sheet_name)
+        lp_list = []
         
-        return sorted(lp_sheets)
+        # Look for the All_LPs_Combined sheet
+        combined_sheet = None
+        for sheet_name in ['All_LPs_Combined', 'All LPs Combined', 'All_Partners', 'All Partners']:
+            if sheet_name in self.excel_data:
+                combined_sheet = self.excel_data[sheet_name]
+                print(f"Found combined sheet: {sheet_name}")
+                break
+        
+        if combined_sheet is not None:
+            # Look for limited_partner_ID column
+            if 'limited_partner_ID' in combined_sheet.columns:
+                # Extract unique LP IDs
+                lp_ids = combined_sheet['limited_partner_ID'].dropna().unique()
+                print(f"Found {len(lp_ids)} unique LPs in limited_partner_ID column")
+                
+                # Only add LPs that have corresponding sheets
+                for lp_id in lp_ids:
+                    # Check if this LP has a sheet
+                    if lp_id in self.excel_data:
+                        lp_list.append(lp_id)
+                    # Also check with different naming conventions
+                    elif f"LP_{lp_id}" in self.excel_data:
+                        lp_list.append(f"LP_{lp_id}")
+                    elif lp_id.replace('_', '-') in self.excel_data:
+                        lp_list.append(lp_id.replace('_', '-'))
+            else:
+                # If no limited_partner_ID column, look for LP patterns in first column
+                print("No limited_partner_ID column found, checking first column for LP patterns")
+                first_col = combined_sheet.iloc[:, 0] if len(combined_sheet.columns) > 0 else pd.Series()
+                
+                for val in first_col.dropna().unique():
+                    val_str = str(val)
+                    # Look for LP patterns
+                    if 'LP_' in val_str or val_str.startswith('LP'):
+                        # Check if this LP has a sheet
+                        if val_str in self.excel_data:
+                            lp_list.append(val_str)
+        
+        # If we couldn't find LPs from All_LPs_Combined, fall back to sheet names
+        if not lp_list:
+            print("Falling back to sheet name extraction")
+            for sheet_name in self.excel_data.keys():
+                # Look for LP-specific sheets
+                if any(pattern in sheet_name for pattern in ['LP_', 'LP-', '_fund_']):
+                    # Skip summary sheets
+                    if sheet_name.lower() not in ['summary', 'all_lps_combined', 'general_partner', 'gp_mgmt_fees']:
+                        lp_list.append(sheet_name)
+        
+        print(f"Final LP list: {lp_list}")
+        return sorted(lp_list)
     
     def get_lp_data(self, lp_id: str) -> Optional[pd.DataFrame]:
         """Get data for a specific LP"""
@@ -175,16 +263,23 @@ class PCAPExcelProcessor:
         if lp_id in self.excel_data:
             return self.excel_data[lp_id]
         
-        # Otherwise, try to filter from main sheet
-        for sheet_name in ['All Partners', 'Summary', 'PCAP']:
+        # Otherwise, try to filter from combined sheet
+        for sheet_name in ['All_LPs_Combined', 'All LPs Combined', 'All Partners', 'Summary']:
             if sheet_name in self.excel_data:
                 df = self.excel_data[sheet_name]
-                # Try to filter by LP column if it exists
-                if 'LP' in df.columns or 'Partner' in df.columns:
-                    lp_col = 'LP' if 'LP' in df.columns else 'Partner'
-                    lp_data = df[df[lp_col] == lp_id]
+                
+                # Try to filter by limited_partner_ID column first
+                if 'limited_partner_ID' in df.columns:
+                    lp_data = df[df['limited_partner_ID'] == lp_id]
                     if not lp_data.empty:
                         return lp_data
+                
+                # Try other column names
+                for col_name in ['LP', 'Partner', 'LP_ID', 'Partner_ID']:
+                    if col_name in df.columns:
+                        lp_data = df[df[col_name] == lp_id]
+                        if not lp_data.empty:
+                            return lp_data
         
         return None
     
@@ -386,10 +481,23 @@ class PCAPExcelProcessor:
             
             if not found:
                 print(f"Warning: Could not find line item '{label}' in DataFrame")
-            
+
             statement_items.append(row_data)
-        
-        return statement_items
+
+        # Filter out empty line items (all zeros) except for Beginning Balance and Ending Capital
+        filtered_items = []
+        for item in statement_items:
+            # Always keep Beginning Balance and Ending Capital
+            if item['label'] in ['Beginning Balance', 'Ending Capital']:
+                filtered_items.append(item)
+            else:
+                # Check if at least one period has a non-zero value
+                if any([item['mtd'] != 0.0, item['qtd'] != 0.0, item['ytd'] != 0.0, item['itd'] != 0.0]):
+                    filtered_items.append(item)
+                else:
+                    print(f"Filtering out empty line item: {item['label']}")
+
+        return filtered_items
     
     def _parse_commitment_summary(self, df: pd.DataFrame, lp_id: str = None) -> Dict:
         """Parse commitment summary from DataFrame"""
