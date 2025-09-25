@@ -5,6 +5,7 @@ from .modules.financial_reporting.financial_reporting import financial_reporting
 from .modules.fund_accounting import fund_accounting_ui
 from .modules.general_ledger.ui import general_ledger_ui
 from .modules.investments.ui import investments_ui
+from .modules.home.ui import enhanced_home_ui
 from .theme_manager import theme_manager
 
 

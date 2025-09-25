@@ -13,13 +13,15 @@ from .modules.investments.loan_portfolio import register_outputs as register_loa
 from .modules.investments.nft_portfolio import register_nft_portfolio_outputs
 from .modules.investments.cryptocurrency_portfolio import register_cryptocurrency_portfolio_outputs
 from .modules.investments.dashboard_calculations import create_investment_dashboard_calculations
+from .modules.home.blockchain_listener import register_blockchain_listener_outputs
 
 # Import the enhanced UI functions
 from .ui import (
-    enhanced_fund_accounting_ui, 
-    enhanced_investments_ui, 
-    enhanced_general_ledger_ui, 
-    enhanced_financial_reporting_ui
+    enhanced_fund_accounting_ui,
+    enhanced_investments_ui,
+    enhanced_general_ledger_ui,
+    enhanced_financial_reporting_ui,
+    enhanced_home_ui
 )
 
 # Import theme manager
@@ -47,8 +49,8 @@ def server(input, output, session):
         return default_fund
     selected_report_date = reactive.calc(lambda: input.report_date() if hasattr(input, 'report_date') else None)
     
-    # Navigation state
-    current_section = reactive.value("fund_accounting")
+    # Navigation state - default to home
+    current_section = reactive.value("home")
     
     # Smart helper function that uses TB when available, falls back to GL
     def calculate_financial_metrics(account_number_ranges, selected_date=None):
@@ -311,8 +313,9 @@ def server(input, output, session):
     def nav_links():
         """Generate clickable navigation links"""
         sections = {
+            "home": "Home",
             "fund_accounting": "Fund Accounting",
-            "investments": "Investments", 
+            "investments": "Investments",
             "general_ledger": "General Ledger",
             "financial_reporting": "Financial Reporting"
         }
@@ -378,7 +381,9 @@ def server(input, output, session):
     register_crypto_tracker_outputs(output, input, session)
     
     register_gl_analytics_outputs(output, input, session, selected_fund)
-    
+
+    # Register home blockchain listener outputs
+    register_blockchain_listener_outputs(input, output, session)
 
     register_loan_portfolio_outputs(output, input, session, selected_fund)
 
@@ -392,9 +397,10 @@ def server(input, output, session):
     def main_content_area():
         """Render main content based on navigation selection"""
         section = current_section.get()
-        
-        
-        if section == "fund_accounting":
+
+        if section == "home":
+            return enhanced_home_ui()
+        elif section == "fund_accounting":
             return enhanced_fund_accounting_ui()
         elif section == "investments":
             return enhanced_investments_ui()
@@ -403,7 +409,7 @@ def server(input, output, session):
         elif section == "financial_reporting":
             return enhanced_financial_reporting_ui()
         else:
-            return enhanced_fund_accounting_ui()  # Default fallback
+            return enhanced_home_ui()  # Default fallback to home
 
     # Dashboard placeholder outputs - these will need to be implemented with actual data
     @output
