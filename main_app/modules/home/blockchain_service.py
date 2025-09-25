@@ -363,6 +363,8 @@ class BlockchainService:
         self.transaction_cache = {}
         self.last_update = datetime.now()
         self.wallet_address = None
+        self.wallet_mapping = None
+        self._load_wallet_mapping()
 
     async def initialize(self, wallet_address: str):
         """Initialize the service with a wallet address"""
@@ -404,12 +406,56 @@ class BlockchainService:
         else:
             all_txs = pd.DataFrame()
 
+        # Add friendly names for display
+        if not all_txs.empty:
+            all_txs['from_display'] = all_txs['from'].apply(self.get_friendly_name)
+            all_txs['to_display'] = all_txs['to'].apply(self.get_friendly_name)
+
         # Cache transactions
         for _, tx in all_txs.iterrows():
             self.transaction_cache[tx['hash']] = tx.to_dict()
 
         self.last_update = datetime.now()
         return all_txs
+
+    def _load_wallet_mapping(self):
+        """Load wallet mapping from S3"""
+        try:
+            from ...s3_utils import load_WALLET_file
+            self.wallet_mapping = load_WALLET_file()
+
+            # Create a dictionary for fast lookup (both original and lowercase)
+            self.wallet_names = {}
+            if not self.wallet_mapping.empty:
+                for _, row in self.wallet_mapping.iterrows():
+                    wallet_addr = str(row.get('wallet_address', '')).strip()
+                    friendly_name = str(row.get('friendly_name', '')).strip()
+
+                    if wallet_addr and friendly_name:
+                        # Store both original and lowercase for flexible matching
+                        self.wallet_names[wallet_addr] = friendly_name
+                        self.wallet_names[wallet_addr.lower()] = friendly_name
+
+                logger.info(f"Loaded {len(self.wallet_names)} wallet mappings")
+        except Exception as e:
+            logger.warning(f"Could not load wallet mappings: {e}")
+            self.wallet_mapping = pd.DataFrame()
+            self.wallet_names = {}
+
+    def get_friendly_name(self, wallet_address: str) -> str:
+        """Get friendly name for a wallet address, or shortened address if not found"""
+        if not wallet_address:
+            return "Unknown"
+
+        # Try to find friendly name
+        friendly = self.wallet_names.get(wallet_address.lower(), None)
+        if friendly:
+            return friendly
+
+        # If not found, return shortened address
+        if len(wallet_address) > 12:
+            return f"{wallet_address[:6]}...{wallet_address[-4:]}"
+        return wallet_address
 
     def get_all_transactions(self) -> pd.DataFrame:
         """Get all transactions (cached + real-time)"""
@@ -427,6 +473,10 @@ class BlockchainService:
         # Convert to DataFrame and sort
         df = pd.DataFrame(all_txs)
         if not df.empty:
+            # Add friendly names
+            df['from_display'] = df['from'].apply(self.get_friendly_name)
+            df['to_display'] = df['to'].apply(self.get_friendly_name)
+
             df = df.sort_values('timestamp', ascending=False)
 
         return df

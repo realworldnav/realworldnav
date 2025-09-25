@@ -382,8 +382,8 @@ def server(input, output, session):
     
     register_gl_analytics_outputs(output, input, session, selected_fund)
 
-    # Register home blockchain listener outputs
-    register_blockchain_listener_outputs(input, output, session)
+    # Register home blockchain listener outputs with fund selection
+    register_blockchain_listener_outputs(input, output, session, selected_fund)
 
     register_loan_portfolio_outputs(output, input, session, selected_fund)
 

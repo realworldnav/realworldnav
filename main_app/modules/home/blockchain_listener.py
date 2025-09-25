@@ -9,7 +9,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def register_blockchain_listener_outputs(input, output, session):
+def register_blockchain_listener_outputs(input, output, session, selected_fund):
     """Register server outputs for blockchain listener"""
 
     # Reactive values
@@ -18,18 +18,108 @@ def register_blockchain_listener_outputs(input, output, session):
     initialization_status = reactive.value("initializing")
     error_message = reactive.value("")
 
+    # Create wallet selector UI with friendly names filtered by fund
+    @output
+    @render.ui
+    @reactive.event(selected_fund)  # Re-render when fund changes
+    def wallet_selector_ui():
+        """Create wallet selector dropdown with friendly names filtered by selected fund"""
+        # Get current fund
+        current_fund = selected_fund()
+        wallet_choices = {}
+
+        # Try to load wallet mappings
+        try:
+            from ...s3_utils import load_WALLET_file
+            wallet_df = load_WALLET_file()
+
+            if not wallet_df.empty:
+                # Filter by selected fund
+                fund_wallets = wallet_df[wallet_df['fund_id'] == current_fund]
+
+                # Add "All Fund Wallets" option
+                if not fund_wallets.empty:
+                    wallet_choices["all_fund"] = f"📊 All {current_fund} Wallets ({len(fund_wallets)} wallets)"
+
+                # Create choices dict with friendly name as display and address as value
+                for _, row in fund_wallets.iterrows():
+                    wallet_addr = str(row.get('wallet_address', '')).strip()
+                    friendly_name = str(row.get('friendly_name', '')).strip()
+
+                    if wallet_addr:
+                        # Use friendly name if available, otherwise shortened address
+                        display = friendly_name if friendly_name else f"{wallet_addr[:6]}...{wallet_addr[-4:]}"
+                        wallet_choices[wallet_addr] = f"  {display} ({wallet_addr[:6]}...{wallet_addr[-4:]})"
+
+                # If no wallets for this fund, show a message
+                if len(wallet_choices) == 0:
+                    wallet_choices["none"] = f"No wallets found for {current_fund}"
+
+            else:
+                # If no mappings loaded
+                wallet_choices["none"] = "No wallet mappings available"
+
+        except Exception as e:
+            logger.warning(f"Could not load wallet mappings: {e}")
+            wallet_choices["error"] = "Error loading wallets"
+
+        # Add custom wallet option
+        wallet_choices["custom"] = "➕ Enter Custom Address..."
+
+        # Get first valid wallet as default
+        default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom"]), "custom")
+
+        return ui.div(
+            ui.p(f"Fund: {current_fund}", class_="text-muted small mb-2"),
+            ui.input_select(
+                "wallet_address",
+                "Monitor Wallet:",
+                choices=wallet_choices,
+                selected=default_selection,
+                width="100%"
+            )
+        )
+
+    # Get list of wallets to monitor based on selection
+    @reactive.calc
+    def get_monitored_wallets():
+        """Get list of wallet addresses to monitor based on current selection"""
+        try:
+            wallet_selection = input.wallet_address()
+
+            if wallet_selection == "all_fund":
+                # Get all wallets for the selected fund
+                from ...s3_utils import load_WALLET_file
+                wallet_df = load_WALLET_file()
+                current_fund = selected_fund()
+
+                if not wallet_df.empty:
+                    fund_wallets = wallet_df[wallet_df['fund_id'] == current_fund]
+                    return fund_wallets['wallet_address'].str.strip().tolist()
+                return []
+
+            elif wallet_selection in ["none", "error", "custom"]:
+                return []
+            else:
+                # Single wallet selected
+                return [wallet_selection]
+        except:
+            return []
+
     # Initialize blockchain service on module load
     @reactive.effect
     def initialize_listener():
         """Initialize the blockchain listener on startup"""
         try:
-            # Get initial wallet address
-            try:
-                wallet = input.wallet_address()
-                logger.info(f"Got wallet from input: {wallet}")
-            except:
-                wallet = "0x3b2A51FEC517BBc7fEaf68AcFdb068b57870713F"
-                logger.info(f"Using default wallet: {wallet}")
+            # Get wallets to monitor
+            wallets = get_monitored_wallets()
+
+            if not wallets:
+                logger.warning("No wallets to monitor")
+                initialization_status.set("no_wallets")
+                return
+
+            logger.info(f"Monitoring {len(wallets)} wallet(s)")
 
             # Check if we have API keys configured
             if not os.getenv('ETHERSCAN_API_KEY'):
@@ -38,18 +128,20 @@ def register_blockchain_listener_outputs(input, output, session):
                 error_message.set("No Etherscan API key configured. Add ETHERSCAN_API_KEY to your environment.")
                 return
 
-            # Initialize the service (synchronously for now)
-            blockchain_service.wallet_address = wallet
+            # For now, monitor the first wallet (TODO: support multiple)
+            primary_wallet = wallets[0] if wallets else None
+            if primary_wallet:
+                blockchain_service.wallet_address = primary_wallet
 
-            # Fetch initial data
-            initial_data = blockchain_service.fetch_historical_transactions(limit=100)
-            if not initial_data.empty:
-                transaction_data.set(initial_data)
-                initialization_status.set("active")
-                logger.info(f"Loaded {len(initial_data)} historical transactions")
-            else:
-                initialization_status.set("no_data")
-                logger.warning("No historical transactions found")
+                # Fetch initial data
+                initial_data = blockchain_service.fetch_historical_transactions(limit=100)
+                if not initial_data.empty:
+                    transaction_data.set(initial_data)
+                    initialization_status.set("active")
+                    logger.info(f"Loaded {len(initial_data)} historical transactions")
+                else:
+                    initialization_status.set("no_data")
+                    logger.warning("No historical transactions found")
 
             last_refresh.set(datetime.now())
 
@@ -59,6 +151,73 @@ def register_blockchain_listener_outputs(input, output, session):
             traceback.print_exc()
             initialization_status.set("error")
             error_message.set(f"Initialization error: {str(e)}")
+
+    # Filter controls panel
+    @output
+    @render.ui
+    def filter_controls():
+        """Dynamic filter controls based on show_filters switch"""
+        if not input.show_filters():
+            return ui.div()  # Return empty div when filters hidden
+
+        return ui.div(
+            ui.layout_columns(
+                ui.div(
+                    ui.input_select(
+                        "tx_type_filter",
+                        "Transaction Type:",
+                        {
+                            "all": "All Transactions",
+                            "in": "Incoming Only",
+                            "out": "Outgoing Only"
+                        },
+                        selected="all",
+                        width="100%"
+                    ),
+                ),
+                ui.div(
+                    ui.input_select(
+                        "token_filter",
+                        "Token Type:",
+                        {
+                            "all": "All Tokens",
+                            "eth": "ETH Only",
+                            "erc20": "ERC-20 Only",
+                            "usdc": "USDC Only",
+                            "usdt": "USDT Only"
+                        },
+                        selected="all",
+                        width="100%"
+                    ),
+                ),
+                ui.div(
+                    ui.input_numeric(
+                        "min_value",
+                        "Min Value (ETH):",
+                        value=0,
+                        min=0,
+                        step=0.001,
+                        width="100%"
+                    ),
+                ),
+                ui.div(
+                    ui.input_select(
+                        "time_range",
+                        "Time Range:",
+                        {
+                            "all": "All Time",
+                            "24h": "Last 24 Hours",
+                            "7d": "Last 7 Days",
+                            "30d": "Last 30 Days"
+                        },
+                        selected="all",
+                        width="100%"
+                    ),
+                ),
+                col_widths=[3, 3, 3, 3]
+            ),
+            class_="p-3"
+        )
 
     # Connection status
     @output
@@ -100,10 +259,39 @@ def register_blockchain_listener_outputs(input, output, session):
     # Active wallet display
     @output
     @render.ui
+    @reactive.event(input.wallet_address)  # Update when wallet changes
     def active_wallet_display():
-        wallet = input.wallet_address() if hasattr(input, 'wallet_address') else "0x3b2A51FEC517BBc7fEaf68AcFdb068b57870713F"
-        if wallet and len(wallet) > 10:
-            return ui.tags.code(wallet[:6] + "..." + wallet[-4:], class_="address-text")
+        selection = input.wallet_address() if hasattr(input, 'wallet_address') else ""
+
+        # Handle special selections
+        if selection == "all_fund":
+            current_fund = selected_fund()
+            wallets = get_monitored_wallets()
+            return ui.div(
+                ui.tags.strong(f"All {current_fund} Wallets"),
+                ui.br(),
+                ui.tags.code(f"{len(wallets)} wallets monitored", class_="address-text small")
+            )
+        elif selection == "custom":
+            return ui.tags.code("Custom wallet...", class_="address-text")
+        elif selection in ["none", "error", ""]:
+            return ui.tags.code("Not set", class_="address-text")
+
+        # Regular wallet address
+        if selection and len(selection) > 10:
+            # Get friendly name from blockchain service
+            friendly_name = blockchain_service.get_friendly_name(selection)
+
+            # If we have a real friendly name (not shortened address)
+            if not friendly_name.endswith("...") or len(friendly_name) > 15:
+                return ui.div(
+                    ui.tags.strong(friendly_name),
+                    ui.br(),
+                    ui.tags.code(selection[:6] + "..." + selection[-4:], class_="address-text small")
+                )
+            else:
+                return ui.tags.code(selection[:6] + "..." + selection[-4:], class_="address-text")
+
         return ui.tags.code("Not set", class_="address-text")
 
     # Transaction counts
@@ -219,11 +407,69 @@ def register_blockchain_listener_outputs(input, output, session):
                 </span>
             """)
 
+    # Filter transactions based on settings
+    @reactive.calc
+    def filtered_transactions():
+        """Apply filters to transaction data"""
+        df = transaction_data.get()
+
+        if df.empty:
+            return df
+
+        # Apply transaction type filter
+        if hasattr(input, 'tx_type_filter') and input.tx_type_filter() != "all":
+            filter_type = input.tx_type_filter()
+            if filter_type == "in":
+                df = df[df['type'] == 'IN']
+            elif filter_type == "out":
+                df = df[df['type'] == 'OUT']
+
+        # Apply token filter
+        if hasattr(input, 'token_filter') and input.token_filter() != "all":
+            token = input.token_filter()
+            if token == "eth":
+                df = df[df['token'] == 'ETH']
+            elif token == "erc20":
+                df = df[df['token'] != 'ETH']
+            elif token == "usdc":
+                df = df[df['token'].str.upper() == 'USDC']
+            elif token == "usdt":
+                df = df[df['token'].str.upper() == 'USDT']
+
+        # Apply minimum value filter
+        if hasattr(input, 'min_value') and input.min_value() > 0:
+            df = df[df['amount'] >= input.min_value()]
+
+        # Apply time range filter
+        if hasattr(input, 'time_range') and input.time_range() != "all":
+            time_range = input.time_range()
+            now = datetime.now()
+
+            # Ensure timestamp is datetime
+            if 'timestamp' in df.columns and not df.empty:
+                if isinstance(df.iloc[0]['timestamp'], str):
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+                if time_range == "24h":
+                    cutoff = now - timedelta(days=1)
+                elif time_range == "7d":
+                    cutoff = now - timedelta(days=7)
+                elif time_range == "30d":
+                    cutoff = now - timedelta(days=30)
+                else:
+                    cutoff = None
+
+                if cutoff:
+                    df = df[df['timestamp'] >= cutoff]
+
+        return df
+
     # Main transaction table
     @output
     @render.data_frame
     def blockchain_transactions_table():
-        df = transaction_data.get()
+        # Use filtered transactions
+        df = filtered_transactions()
 
         if df.empty:
             # Return empty DataFrame with proper columns
@@ -240,17 +486,24 @@ def register_blockchain_listener_outputs(input, output, session):
             else:
                 hash_display = hash_str
 
-            # Format addresses
-            from_addr = row.get('from', '')
-            to_addr = row.get('to', '')
-            if len(from_addr) > 12:
-                from_display = from_addr[:6] + "..." + from_addr[-4:]
-            else:
-                from_display = from_addr
-            if len(to_addr) > 12:
-                to_display = to_addr[:6] + "..." + to_addr[-4:]
-            else:
-                to_display = to_addr
+            # Use friendly names if available, otherwise format addresses
+            from_display = row.get('from_display', '')
+            to_display = row.get('to_display', '')
+
+            # Fallback to formatted addresses if no display names
+            if not from_display:
+                from_addr = row.get('from', '')
+                if len(from_addr) > 12:
+                    from_display = from_addr[:6] + "..." + from_addr[-4:]
+                else:
+                    from_display = from_addr
+
+            if not to_display:
+                to_addr = row.get('to', '')
+                if len(to_addr) > 12:
+                    to_display = to_addr[:6] + "..." + to_addr[-4:]
+                else:
+                    to_display = to_addr
 
             # Format timestamp
             if isinstance(row.get('timestamp'), str):
@@ -326,14 +579,22 @@ def register_blockchain_listener_outputs(input, output, session):
                 ui.br(),
                 ui.layout_columns(
                     ui.div(
-                        ui.strong("From Address:"),
+                        ui.strong("From:"),
                         ui.br(),
-                        ui.code(tx.get('from', 'N/A'), class_="address-text"),
+                        ui.div(
+                            ui.strong(tx.get('from_display', 'Unknown')),
+                            ui.br(),
+                            ui.code(tx.get('from', 'N/A'), class_="address-text"),
+                        ),
                     ),
                     ui.div(
-                        ui.strong("To Address:"),
+                        ui.strong("To:"),
                         ui.br(),
-                        ui.code(tx.get('to', 'N/A'), class_="address-text"),
+                        ui.div(
+                            ui.strong(tx.get('to_display', 'Unknown')),
+                            ui.br(),
+                            ui.code(tx.get('to', 'N/A'), class_="address-text"),
+                        ),
                     ),
                     col_widths=[6, 6]
                 ),
@@ -414,7 +675,7 @@ def register_blockchain_listener_outputs(input, output, session):
                 ui.br(),
                 ui.div(
                     ui.a(
-                        "View on Block Explorer →",
+                        "View on Etherscan →",
                         href=f"{etherscan_base}/tx/{tx.get('hash', '')}",
                         target="_blank",
                         class_="btn btn-sm btn-outline-primary"
@@ -459,18 +720,62 @@ def register_blockchain_listener_outputs(input, output, session):
     @reactive.event(input.wallet_address, ignore_none=True)
     def wallet_changed():
         """Handle wallet address change"""
-        new_wallet = input.wallet_address()
-        if new_wallet and len(new_wallet) == 42 and new_wallet.startswith('0x'):
-            try:
-                blockchain_service.wallet_address = new_wallet
-                fresh_data = blockchain_service.fetch_historical_transactions(limit=100)
-                if not fresh_data.empty:
-                    transaction_data.set(fresh_data)
-                    last_refresh.set(datetime.now())
-                    error_message.set("")
-            except Exception as e:
-                logger.error(f"Error changing wallet: {e}")
-                error_message.set(f"Invalid wallet: {str(e)}")
+        try:
+            new_selection = input.wallet_address()
+            logger.info(f"Wallet selection changed to: {new_selection}")
+
+            # Handle special cases
+            if new_selection in ["none", "error"]:
+                logger.warning(f"Invalid selection: {new_selection}")
+                return
+
+            if new_selection == "custom":
+                # TODO: Show custom wallet input dialog
+                logger.info("Custom wallet option selected")
+                return
+
+            # Get the actual wallets to monitor
+            wallets_to_monitor = get_monitored_wallets()
+
+            if new_selection == "all_fund":
+                # Monitor all fund wallets
+                logger.info(f"Monitoring all fund wallets: {len(wallets_to_monitor)} wallets")
+                if wallets_to_monitor:
+                    # For now, fetch data from first wallet (TODO: aggregate all)
+                    blockchain_service.wallet_address = wallets_to_monitor[0]
+                else:
+                    logger.warning("No wallets found for fund")
+                    transaction_data.set(pd.DataFrame())
+                    return
+            else:
+                # Single wallet selected
+                if new_selection and len(new_selection) == 42 and new_selection.startswith('0x'):
+                    blockchain_service.wallet_address = new_selection
+                    logger.info(f"Switched to wallet: {new_selection}")
+                else:
+                    logger.warning(f"Invalid wallet address: {new_selection}")
+                    return
+
+            # Fetch fresh data for the new wallet
+            logger.info(f"Fetching transactions for: {blockchain_service.wallet_address}")
+            fresh_data = blockchain_service.fetch_historical_transactions(limit=int(input.transaction_limit() if hasattr(input, 'transaction_limit') else 100))
+
+            if not fresh_data.empty:
+                transaction_data.set(fresh_data)
+                initialization_status.set("active")
+                last_refresh.set(datetime.now())
+                error_message.set("")
+                logger.info(f"Loaded {len(fresh_data)} transactions for new wallet")
+            else:
+                transaction_data.set(pd.DataFrame())
+                initialization_status.set("no_data")
+                logger.warning("No transactions found for new wallet")
+
+        except Exception as e:
+            logger.error(f"Error changing wallet: {e}")
+            import traceback
+            traceback.print_exc()
+            error_message.set(f"Error loading wallet: {str(e)}")
 
     # Periodic refresh for non-WebSocket mode
     @reactive.effect

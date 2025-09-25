@@ -12,13 +12,7 @@ def home_dashboard_ui():
             ui.card_header("Monitor Settings"),
             ui.layout_columns(
                 ui.div(
-                    ui.input_text(
-                        "wallet_address",
-                        "Wallet Address:",
-                        placeholder="0x...",
-                        value="0x3b2A51FEC517BBc7fEaf68AcFdb068b57870713F",
-                        width="100%"
-                    ),
+                    ui.output_ui("wallet_selector_ui"),
                 ),
                 ui.div(
                     ui.input_select(
@@ -59,6 +53,19 @@ def home_dashboard_ui():
                 ),
                 col_widths=[5, 3, 2, 2]
             ),
+            class_="mb-4"
+        ),
+
+        # Advanced Filters Panel
+        ui.card(
+            ui.card_header(
+                ui.layout_columns(
+                    ui.h5("Transaction Filters"),
+                    ui.input_switch("show_filters", "Show Filters", value=False),
+                    col_widths=[6, 6]
+                )
+            ),
+            ui.output_ui("filter_controls"),
             class_="mb-4"
         ),
 
@@ -187,6 +194,11 @@ def home_dashboard_ui():
                 padding: 2px 6px;
                 border-radius: 3px;
                 font-size: 0.85em;
+            }
+
+            .address-text.small {
+                font-size: 0.75em;
+                opacity: 0.8;
             }
         """)
     )
