@@ -52,7 +52,15 @@ PCAP_EXCEL_PREFIX = "drip_capital/PCAP/"  # Prefix for PCAP Excel files
 FIFO_LEDGER_KEY = "drip_capital/fifo_ledger_results.parquet"
 
 # -- Create a reusable S3 client
-s3 = boto3.client("s3")
+# Create S3 client - will be initialized when first used
+s3 = None
+
+def get_s3_client():
+    """Get or create S3 client"""
+    global s3
+    if s3 is None:
+        s3 = boto3.client("s3")
+    return s3
 
 def get_master_tb_key() -> str:
     """Return the fixed key for the master trial balance."""
@@ -65,7 +73,7 @@ def get_master_gl_key() -> str:
 @lru_cache(maxsize=32)
 def load_tb_file(key: str = TB_KEY) -> pd.DataFrame:
     """Load a TB file from S3 as a DataFrame."""
-    obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+    obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
     content = obj["Body"].read()
     if key.endswith(".csv"):
         return pd.read_csv(BytesIO(content))
@@ -77,7 +85,7 @@ def load_tb_file(key: str = TB_KEY) -> pd.DataFrame:
 @lru_cache
 def load_COA_file(key: str = COA_KEY) -> pd.DataFrame:
     s3 = boto3.client("s3", region_name="us-east-2")
-    obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+    obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
     data = obj["Body"].read().decode("utf-8")
 
     df_coa = pd.read_csv(StringIO(data))
@@ -94,7 +102,7 @@ def save_COA_file(df: pd.DataFrame, key: str = COA_KEY) -> bool:
         df.to_csv(csv_buffer, index=False)
         
         # Upload to S3
-        s3.put_object(
+        get_s3_client().put_object(
             Bucket=BUCKET_NAME,
             Key=key,
             Body=csv_buffer.getvalue(),
@@ -129,12 +137,12 @@ def save_GL_file(df: pd.DataFrame, key: str = GL_KEY):
     buffer = BytesIO()
     df.to_parquet(buffer, index=False)
     buffer.seek(0)
-    s3.put_object(Bucket=BUCKET_NAME, Key=key, Body=buffer.getvalue())
+    get_s3_client().put_object(Bucket=BUCKET_NAME, Key=key, Body=buffer.getvalue())
 
 @lru_cache(maxsize=32)
 def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
     """Load a GL file from S3 as a DataFrame and assign unique transaction IDs."""
-    obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+    obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
     content = obj["Body"].read()
 
     if key.endswith(".parquet"):
@@ -180,8 +188,8 @@ def append_audit_log(changes_df: pd.DataFrame, key="drip_capital/gl_edit_log.csv
     """Append GL changes to a running audit log in S3."""
     try:
         # Download existing log (if exists)
-        existing = pd.read_csv(BytesIO(s3.get_object(Bucket=BUCKET_NAME, Key=key)["Body"].read()))
-    except s3.exceptions.NoSuchKey:
+        existing = pd.read_csv(BytesIO(get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)["Body"].read()))
+    except get_s3_client().exceptions.NoSuchKey:
         existing = pd.DataFrame()
 
     final_df = pd.concat([existing, changes_df], ignore_index=True)
@@ -189,12 +197,12 @@ def append_audit_log(changes_df: pd.DataFrame, key="drip_capital/gl_edit_log.csv
     buf = BytesIO()
     final_df.to_csv(buf, index=False)
     buf.seek(0)
-    s3.upload_fileobj(buf, Bucket=BUCKET_NAME, Key=key)
+    get_s3_client().upload_fileobj(buf, Bucket=BUCKET_NAME, Key=key)
 
 @lru_cache(maxsize=32)
 def load_WALLET_file(key: str = WALLET_KEY) -> pd.DataFrame:
     """Load a TB file from S3 as a DataFrame."""
-    obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+    obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
     content = obj["Body"].read()
     if key.endswith(".xlsx"):
         return pd.read_excel(BytesIO(content))
@@ -215,7 +223,7 @@ def load_NFT_LEDGER_file(key: str = NFT_LEDGER_KEY) -> pd.DataFrame:
         pd.DataFrame: Processed NFT ledger data with proper date handling
     """
     try:
-        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
         content = obj["Body"].read()
         
         # Load the CSV file
@@ -302,7 +310,7 @@ def get_current_nft_holdings(fund_id: str = None) -> pd.DataFrame:
 def load_LP_commitments_file(key: str = LP_COMMITMENTS_KEY) -> pd.DataFrame:
     """Load LP commitments from S3 as a DataFrame."""
     try:
-        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
         content = obj["Body"].read()
         
         if key.endswith(".csv"):
@@ -327,7 +335,7 @@ def load_LP_commitments_file(key: str = LP_COMMITMENTS_KEY) -> pd.DataFrame:
 def load_GP_incentive_audit_file(key: str = GP_INCENTIVE_AUDIT_KEY) -> pd.DataFrame:
     """Load GP incentive audit trail from S3 as a DataFrame."""
     try:
-        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
         content = obj["Body"].read()
         
         if key.endswith(".xlsx"):
@@ -354,14 +362,14 @@ def load_GP_incentive_audit_file(key: str = GP_INCENTIVE_AUDIT_KEY) -> pd.DataFr
 def load_approved_tokens_file(key: str = APPROVED_TOKENS_KEY) -> set:
     """Load user-approved tokens from S3 as a set of addresses."""
     try:
-        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
         content = obj["Body"].read()
         df = pd.read_csv(BytesIO(content))
         
         # Return set of token addresses
         return set(df['token_address'].dropna().astype(str))
         
-    except s3.exceptions.NoSuchKey:
+    except get_s3_client().exceptions.NoSuchKey:
         # File doesn't exist yet, return empty set
         return set()
     except Exception as e:
@@ -389,7 +397,7 @@ def save_approved_tokens_file(token_addresses: set, key: str = APPROVED_TOKENS_K
         csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=False)
         
-        s3.put_object(
+        get_s3_client().put_object(
             Bucket=BUCKET_NAME,
             Key=key,
             Body=csv_buffer.getvalue(),
@@ -408,14 +416,14 @@ def save_approved_tokens_file(token_addresses: set, key: str = APPROVED_TOKENS_K
 def load_rejected_tokens_file(key: str = REJECTED_TOKENS_KEY) -> set:
     """Load user-rejected tokens from S3 as a set of addresses."""
     try:
-        obj = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
         content = obj["Body"].read()
         df = pd.read_csv(BytesIO(content))
         
         # Return set of token addresses
         return set(df['token_address'].dropna().astype(str))
         
-    except s3.exceptions.NoSuchKey:
+    except get_s3_client().exceptions.NoSuchKey:
         # File doesn't exist yet, return empty set
         return set()
     except Exception as e:
@@ -443,7 +451,7 @@ def save_rejected_tokens_file(token_addresses: set, key: str = REJECTED_TOKENS_K
         csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=False)
         
-        s3.put_object(
+        get_s3_client().put_object(
             Bucket=BUCKET_NAME,
             Key=key,
             Body=csv_buffer.getvalue(),
@@ -477,7 +485,7 @@ def save_fifo_ledger_file(fifo_df: pd.DataFrame, positions_df: pd.DataFrame,
             buffer = BytesIO()
             fifo_df.to_parquet(buffer, index=False)
             buffer.seek(0)
-            s3.put_object(
+            get_s3_client().put_object(
                 Bucket=BUCKET_NAME,
                 Key=f"{base_key}_transactions.parquet",
                 Body=buffer.getvalue()
@@ -488,7 +496,7 @@ def save_fifo_ledger_file(fifo_df: pd.DataFrame, positions_df: pd.DataFrame,
             buffer = BytesIO()
             positions_df.to_parquet(buffer, index=False)
             buffer.seek(0)
-            s3.put_object(
+            get_s3_client().put_object(
                 Bucket=BUCKET_NAME,
                 Key=f"{base_key}_positions.parquet",
                 Body=buffer.getvalue()
@@ -499,7 +507,7 @@ def save_fifo_ledger_file(fifo_df: pd.DataFrame, positions_df: pd.DataFrame,
             buffer = BytesIO()
             journal_df.to_parquet(buffer, index=False)
             buffer.seek(0)
-            s3.put_object(
+            get_s3_client().put_object(
                 Bucket=BUCKET_NAME,
                 Key=f"{base_key}_journal.parquet",
                 Body=buffer.getvalue()
@@ -518,7 +526,7 @@ def save_fifo_ledger_file(fifo_df: pd.DataFrame, positions_df: pd.DataFrame,
         }
         
         metadata_json = json.dumps(metadata_full, indent=2)
-        s3.put_object(
+        get_s3_client().put_object(
             Bucket=BUCKET_NAME,
             Key=f"{base_key}_metadata.json",
             Body=metadata_json.encode('utf-8'),
@@ -549,10 +557,10 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         
         # Load metadata first to check what files exist
         try:
-            obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_metadata.json")
+            obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_metadata.json")
             metadata_json = obj["Body"].read().decode('utf-8')
             metadata = json.loads(metadata_json)
-        except s3.exceptions.NoSuchKey:
+        except get_s3_client().exceptions.NoSuchKey:
             # No metadata file means no saved ledger
             return {
                 'fifo_transactions': pd.DataFrame(),
@@ -592,7 +600,7 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         # 1. Load FIFO transactions
         if metadata.get('has_transactions', False):
             try:
-                obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_transactions.parquet")
+                obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_transactions.parquet")
                 table = pq.read_table(BytesIO(obj["Body"].read()))
                 fifo_df = table.to_pandas()
                 
@@ -612,7 +620,7 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         # 2. Load positions
         if metadata.get('has_positions', False):
             try:
-                obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_positions.parquet")
+                obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_positions.parquet")
                 table = pq.read_table(BytesIO(obj["Body"].read()))
                 positions_df = table.to_pandas()
                 
@@ -632,7 +640,7 @@ def load_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> dict:
         # 3. Load journal entries
         if metadata.get('has_journal', False):
             try:
-                obj = s3.get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_journal.parquet")
+                obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=f"{base_key}_journal.parquet")
                 table = pq.read_table(BytesIO(obj["Body"].read()))
                 journal_df = table.to_pandas()
                 
@@ -673,9 +681,9 @@ def check_fifo_ledger_exists(key: str = FIFO_LEDGER_KEY) -> bool:
     """Check if FIFO ledger metadata file exists in S3."""
     try:
         base_key = key.replace('.parquet', '')
-        s3.head_object(Bucket=BUCKET_NAME, Key=f"{base_key}_metadata.json")
+        get_s3_client().head_object(Bucket=BUCKET_NAME, Key=f"{base_key}_metadata.json")
         return True
-    except s3.exceptions.NoSuchKey:
+    except get_s3_client().exceptions.NoSuchKey:
         return False
     except Exception as e:
         print(f"Error checking FIFO ledger existence: {e}")
@@ -697,8 +705,8 @@ def delete_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> bool:
         
         for file_key in files_to_delete:
             try:
-                s3.delete_object(Bucket=BUCKET_NAME, Key=file_key)
-            except s3.exceptions.NoSuchKey:
+                get_s3_client().delete_object(Bucket=BUCKET_NAME, Key=file_key)
+            except get_s3_client().exceptions.NoSuchKey:
                 # File doesn't exist, that's okay
                 pass
             except Exception as e:
@@ -719,7 +727,7 @@ def delete_fifo_ledger_file(key: str = FIFO_LEDGER_KEY) -> bool:
 def list_pcap_excel_files():
     """List all PCAP Excel files available in S3"""
     try:
-        response = s3.list_objects_v2(
+        response = get_s3_client().list_objects_v2(
             Bucket=BUCKET_NAME,
             Prefix=PCAP_EXCEL_PREFIX
         )
@@ -800,7 +808,7 @@ def load_pcap_excel_file(key: str = None, date: str = None, fund_id: str = None)
         print(f"Loading PCAP Excel file: {key}")
         
         # Download the Excel file from S3
-        response = s3.get_object(Bucket=BUCKET_NAME, Key=key)
+        response = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
         excel_data = BytesIO(response['Body'].read())
         
         # Read all sheets from the Excel file

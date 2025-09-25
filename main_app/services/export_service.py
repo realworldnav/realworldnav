@@ -22,10 +22,13 @@ try:
     from weasyprint import HTML, CSS
     from jinja2 import Template
     PDF_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError):
+    # OSError occurs when WeasyPrint can't find system libraries (pango, cairo, etc.)
     PDF_AVAILABLE = False
+    HTML = None
+    CSS = None
     logger = logging.getLogger(__name__)
-    logger.warning("PDF generation not available. Install weasyprint and jinja2.")
+    logger.warning("PDF generation not available. Install weasyprint and jinja2 or system libraries.")
 
 from .portfolio_valuation import get_valuation_engine
 from .price_service import get_price_service

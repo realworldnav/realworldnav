@@ -3,7 +3,13 @@ import os
 import re
 from datetime import datetime
 from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML
+try:
+    from weasyprint import HTML
+    HAS_WEASYPRINT = True
+except (ImportError, OSError):
+    # OSError occurs when WeasyPrint can't find system libraries (pango, cairo, etc.)
+    HAS_WEASYPRINT = False
+    HTML = None
 import pandas as pd
 from decimal import Decimal
 # === CONFIG ===

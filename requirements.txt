@@ -17,3 +17,5 @@ eth-abi>=5.2.0
 # New dependencies for enhanced crypto tracker
 scipy>=1.10.0
 numpy>=1.24.0
+pyarrow
+python-dotenv

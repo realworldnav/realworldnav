@@ -1688,7 +1688,14 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
         import os
         import tempfile
         from jinja2 import Environment, FileSystemLoader
-        from weasyprint import HTML
+        try:
+            from weasyprint import HTML
+            HAS_WEASYPRINT = True
+        except (ImportError, OSError):
+            # OSError occurs when WeasyPrint can't find system libraries (pango, cairo, etc.)
+            HAS_WEASYPRINT = False
+            HTML = None
+            raise ImportError("WeasyPrint not available - PDF generation disabled")
         
         # Create JSON data for the statement
         print(f"  - Creating JSON data...")

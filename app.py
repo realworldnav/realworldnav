@@ -5,6 +5,13 @@ from main_app.server import server
 import os
 import uvicorn
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # This loads the .env file
+    print("Environment variables loaded from .env file")
+except ImportError:
+    print("python-dotenv not installed, using system environment variables")
 
 # Get the directory where the app.py file is located
 app_dir = os.path.dirname(os.path.abspath(__file__))

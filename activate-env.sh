@@ -1,24 +1,20 @@
 #!/bin/bash
-# Activation script for Mac/Linux - RealWorldNAV
 
-echo "RealWorldNAV - Activating Mac/Linux Environment"
-echo "=============================================="
-
-# Check if Mac virtual environment exists
-if [ -d ".venv-mac" ]; then
-    echo "✅ Found Mac virtual environment"
+# Activate the Python virtual environment
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+elif [ -d ".venv-mac" ]; then
     source .venv-mac/bin/activate
-    echo "✅ Virtual environment activated"
-    echo ""
-    echo "Environment: $(which python)"
-    echo "Python version: $(python --version)"
-    echo ""
-    echo "To run the application:"
-    echo "  python app.py"
-    echo "  # or"
-    echo "  shiny run app.py"
 else
-    echo "❌ Mac virtual environment not found (.venv-mac)"
-    echo "Run: python3 setup-env.py"
+    echo "No virtual environment found. Please run: python setup-env.py"
     exit 1
 fi
+
+# Re-source nvm if available (for Claude CLI access)
+if [ -f "$HOME/.nvm/nvm.sh" ]; then
+    source "$HOME/.nvm/nvm.sh"
+    echo "NVM reloaded - Claude CLI should now be available"
+fi
+
+echo "Virtual environment activated successfully!"
+echo "You can now run: python app.py or shiny run app.py"
