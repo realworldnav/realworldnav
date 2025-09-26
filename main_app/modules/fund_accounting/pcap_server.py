@@ -174,6 +174,84 @@ def register_pcap_outputs(output, input, session=None):
                 duration=5
             )
     
+    @render.download(filename=lambda: f"PCAP_Data_{input.pcap_lp_select()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    def download_pcap_json():
+        """Download JSON data for selected LP"""
+        processor = pcap_processor.get()
+
+        if not processor or not processor.excel_data:
+            # Return error JSON
+            import json
+            error_data = {"error": "No PCAP file loaded"}
+            yield json.dumps(error_data, indent=2).encode()
+            return
+
+        lp_id = input.pcap_lp_select()
+
+        if lp_id == "ALL":
+            # Generate JSON for all LPs
+            all_lp_data = {}
+            for lp in processor.available_lps:
+                lp_data = processor.parse_excel_to_json(lp)
+                if lp_data:
+                    all_lp_data[lp] = lp_data
+
+            if all_lp_data:
+                import json
+                # Get fund name from input
+                fund_name = input.fund_name_input() if hasattr(input, 'fund_name_input') else None
+                if not fund_name:
+                    fund_name = processor.get_fund_name_from_lp("")
+
+                # Create comprehensive JSON structure
+                final_json = {
+                    "fund_name": fund_name,
+                    "generation_date": datetime.now().isoformat(),
+                    "source_file": selected_file.get(),
+                    "lp_count": len(all_lp_data),
+                    "lp_data": all_lp_data
+                }
+                yield json.dumps(final_json, indent=2, default=str).encode()
+            else:
+                import json
+                error_data = {"error": "No LP data available"}
+                yield json.dumps(error_data, indent=2).encode()
+        else:
+            # Generate JSON for single LP
+            try:
+                json_data = processor.parse_excel_to_json(lp_id)
+
+                if json_data:
+                    import json
+                    # Get fund name from input
+                    fund_name = input.fund_name_input() if hasattr(input, 'fund_name_input') else None
+                    if not fund_name:
+                        fund_name = processor.get_fund_name_from_lp(lp_id)
+
+                    # Add metadata to JSON
+                    final_json = {
+                        "fund_name": fund_name,
+                        "lp_id": lp_id,
+                        "generation_date": datetime.now().isoformat(),
+                        "source_file": selected_file.get(),
+                        "data": json_data
+                    }
+
+                    # Update status
+                    pdf_generation_status.set(f"Downloaded JSON: {lp_id} at {datetime.now().strftime('%H:%M:%S')}")
+
+                    yield json.dumps(final_json, indent=2, default=str).encode()
+                else:
+                    import json
+                    error_data = {"error": f"No data available for LP: {lp_id}"}
+                    yield json.dumps(error_data, indent=2).encode()
+
+            except Exception as e:
+                import json
+                print(f"Error in JSON download handler: {e}")
+                error_data = {"error": str(e)}
+                yield json.dumps(error_data, indent=2).encode()
+
     @render.download(filename=lambda: f"PCAP_Statement_{input.pcap_lp_select()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
     def download_pcap_pdf():
         """Download PDF for selected LP"""

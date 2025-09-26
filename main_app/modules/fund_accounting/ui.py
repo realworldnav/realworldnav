@@ -92,15 +92,23 @@ def pcap_ui():
                 ui.output_ui("pcap_lp_controls"),
                 ui.row(
                     ui.column(
-                        6,
+                        4,
                         ui.download_button(
                             "download_pcap_pdf",
-                            "📄 Download PDF Statement",
+                            "📄 Download PDF",
                             class_="btn-primary w-100 mt-3"
                         )
                     ),
                     ui.column(
-                        6,
+                        4,
+                        ui.download_button(
+                            "download_pcap_json",
+                            "📊 Download JSON Data",
+                            class_="btn-info w-100 mt-3"
+                        )
+                    ),
+                    ui.column(
+                        4,
                         ui.input_action_button(
                             "generate_all_pdfs",
                             "📚 Generate All LP PDFs",
