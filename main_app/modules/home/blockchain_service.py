@@ -202,7 +202,7 @@ class EtherscanClient:
                     'amount': value_eth,
                     'token': 'ETH',
                     'gas_fee': gas_fee,
-                    'timestamp': datetime.fromtimestamp(int(tx.get('timeStamp', 0))),
+                    'timestamp': datetime.utcfromtimestamp(int(tx.get('timeStamp', 0))),
                     'status': 'Confirmed' if tx.get('isError') == '0' else 'Failed',
                     'type': 'IN' if is_incoming else 'OUT',
                     'nonce': int(tx.get('nonce', 0)),
@@ -238,7 +238,7 @@ class EtherscanClient:
                     'amount': amount,
                     'token': transfer.get('tokenSymbol', 'UNKNOWN'),
                     'gas_fee': 0,  # Gas fee paid in ETH, not in token transfer data
-                    'timestamp': datetime.fromtimestamp(int(transfer.get('timeStamp', 0))),
+                    'timestamp': datetime.utcfromtimestamp(int(transfer.get('timeStamp', 0))),
                     'status': 'Confirmed',
                     'type': 'IN' if is_incoming else 'OUT',
                     'nonce': int(transfer.get('nonce', 0)),
