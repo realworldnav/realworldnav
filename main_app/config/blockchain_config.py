@@ -102,12 +102,17 @@ COINBASE_ADDRESSES = {
     "coinbase_10": "0xA9D1e08C7793af67e9d92fe308d5697FB81d3E43",
 }
 
+# Blur Protocol Contracts
+BLUR_POOL = "0x0000000000A39bb272e79075ade125fd351887Ac"
+BLUR_LENDING = "0x29469395eAf6f95920E59F858042f0e28D98a20B"
+
 # Lending Platform Smart Contracts
 LENDING_CONTRACTS = {
     "gondi": "0xf65B99CE6DC5F6c556172BCC0Ff27D3665a7d9A8",
     "gondi_v2": "0x478f6F994C6fb3cf3e444a489b3AD9edB8cCaE16",
     "p2p_lending": "0x5F19431BC8A3eb21222771c6C867a63a119DeDA7",
-    "blur_pool": "0x0000000000A39bb272e79075ade125fd351887Ac",
+    "blur_pool": BLUR_POOL,
+    "blur_lending": BLUR_LENDING,
 }
 
 # Chainlink Price Feed Address (ETH/USD)

@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import os
 from .blockchain_service import blockchain_service
+from .blur_auto_decoder import blur_auto_decoder
+from .decoder_modal_ui import decoder_modal_ui, decoder_modal_styles
+from .decoder_modal_outputs import register_decoder_modal_outputs
 import logging
 
 logger = logging.getLogger(__name__)
@@ -17,6 +20,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     last_refresh = reactive.value(datetime.now(timezone.utc))
     initialization_status = reactive.value("initializing")
     error_message = reactive.value("")
+    decoded_tx_cache = reactive.value({})  # Cache of decoded transactions
+
+    # Register decoder modal outputs
+    set_current_tx = register_decoder_modal_outputs(input, output, session, selected_fund)
 
     # Create wallet selector UI with friendly names filtered by fund
     @output
@@ -39,7 +46,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
                 # Add "All Fund Wallets" option
                 if not fund_wallets.empty:
-                    wallet_choices["all_fund"] = f"📊 All {current_fund} Wallets ({len(fund_wallets)} wallets)"
+                    wallet_choices["all_fund"] = f"All {current_fund} Wallets ({len(fund_wallets)} wallets)"
 
                 # Create choices dict with friendly name as display and address as value
                 for _, row in fund_wallets.iterrows():
@@ -483,12 +490,29 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         if df.empty:
             # Return empty DataFrame with proper columns
-            display_df = pd.DataFrame(columns=['Status', 'Type', 'Hash', 'Block', 'From', 'To', 'Amount', 'Gas', 'Time'])
+            display_df = pd.DataFrame(columns=['Decoded', 'Status', 'Type', 'Hash', 'Block', 'From', 'To', 'Amount', 'Gas', 'Time'])
             return render.DataGrid(display_df, width="100%", height="500px")
 
         # Format display columns
         display_data = []
         for _, row in df.iterrows():
+            # Check if this is a Blur transaction (auto-decode candidate)
+            is_blur = blur_auto_decoder.is_blur_transaction({
+                'to': row.get('to', ''),
+                'from': row.get('from', '')
+            })
+
+            # Get decode status
+            tx_hash = row.get('hash', '')
+            decode_icon = ""
+            if is_blur:
+                cached_decode = decoded_tx_cache.get().get(tx_hash)
+                if cached_decode and cached_decode.get('status') == 'success':
+                    decode_icon = "🔍"
+                elif cached_decode and cached_decode.get('status') == 'error':
+                    decode_icon = "❌"
+                else:
+                    decode_icon = "⏳"
             # Format hash
             hash_str = row.get('hash', '')
             if len(hash_str) > 16:
@@ -522,6 +546,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 time_display = row.get('timestamp', datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S UTC")
 
             display_data.append({
+                'Decoded': decode_icon,
                 'Status': row.get('status', 'Unknown'),
                 'Type': row.get('type', ''),
                 'Hash': hash_display,
@@ -546,6 +571,87 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             width="100%",
             height="500px"
         )
+
+    # Auto-decode Blur transactions in background
+    @reactive.effect
+    def auto_decode_blur_transactions():
+        """Automatically decode Blur transactions in background"""
+        df = transaction_data.get()
+
+        if df.empty:
+            return
+
+        # Get fund wallets for decoding
+        try:
+            from ...s3_utils import load_WALLET_file
+            wallet_df = load_WALLET_file()
+            current_fund = selected_fund()
+
+            if not wallet_df.empty:
+                fund_wallets = wallet_df[wallet_df['fund_id'] == current_fund]
+                fund_wallet_addresses = fund_wallets['wallet_address'].str.strip().tolist()
+            else:
+                fund_wallet_addresses = []
+        except:
+            fund_wallet_addresses = []
+
+        # Check each transaction
+        current_cache = decoded_tx_cache.get().copy()
+        updated = False
+
+        for _, row in df.head(20).iterrows():  # Only process recent 20
+            tx_hash = row.get('hash', '')
+
+            if not tx_hash or tx_hash in current_cache:
+                continue
+
+            # Check if Blur transaction
+            if blur_auto_decoder.is_blur_transaction({
+                'to': row.get('to', ''),
+                'from': row.get('from', '')
+            }):
+                # Decode in background (non-blocking)
+                try:
+                    result = blur_auto_decoder.decode_transaction(
+                        tx_hash,
+                        fund_wallet_addresses,
+                        wallet_metadata=None
+                    )
+                    current_cache[tx_hash] = result
+                    updated = True
+                    logger.info(f"Auto-decoded Blur transaction: {tx_hash[:10]}...")
+                except Exception as e:
+                    logger.error(f"Failed to auto-decode {tx_hash}: {e}")
+                    current_cache[tx_hash] = {"status": "error", "error": str(e)}
+                    updated = True
+
+        if updated:
+            decoded_tx_cache.set(current_cache)
+
+    # Show decoder modal when user clicks decoded icon
+    @reactive.effect
+    @reactive.event(input.blockchain_transactions_table_selected_rows)
+    def show_decoder_modal():
+        """Show decoder modal when row with decoded icon is clicked"""
+        selected = input.blockchain_transactions_table_selected_rows()
+
+        if not selected or len(selected) == 0:
+            return
+
+        df = filtered_transactions()
+        if df.empty or selected[0] >= len(df):
+            return
+
+        tx = df.iloc[selected[0]]
+        tx_hash = tx.get('hash', '')
+
+        # Check if this transaction is decoded
+        if tx_hash in decoded_tx_cache.get():
+            # Set current transaction for modal
+            set_current_tx(tx_hash)
+
+            # Show modal
+            ui.modal_show(decoder_modal_ui(tx_hash))
 
     # Transaction details panel
     @output

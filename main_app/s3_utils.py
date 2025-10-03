@@ -7,6 +7,10 @@ import io
 import pyarrow.parquet as pq
 from decimal import Decimal, InvalidOperation
 import re
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 def safe_to_decimal(value):
     """Safely convert a value to Decimal, handling various edge cases"""
@@ -50,6 +54,7 @@ APPROVED_TOKENS_KEY = "drip_capital/user_approved_tokens.csv"
 REJECTED_TOKENS_KEY = "drip_capital/user_rejected_tokens.csv"
 PCAP_EXCEL_PREFIX = "drip_capital/PCAP/"  # Prefix for PCAP Excel files
 FIFO_LEDGER_KEY = "drip_capital/fifo_ledger_results.parquet"
+ABI_PREFIX = "drip_capital/smart_contract_abis/"  # Prefix for contract ABIs
 
 # -- Create a reusable S3 client
 # Create S3 client - will be initialized when first used
@@ -69,6 +74,63 @@ def get_master_tb_key() -> str:
 def get_master_gl_key() -> str:
     """Return the fixed key for the master general ledger."""
     return GL_KEY
+
+@lru_cache(maxsize=128)
+def load_abi_from_s3(contract_address: str) -> dict:
+    """
+    Load contract ABI from S3.
+    ABIs are stored as JSON files named by contract address.
+
+    Args:
+        contract_address: Ethereum contract address (checksummed or not)
+
+    Returns:
+        Contract ABI as dict, or empty dict if not found
+    """
+    # Normalize address (lowercase, remove 0x prefix if present)
+    address = contract_address.lower().replace('0x', '')
+
+    # Try different naming conventions
+    possible_keys = [
+        f"{ABI_PREFIX}{address}.json",
+        f"{ABI_PREFIX}0x{address}.json",
+        f"{ABI_PREFIX}{address.upper()}.json",
+        f"{ABI_PREFIX}0x{address.upper()}.json",
+    ]
+
+    s3_client = get_s3_client()
+
+    for key in possible_keys:
+        try:
+            obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=key)
+            abi_content = obj["Body"].read().decode("utf-8")
+            abi = json.loads(abi_content)
+            logger.info(f"Loaded ABI from S3: {key}")
+            return abi
+        except s3_client.exceptions.NoSuchKey:
+            continue
+        except Exception as e:
+            logger.warning(f"Error loading ABI from {key}: {e}")
+            continue
+
+    logger.warning(f"ABI not found in S3 for address: {contract_address}")
+    return {}
+
+def list_available_abis() -> list:
+    """List all available ABIs in S3"""
+    s3_client = get_s3_client()
+    try:
+        response = s3_client.list_objects_v2(
+            Bucket=BUCKET_NAME,
+            Prefix=ABI_PREFIX
+        )
+
+        if 'Contents' in response:
+            return [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')]
+        return []
+    except Exception as e:
+        logger.error(f"Error listing ABIs: {e}")
+        return []
 
 @lru_cache(maxsize=32)
 def load_tb_file(key: str = TB_KEY) -> pd.DataFrame:

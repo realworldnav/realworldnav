@@ -136,6 +136,27 @@ def home_dashboard_ui():
                 overflow-y: auto;
             }
 
+            /* Decoded icon styling */
+            .decoded-icon {
+                cursor: pointer;
+                font-size: 1.2rem;
+                transition: transform 0.2s ease;
+            }
+
+            .decoded-icon:hover {
+                transform: scale(1.2);
+            }
+
+            /* Loading spinner animation for pending decodes */
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+
+            .decoding-pending {
+                animation: spin 2s linear infinite;
+            }
+
             .status-badge {
                 padding: 4px 8px;
                 border-radius: 4px;
