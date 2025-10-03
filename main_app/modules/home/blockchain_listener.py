@@ -1,6 +1,6 @@
 from shiny import reactive, render, ui
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import os
 from .blockchain_service import blockchain_service
@@ -14,7 +14,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
     # Reactive values
     transaction_data = reactive.value(pd.DataFrame())
-    last_refresh = reactive.value(datetime.now())
+    last_refresh = reactive.value(datetime.now(timezone.utc))
     initialization_status = reactive.value("initializing")
     error_message = reactive.value("")
 
@@ -143,7 +143,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                     initialization_status.set("no_data")
                     logger.warning("No historical transactions found")
 
-            last_refresh.set(datetime.now())
+            last_refresh.set(datetime.now(timezone.utc))
 
         except Exception as e:
             logger.error(f"Failed to initialize blockchain listener: {e}")
@@ -227,7 +227,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         if status == "active":
             if blockchain_service.is_connected():
-                return ui.tags.strong("Live Monitoring", style="color: #28a745;")
+                return ui.tags.strong("Live Monitoring (WebSocket)", style="color: #28a745;")
+            elif blockchain_service.is_infura_connected():
+                return ui.tags.strong("Infura Connected", style="color: #28a745;")
             else:
                 return ui.tags.strong("Etherscan Only", style="color: #ffc107;")
         elif status == "limited":
@@ -246,9 +248,11 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         if status == "active":
             if blockchain_service.is_connected():
-                return ui.HTML('<i class="bi bi-circle-fill connection-active"></i> WebSocket + API')
+                return ui.HTML('<i class="bi bi-circle-fill connection-active"></i> WebSocket + Infura')
+            elif blockchain_service.is_infura_connected():
+                return ui.HTML('<i class="bi bi-circle-fill" style="color: #28a745;"></i> Infura HTTP')
             else:
-                return ui.HTML('<i class="bi bi-circle-fill" style="color: #ffc107;"></i> API Only')
+                return ui.HTML('<i class="bi bi-circle-fill" style="color: #ffc107;"></i> Etherscan')
         elif status == "limited":
             return ui.HTML('<i class="bi bi-exclamation-triangle-fill" style="color: #ffc107;"></i> Limited')
         elif status == "initializing":
@@ -302,7 +306,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         if df.empty:
             return ui.tags.strong("0", style="font-size: 1.5em;")
 
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         # Handle both string and datetime timestamps
         if 'timestamp' in df.columns:
             if isinstance(df.iloc[0]['timestamp'], str):
@@ -324,7 +328,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         if isinstance(df.iloc[0]['timestamp'], str):
             df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         yesterday = today - timedelta(days=1)
 
         today_count = len(df[df['timestamp'].dt.date == today])
@@ -355,7 +359,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         else:
             last_time = df.iloc[0]['timestamp']
 
-        time_ago = datetime.now() - last_time
+        time_ago = datetime.now(timezone.utc) - last_time
 
         if time_ago.total_seconds() < 60:
             return "Just now"
@@ -385,7 +389,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             if blockchain_service.is_connected():
                 return ui.HTML("""
                     <span class="badge bg-success">
-                        <i class="bi bi-arrow-repeat"></i> Live Updates
+                        <i class="bi bi-arrow-repeat"></i> Live WebSocket
+                    </span>
+                """)
+            elif blockchain_service.is_infura_connected():
+                return ui.HTML("""
+                    <span class="badge bg-success">
+                        <i class="bi bi-arrow-repeat"></i> Infura (15s)
                     </span>
                 """)
             else:
@@ -443,7 +453,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         # Apply time range filter
         if hasattr(input, 'time_range') and input.time_range() != "all":
             time_range = input.time_range()
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
 
             # Ensure timestamp is datetime
             if 'timestamp' in df.columns and not df.empty:
@@ -509,7 +519,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             if isinstance(row.get('timestamp'), str):
                 time_display = row['timestamp']
             else:
-                time_display = row.get('timestamp', datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+                time_display = row.get('timestamp', datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S UTC")
 
             display_data.append({
                 'Status': row.get('status', 'Unknown'),
@@ -708,7 +718,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             fresh_data = blockchain_service.fetch_historical_transactions(limit=limit)
             if not fresh_data.empty:
                 transaction_data.set(fresh_data)
-                last_refresh.set(datetime.now())
+                last_refresh.set(datetime.now(timezone.utc))
                 logger.info(f"Refreshed with {len(fresh_data)} transactions")
 
         except Exception as e:
@@ -763,7 +773,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             if not fresh_data.empty:
                 transaction_data.set(fresh_data)
                 initialization_status.set("active")
-                last_refresh.set(datetime.now())
+                last_refresh.set(datetime.now(timezone.utc))
                 error_message.set("")
                 logger.info(f"Loaded {len(fresh_data)} transactions for new wallet")
             else:
@@ -780,19 +790,22 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     # Periodic refresh for non-WebSocket mode
     @reactive.effect
     def periodic_refresh():
-        """Periodically refresh data if not using WebSocket"""
-        reactive.invalidate_later(30)  # Refresh every 30 seconds
+        """Periodically refresh data - faster with Infura (15s) vs Etherscan (30s)"""
+        # Use faster refresh interval when Infura is connected
+        refresh_interval = 15 if blockchain_service.is_infura_connected() else 30
+        reactive.invalidate_later(refresh_interval)
 
         if initialization_status.get() == "active" and not blockchain_service.is_connected():
             try:
-                # Get updated transactions
+                # Get updated transactions using Infura primarily
                 updated_data = blockchain_service.get_all_transactions()
                 if not updated_data.empty:
                     # Only update if there are changes
                     current = transaction_data.get()
                     if current.empty or len(updated_data) != len(current):
                         transaction_data.set(updated_data)
-                        last_refresh.set(datetime.now())
-                        logger.info(f"Auto-refreshed: {len(updated_data)} transactions")
+                        last_refresh.set(datetime.now(timezone.utc))
+                        source = "Infura" if blockchain_service.is_infura_connected() else "Etherscan"
+                        logger.info(f"Auto-refreshed via {source}: {len(updated_data)} transactions")
             except Exception as e:
                 logger.error(f"Error in periodic refresh: {e}")

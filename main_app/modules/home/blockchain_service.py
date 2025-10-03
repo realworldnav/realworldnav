@@ -7,7 +7,7 @@ import asyncio
 import aiohttp
 import requests
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 import pandas as pd
 from web3 import Web3
@@ -69,11 +69,12 @@ class EtherscanClient:
         self.last_request_time = time.time()
 
     def get_transactions(self, address: str, chainid: int = 1, limit: int = 100) -> pd.DataFrame:
-        """Fetch transactions for a wallet address"""
+        """Fetch transactions for a wallet address using V2 API"""
         self._rate_limit()
 
-        # Use v1 API directly (more stable and reliable)
+        # Use V2 API endpoint
         params = {
+            'chainid': chainid,
             'module': 'account',
             'action': 'txlist',
             'address': address,
@@ -85,8 +86,8 @@ class EtherscanClient:
             'apikey': self.api_key
         }
 
-        url = self.base_url_v1
-        logger.info(f"Fetching transactions from Etherscan API")
+        url = self.base_url  # Use V2 URL
+        logger.info(f"Fetching transactions from Etherscan API V2")
         logger.debug(f"URL: {url}")
         logger.debug(f"Params: {params}")
 
@@ -132,10 +133,11 @@ class EtherscanClient:
         return pd.DataFrame()
 
     def get_token_transfers(self, address: str, chainid: int = 1, limit: int = 100) -> pd.DataFrame:
-        """Fetch ERC-20 token transfers for a wallet"""
+        """Fetch ERC-20 token transfers for a wallet using V2 API"""
         self._rate_limit()
 
         params = {
+            'chainid': chainid,
             'module': 'account',
             'action': 'tokentx',
             'address': address,
@@ -147,8 +149,8 @@ class EtherscanClient:
             'apikey': self.api_key
         }
 
-        url = self.base_url_v1
-        logger.info(f"Fetching token transfers from Etherscan API")
+        url = self.base_url  # Use V2 URL
+        logger.info(f"Fetching token transfers from Etherscan API V2")
 
         try:
             response = requests.get(url, params=params)
@@ -202,7 +204,7 @@ class EtherscanClient:
                     'amount': value_eth,
                     'token': 'ETH',
                     'gas_fee': gas_fee,
-                    'timestamp': datetime.fromtimestamp(int(tx.get('timeStamp', 0))),
+                    'timestamp': datetime.fromtimestamp(int(tx.get('timeStamp', 0)), tz=timezone.utc),
                     'status': 'Confirmed' if tx.get('isError') == '0' else 'Failed',
                     'type': 'IN' if is_incoming else 'OUT',
                     'nonce': int(tx.get('nonce', 0)),
@@ -238,7 +240,7 @@ class EtherscanClient:
                     'amount': amount,
                     'token': transfer.get('tokenSymbol', 'UNKNOWN'),
                     'gas_fee': 0,  # Gas fee paid in ETH, not in token transfer data
-                    'timestamp': datetime.fromtimestamp(int(transfer.get('timeStamp', 0))),
+                    'timestamp': datetime.fromtimestamp(int(transfer.get('timeStamp', 0)), tz=timezone.utc),
                     'status': 'Confirmed',
                     'type': 'IN' if is_incoming else 'OUT',
                     'nonce': int(transfer.get('nonce', 0)),
@@ -252,6 +254,298 @@ class EtherscanClient:
                 continue
 
         return pd.DataFrame(processed)
+
+
+class InfuraClient:
+    """Client for interacting with Infura via HTTP and WebSocket"""
+
+    def __init__(self, http_url: Optional[str] = None, websocket_url: Optional[str] = None):
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        self.http_url = http_url or os.getenv('WEB3_HTTP_URL', '')
+        self.websocket_url = websocket_url or os.getenv('WEB3_WEBSOCKET_URL', '')
+
+        # Initialize HTTP Web3 client for synchronous operations
+        self.w3_http = None
+        if self.http_url:
+            try:
+                from web3 import Web3, HTTPProvider
+                self.w3_http = Web3(HTTPProvider(self.http_url))
+                if self.w3_http.is_connected():
+                    logger.info(f"Connected to Infura HTTP: {self.http_url[:40]}...")
+                else:
+                    logger.warning("Infura HTTP connection failed")
+            except Exception as e:
+                logger.error(f"Failed to initialize Infura HTTP client: {e}")
+
+    def get_recent_transactions(self, address: str, from_block: int = None, limit: int = 100) -> pd.DataFrame:
+        """Fetch recent transactions - NOTE: Scanning blocks is slow, use with caution"""
+        if not self.w3_http or not self.w3_http.is_connected():
+            logger.warning("Web3 HTTP client not connected")
+            return pd.DataFrame()
+
+        try:
+            # Get latest block number
+            latest_block = self.w3_http.eth.block_number
+
+            # Only look back a small number of blocks (100 blocks ~20 min on Ethereum)
+            # For historical data, Etherscan is much faster
+            if from_block is None:
+                from_block = max(0, latest_block - 100)
+
+            logger.info(f"Fetching transactions from block {from_block} to {latest_block} (scanning {latest_block - from_block} blocks)")
+            logger.warning("Block scanning is slow! For historical data, falling back to Etherscan is recommended.")
+
+            # Normalize address
+            address_lower = address.lower()
+
+            # Fetch transactions where address is sender or receiver
+            transactions = []
+
+            # Scan recent blocks only
+            for block_num in range(latest_block, from_block - 1, -1):
+                try:
+                    block = self.w3_http.eth.get_block(block_num, full_transactions=True)
+
+                    for tx in block.transactions:
+                        # Check if transaction involves our address
+                        if (tx['from'].lower() == address_lower or
+                            (tx.get('to') and tx['to'].lower() == address_lower)):
+
+                            # Format transaction
+                            formatted = self._format_transaction(tx, address, block.timestamp)
+                            if formatted:
+                                transactions.append(formatted)
+
+                            if len(transactions) >= limit:
+                                break
+
+                    if len(transactions) >= limit:
+                        break
+
+                except Exception as e:
+                    logger.debug(f"Error fetching block {block_num}: {e}")
+                    continue
+
+            logger.info(f"Found {len(transactions)} transactions via Infura block scan")
+
+            # Convert to DataFrame
+            if transactions:
+                df = pd.DataFrame(transactions)
+                df = df.sort_values('timestamp', ascending=False)
+                return df.head(limit)
+
+            return pd.DataFrame()
+
+        except Exception as e:
+            logger.error(f"Error fetching transactions from Infura: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame()
+
+    def get_token_transfers(self, address: str, from_block: int = None, limit: int = 100) -> pd.DataFrame:
+        """Fetch ERC-20 token transfers using event logs"""
+        if not self.w3_http or not self.w3_http.is_connected():
+            logger.warning("Web3 HTTP client not connected")
+            return pd.DataFrame()
+
+        try:
+            # Get latest block
+            latest_block = self.w3_http.eth.block_number
+
+            if from_block is None:
+                from_block = max(0, latest_block - 10000)
+
+            # ERC-20 Transfer event signature: Transfer(address,address,uint256)
+            transfer_topic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+
+            # Normalize address and create padded topic (32 bytes)
+            address_lower = address.lower()
+            address_padded = '0x' + address_lower[2:].zfill(64)
+
+            logger.info(f"Fetching token transfers for {address} from block {from_block}")
+
+            # Get logs where address is either sender or receiver
+            logs_received = []
+            logs_sent = []
+
+            try:
+                # Tokens received (address in 'to' position - topic2)
+                logs_received = self.w3_http.eth.get_logs({
+                    'fromBlock': from_block,
+                    'toBlock': latest_block,
+                    'topics': [transfer_topic, None, address_padded]
+                })
+            except Exception as e:
+                logger.warning(f"Error fetching received token transfers: {e}")
+
+            try:
+                # Tokens sent (address in 'from' position - topic1)
+                logs_sent = self.w3_http.eth.get_logs({
+                    'fromBlock': from_block,
+                    'toBlock': latest_block,
+                    'topics': [transfer_topic, address_padded, None]
+                })
+            except Exception as e:
+                logger.warning(f"Error fetching sent token transfers: {e}")
+
+            # Combine logs
+            all_logs = logs_received + logs_sent
+
+            logger.info(f"Found {len(all_logs)} token transfer events")
+
+            # Process logs into transactions
+            transfers = []
+            for log in all_logs:
+                try:
+                    transfer = self._process_token_log(log, address)
+                    if transfer:
+                        transfers.append(transfer)
+                except Exception as e:
+                    logger.debug(f"Error processing token log: {e}")
+                    continue
+
+            # Convert to DataFrame
+            if transfers:
+                df = pd.DataFrame(transfers)
+                df = df.sort_values('timestamp', ascending=False)
+                return df.head(limit)
+
+            return pd.DataFrame()
+
+        except Exception as e:
+            logger.error(f"Error fetching token transfers from Infura: {e}")
+            import traceback
+            traceback.print_exc()
+            return pd.DataFrame()
+
+    def _format_transaction(self, tx, wallet_address: str, block_timestamp: int) -> Dict:
+        """Format Web3 transaction to standard format"""
+        try:
+            # Determine type
+            is_incoming = tx.get('to') and tx['to'].lower() == wallet_address.lower()
+
+            # Get transaction receipt for gas info
+            receipt = None
+            try:
+                receipt = self.w3_http.eth.get_transaction_receipt(tx['hash'])
+            except:
+                pass
+
+            # Calculate gas fee
+            gas_used = receipt['gasUsed'] if receipt else tx.get('gas', 0)
+            gas_price = tx.get('gasPrice', 0)
+            gas_fee = Web3.from_wei(gas_used * gas_price, 'ether') if gas_used and gas_price else 0
+
+            # Determine status
+            status = 'Confirmed'
+            if receipt:
+                status = 'Confirmed' if receipt.get('status') == 1 else 'Failed'
+
+            return {
+                'hash': tx['hash'].hex() if isinstance(tx['hash'], bytes) else tx['hash'],
+                'block': tx.get('blockNumber', 0),
+                'from': tx.get('from', ''),
+                'to': tx.get('to', ''),
+                'amount': Web3.from_wei(tx.get('value', 0), 'ether'),
+                'token': 'ETH',
+                'gas_fee': float(gas_fee),
+                'timestamp': datetime.fromtimestamp(block_timestamp, tz=timezone.utc),
+                'status': status,
+                'type': 'IN' if is_incoming else 'OUT',
+                'nonce': tx.get('nonce', 0),
+                'confirmations': 0  # Could calculate from latest block
+            }
+        except Exception as e:
+            logger.warning(f"Error formatting transaction: {e}")
+            return None
+
+    def _process_token_log(self, log, wallet_address: str) -> Dict:
+        """Process ERC-20 transfer log into transaction format"""
+        try:
+            # Parse topics
+            # topic[0] = Transfer event signature
+            # topic[1] = from address (padded)
+            # topic[2] = to address (padded)
+            # data = amount (uint256)
+
+            from_addr = '0x' + log['topics'][1].hex()[-40:]
+            to_addr = '0x' + log['topics'][2].hex()[-40:]
+
+            # Determine if incoming or outgoing
+            is_incoming = to_addr.lower() == wallet_address.lower()
+
+            # Get amount from data (assuming 18 decimals, will try to get actual decimals)
+            amount_hex = log['data'].hex() if isinstance(log['data'], bytes) else log['data']
+            amount = int(amount_hex, 16) / 10**18  # Default to 18 decimals
+
+            # Try to get token info
+            token_symbol = 'UNKNOWN'
+            token_name = ''
+            contract_address = log['address']
+
+            # Try to get token symbol using ERC-20 ABI
+            try:
+                # Minimal ERC-20 ABI for symbol and decimals
+                erc20_abi = [
+                    {
+                        "constant": True,
+                        "inputs": [],
+                        "name": "symbol",
+                        "outputs": [{"name": "", "type": "string"}],
+                        "type": "function"
+                    },
+                    {
+                        "constant": True,
+                        "inputs": [],
+                        "name": "decimals",
+                        "outputs": [{"name": "", "type": "uint8"}],
+                        "type": "function"
+                    },
+                    {
+                        "constant": True,
+                        "inputs": [],
+                        "name": "name",
+                        "outputs": [{"name": "", "type": "string"}],
+                        "type": "function"
+                    }
+                ]
+
+                contract = self.w3_http.eth.contract(address=Web3.to_checksum_address(contract_address), abi=erc20_abi)
+                token_symbol = contract.functions.symbol().call()
+                decimals = contract.functions.decimals().call()
+                token_name = contract.functions.name().call()
+
+                # Recalculate amount with correct decimals
+                amount = int(amount_hex, 16) / (10 ** decimals)
+
+            except Exception as e:
+                logger.debug(f"Could not fetch token info for {contract_address}: {e}")
+
+            # Get block timestamp
+            block = self.w3_http.eth.get_block(log['blockNumber'])
+
+            return {
+                'hash': log['transactionHash'].hex() if isinstance(log['transactionHash'], bytes) else log['transactionHash'],
+                'block': log['blockNumber'],
+                'from': from_addr,
+                'to': to_addr,
+                'amount': amount,
+                'token': token_symbol,
+                'gas_fee': 0,  # Not available in logs
+                'timestamp': datetime.fromtimestamp(block['timestamp'], tz=timezone.utc),
+                'status': 'Confirmed',
+                'type': 'IN' if is_incoming else 'OUT',
+                'nonce': 0,
+                'confirmations': 0,
+                'token_name': token_name,
+                'contract_address': contract_address
+            }
+
+        except Exception as e:
+            logger.warning(f"Error processing token log: {e}")
+            return None
 
 
 class Web3Monitor:
@@ -343,7 +637,7 @@ class Web3Monitor:
             'amount': Web3.from_wei(tx['value'], 'ether'),
             'token': 'ETH',
             'gas_fee': Web3.from_wei(tx.get('gas', 0) * tx.get('gasPrice', 0), 'ether'),
-            'timestamp': datetime.now(),  # Will be updated when block is confirmed
+            'timestamp': datetime.now(timezone.utc),  # Will be updated when block is confirmed
             'status': 'Pending',
             'type': 'OUT' if tx['from'].lower() == self.watched_address.lower() else 'IN',
             'nonce': tx.get('nonce', 0)
@@ -355,15 +649,17 @@ class Web3Monitor:
 
 
 class BlockchainService:
-    """Main service combining Etherscan and Web3 monitoring"""
+    """Main service combining Infura (primary) and Etherscan (backup) monitoring"""
 
     def __init__(self):
-        self.etherscan = EtherscanClient()
+        self.infura = InfuraClient()
+        self.etherscan = EtherscanClient()  # Backup only
         self.web3_monitor = Web3Monitor()
         self.transaction_cache = {}
-        self.last_update = datetime.now()
+        self.last_update = datetime.now(timezone.utc)
         self.wallet_address = None
         self.wallet_mapping = None
+        self.monitoring_active = False
         self._load_wallet_mapping()
 
     async def initialize(self, wallet_address: str):
@@ -373,27 +669,48 @@ class BlockchainService:
         # Start Web3 monitoring in background
         try:
             asyncio.create_task(self.web3_monitor.monitor_address(wallet_address))
+            self.monitoring_active = True
         except Exception as e:
             logger.warning(f"Could not start Web3 monitoring: {e}")
 
-        # Fetch initial transactions from Etherscan
+        # Fetch initial transactions from Infura
         return self.fetch_historical_transactions()
 
-    def fetch_historical_transactions(self, limit: int = 100) -> pd.DataFrame:
-        """Fetch historical transactions from Etherscan"""
+    def fetch_historical_transactions(self, limit: int = 100, use_infura: bool = False) -> pd.DataFrame:
+        """Fetch historical transactions - primary: Etherscan (fast), secondary: Infura (real-time only)"""
         if not self.wallet_address:
             logger.warning("No wallet address set")
             return pd.DataFrame()
 
         logger.info(f"Fetching transactions for wallet: {self.wallet_address}")
 
-        # Get ETH transactions
-        eth_txs = self.etherscan.get_transactions(self.wallet_address, limit=limit)
-        logger.info(f"Found {len(eth_txs)} ETH transactions")
+        eth_txs = pd.DataFrame()
+        token_txs = pd.DataFrame()
 
-        # Get token transfers
-        token_txs = self.etherscan.get_token_transfers(self.wallet_address, limit=limit)
-        logger.info(f"Found {len(token_txs)} token transfers")
+        # For historical data, Etherscan is much faster than block scanning
+        # Use Etherscan as primary for initial load
+        logger.info("Using Etherscan for historical transaction fetching")
+        try:
+            eth_txs = self.etherscan.get_transactions(self.wallet_address, limit=limit)
+            logger.info(f"Found {len(eth_txs)} ETH transactions via Etherscan")
+
+            token_txs = self.etherscan.get_token_transfers(self.wallet_address, limit=limit)
+            logger.info(f"Found {len(token_txs)} token transfers via Etherscan")
+        except Exception as e:
+            logger.error(f"Etherscan fetch failed: {e}")
+
+            # Only try Infura if explicitly requested (not recommended for historical)
+            if use_infura and self.infura.w3_http and self.infura.w3_http.is_connected():
+                logger.warning("Falling back to Infura (this will be slow for historical data)")
+                try:
+                    # Only scan recent 100 blocks
+                    eth_txs = self.infura.get_recent_transactions(self.wallet_address, limit=limit)
+                    logger.info(f"Found {len(eth_txs)} ETH transactions via Infura")
+
+                    token_txs = self.infura.get_token_transfers(self.wallet_address, limit=limit)
+                    logger.info(f"Found {len(token_txs)} token transfers via Infura")
+                except Exception as e2:
+                    logger.error(f"Infura fetch also failed: {e2}")
 
         # Combine and sort
         if not eth_txs.empty and not token_txs.empty:
@@ -415,8 +732,47 @@ class BlockchainService:
         for _, tx in all_txs.iterrows():
             self.transaction_cache[tx['hash']] = tx.to_dict()
 
-        self.last_update = datetime.now()
+        self.last_update = datetime.now(timezone.utc)
         return all_txs
+
+    def fetch_new_transactions(self, since_block: int = None) -> pd.DataFrame:
+        """Fetch only new transactions since a given block - optimized for Infura real-time updates"""
+        if not self.wallet_address:
+            logger.warning("No wallet address set")
+            return pd.DataFrame()
+
+        # Use Infura for real-time updates (recent blocks only)
+        if self.infura.w3_http and self.infura.w3_http.is_connected():
+            try:
+                logger.info(f"Checking for new transactions via Infura since block {since_block}")
+
+                # Get recent transactions (last 50 blocks)
+                eth_txs = self.infura.get_recent_transactions(self.wallet_address, from_block=since_block, limit=50)
+
+                # Get recent token transfers
+                token_txs = self.infura.get_token_transfers(self.wallet_address, from_block=since_block, limit=50)
+
+                # Combine
+                if not eth_txs.empty and not token_txs.empty:
+                    new_txs = pd.concat([eth_txs, token_txs], ignore_index=True)
+                elif not eth_txs.empty:
+                    new_txs = eth_txs
+                elif not token_txs.empty:
+                    new_txs = token_txs
+                else:
+                    return pd.DataFrame()
+
+                # Add friendly names
+                new_txs['from_display'] = new_txs['from'].apply(self.get_friendly_name)
+                new_txs['to_display'] = new_txs['to'].apply(self.get_friendly_name)
+
+                logger.info(f"Found {len(new_txs)} new transactions via Infura")
+                return new_txs
+
+            except Exception as e:
+                logger.error(f"Error fetching new transactions via Infura: {e}")
+
+        return pd.DataFrame()
 
     def _load_wallet_mapping(self):
         """Load wallet mapping from S3"""
@@ -484,6 +840,10 @@ class BlockchainService:
     def is_connected(self) -> bool:
         """Check if Web3 monitor is connected"""
         return self.web3_monitor.is_connected
+
+    def is_infura_connected(self) -> bool:
+        """Check if Infura HTTP client is connected"""
+        return self.infura.w3_http is not None and self.infura.w3_http.is_connected()
 
 
 # Global service instance
