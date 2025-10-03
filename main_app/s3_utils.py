@@ -54,7 +54,7 @@ APPROVED_TOKENS_KEY = "drip_capital/user_approved_tokens.csv"
 REJECTED_TOKENS_KEY = "drip_capital/user_rejected_tokens.csv"
 PCAP_EXCEL_PREFIX = "drip_capital/PCAP/"  # Prefix for PCAP Excel files
 FIFO_LEDGER_KEY = "drip_capital/fifo_ledger_results.parquet"
-ABI_PREFIX = "drip_capital/smart_contract_abis/"  # Prefix for contract ABIs
+ABI_PREFIX = "drip_capital/smart_contract_ABIs/"  # Prefix for contract ABIs (note: capital ABIs)
 
 # -- Create a reusable S3 client
 # Create S3 client - will be initialized when first used
@@ -79,7 +79,7 @@ def get_master_gl_key() -> str:
 def load_abi_from_s3(contract_address: str) -> dict:
     """
     Load contract ABI from S3.
-    ABIs are stored as JSON files named by contract address.
+    ABIs can be stored with contract address OR friendly names.
 
     Args:
         contract_address: Ethereum contract address (checksummed or not)
@@ -87,16 +87,33 @@ def load_abi_from_s3(contract_address: str) -> dict:
     Returns:
         Contract ABI as dict, or empty dict if not found
     """
+    # Import here to avoid circular dependency
+    from .config.blockchain_config import BLUR_POOL, BLUR_LENDING
+
     # Normalize address (lowercase, remove 0x prefix if present)
     address = contract_address.lower().replace('0x', '')
 
+    # Map known addresses to friendly names
+    address_to_name = {
+        BLUR_POOL.lower(): "blur pool",
+        BLUR_LENDING.lower(): "blur lending",
+        "0x0000000000a39bb272e79075ade125fd351887ac": "blur pool",
+        "0x29469395eaf6f95920e59f858042f0e28d98a20b": "blur lending",
+    }
+
     # Try different naming conventions
     possible_keys = [
+        # Try friendly name first (if known)
+        f"{ABI_PREFIX}{address_to_name.get(contract_address.lower(), '')}.json",
+        # Try various address formats
         f"{ABI_PREFIX}{address}.json",
         f"{ABI_PREFIX}0x{address}.json",
         f"{ABI_PREFIX}{address.upper()}.json",
         f"{ABI_PREFIX}0x{address.upper()}.json",
     ]
+
+    # Remove empty keys
+    possible_keys = [k for k in possible_keys if not k.endswith("/.json")]
 
     s3_client = get_s3_client()
 

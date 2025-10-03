@@ -73,8 +73,12 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         # Add custom wallet option
         wallet_choices["custom"] = "➕ Enter Custom Address..."
 
-        # Get first valid wallet as default
-        default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom"]), "custom")
+        # Set default to specific wallet address, or fallback to first valid wallet
+        preferred_wallet = "0xF9B64dc47dbE8c75f6FFC573cbC7599404bfe5A7"
+        if preferred_wallet in wallet_choices:
+            default_selection = preferred_wallet
+        else:
+            default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom"]), "custom")
 
         return ui.div(
             ui.p(f"Fund: {current_fund}", class_="text-muted small mb-2"),
@@ -496,23 +500,17 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         # Format display columns
         display_data = []
         for _, row in df.iterrows():
-            # Check if this is a Blur transaction (auto-decode candidate)
-            is_blur = blur_auto_decoder.is_blur_transaction({
-                'to': row.get('to', ''),
-                'from': row.get('from', '')
-            })
-
-            # Get decode status
+            # Get decode status for ALL transactions
             tx_hash = row.get('hash', '')
             decode_icon = ""
-            if is_blur:
-                cached_decode = decoded_tx_cache.get().get(tx_hash)
-                if cached_decode and cached_decode.get('status') == 'success':
-                    decode_icon = "🔍"
-                elif cached_decode and cached_decode.get('status') == 'error':
-                    decode_icon = "❌"
-                else:
-                    decode_icon = "⏳"
+
+            cached_decode = decoded_tx_cache.get().get(tx_hash)
+            if cached_decode and cached_decode.get('status') == 'success':
+                decode_icon = "🔍"  # Successfully decoded
+            elif cached_decode and cached_decode.get('status') == 'error':
+                decode_icon = "❌"  # Decode error
+            else:
+                decode_icon = ""  # Not yet decoded or pending
             # Format hash
             hash_str = row.get('hash', '')
             if len(hash_str) > 16:
@@ -599,31 +597,29 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         current_cache = decoded_tx_cache.get().copy()
         updated = False
 
-        for _, row in df.head(20).iterrows():  # Only process recent 20
+        # Process ALL transactions, starting from most recent (head = newest)
+        for _, row in df.head(50).iterrows():  # Process top 50 transactions
             tx_hash = row.get('hash', '')
 
             if not tx_hash or tx_hash in current_cache:
                 continue
 
-            # Check if Blur transaction
-            if blur_auto_decoder.is_blur_transaction({
-                'to': row.get('to', ''),
-                'from': row.get('from', '')
-            }):
-                # Decode in background (non-blocking)
-                try:
-                    result = blur_auto_decoder.decode_transaction(
-                        tx_hash,
-                        fund_wallet_addresses,
-                        wallet_metadata=None
-                    )
-                    current_cache[tx_hash] = result
-                    updated = True
-                    logger.info(f"Auto-decoded Blur transaction: {tx_hash[:10]}...")
-                except Exception as e:
-                    logger.error(f"Failed to auto-decode {tx_hash}: {e}")
-                    current_cache[tx_hash] = {"status": "error", "error": str(e)}
-                    updated = True
+            # Decode ALL transactions (not just Blur)
+            # The decoder will categorize and route appropriately
+            try:
+                result = blur_auto_decoder.decode_transaction(
+                    tx_hash,
+                    fund_wallet_addresses,
+                    wallet_metadata=None
+                )
+                current_cache[tx_hash] = result
+                updated = True
+                tx_type = result.get('tx_type', 'UNKNOWN')
+                logger.info(f"Auto-decoded {tx_type} transaction: {tx_hash[:10]}...")
+            except Exception as e:
+                logger.error(f"Failed to auto-decode {tx_hash}: {e}")
+                current_cache[tx_hash] = {"status": "error", "error": str(e)}
+                updated = True
 
         if updated:
             decoded_tx_cache.set(current_cache)

@@ -304,20 +304,35 @@ class BlurAutoDecoder:
         self._load_contracts()
 
     def _load_contracts(self):
-        """Load Blur contract instances"""
+        """Load Blur contract instances with implementation ABIs"""
         try:
-            self.blur_lending_contract = instantiate_contract(BLUR_LENDING)
+            # For Blur Lending - load IMPLEMENTATION ABI for proxy contract
+            impl_address = get_implementation_address(BLUR_LENDING)
+            if impl_address:
+                logger.info(f"Blur Lending is proxy, using implementation: {impl_address}")
+                impl_abi = load_abi_from_s3(impl_address)
+                if impl_abi and w3:
+                    # Create contract with proxy address but implementation ABI
+                    self.blur_lending_contract = w3.eth.contract(
+                        address=Web3.to_checksum_address(BLUR_LENDING),
+                        abi=impl_abi
+                    )
+                    logger.info(f"Blur Lending contract loaded with implementation ABI ({len(impl_abi)} items)")
+                else:
+                    self.blur_lending_contract = instantiate_contract(BLUR_LENDING)
+            else:
+                self.blur_lending_contract = instantiate_contract(BLUR_LENDING)
+
+            # For Blur Pool
             self.blur_pool_contract = instantiate_contract(BLUR_POOL)
 
-            if self.blur_lending_contract:
-                logger.info("Blur Lending contract loaded")
             if self.blur_pool_contract:
                 logger.info("Blur Pool contract loaded")
         except Exception as e:
             logger.error(f"Failed to load Blur contracts: {e}")
 
     def is_blur_transaction(self, tx: Dict) -> bool:
-        """Check if transaction involves Blur contracts"""
+        """Check if transaction involves Blur contracts (legacy method for backwards compatibility)"""
         if not tx:
             return False
 
@@ -331,6 +346,60 @@ class BlurAutoDecoder:
                 tx_from == blur_lending_lower or
                 tx_to == blur_pool_lower or
                 tx_from == blur_pool_lower)
+
+    def should_decode_transaction(self, tx: Dict, fund_wallets: List[str]) -> bool:
+        """Check if transaction should be decoded (ALL wallet transactions)"""
+        if not tx:
+            return False
+
+        tx_to = tx.get('to', '').lower() if tx.get('to') else ''
+        tx_from = tx.get('from', '').lower() if tx.get('from') else ''
+        fund_wallets_lower = [w.lower() for w in fund_wallets]
+
+        # Decode ALL transactions involving fund wallets
+        return (tx_from in fund_wallets_lower or tx_to in fund_wallets_lower)
+
+    def categorize_transaction(self, tx, receipt) -> str:
+        """Categorize transaction type for appropriate decoding"""
+
+        # Check for known contracts first
+        tx_to = tx.get('to', '').lower() if tx.get('to') else ''
+
+        if tx_to == BLUR_LENDING.lower() or tx_to == BLUR_POOL.lower():
+            return "BLUR_LENDING"
+
+        # Check for token transfers in logs (ERC20 Transfer event)
+        has_erc20 = False
+        has_nft = False
+
+        for log in receipt.logs:
+            if len(log.topics) > 0:
+                # ERC20/ERC721 Transfer event signature
+                if log.topics[0].hex() == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
+                    # Check if ERC20 (has data) or NFT (no data for amount)
+                    if len(log.data) > 0:
+                        has_erc20 = True
+                    else:
+                        has_nft = True
+                # ERC1155 Transfer event signatures
+                elif log.topics[0].hex() in ["0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62",
+                                             "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"]:
+                    has_nft = True
+
+        if has_nft:
+            return "NFT_TRANSFER"
+        elif has_erc20:
+            return "ERC20_TRANSFER"
+
+        # Check for simple ETH transfer
+        if tx.get('value', 0) > 0 and (not tx.get('input') or tx.get('input') == '0x'):
+            return "ETH_TRANSFER"
+
+        # Generic contract interaction
+        if tx.get('input') and len(tx.get('input', '')) > 2:
+            return "CONTRACT_CALL"
+
+        return "UNKNOWN"
 
     def get_cached_decode(self, tx_hash: str) -> Optional[Dict]:
         """Get cached decode result if available"""
@@ -360,55 +429,35 @@ class BlurAutoDecoder:
             block_time = datetime.fromtimestamp(block.timestamp, tz=timezone.utc)
             eth_price, _ = get_eth_usd_at_block(tx.blockNumber)
 
-            # Decode function call
-            function_name, function_params = self._decode_function(tx)
+            # Categorize transaction type
+            tx_type = self.categorize_transaction(tx, receipt)
 
-            # Decode events
-            events = self._decode_events(receipt)
-
-            # Detect pool transfers
-            pool_transfers = self._decode_pool_transfers(receipt, fund_wallets)
-
-            # Determine wallet roles
-            wallet_roles = self._determine_wallet_roles(tx, receipt, fund_wallets, events)
-
-            # Generate journal entries
-            journal_entries = self._generate_journal_entries(
-                tx, receipt, block_time, eth_price,
-                function_name, function_params, events,
-                pool_transfers, wallet_roles, fund_wallets
-            )
-
-            # Basic transaction info
-            result = {
-                "status": "success",
-                "tx_hash": tx_hash,
-                "block": tx.blockNumber,
-                "timestamp": block_time.isoformat(),
-                "eth_price": float(eth_price),
-                "gas_used": receipt.gasUsed,
-                "from": tx['from'],
-                "to": tx['to'],
-                "value": float(Decimal(tx.value) / Decimal(10**18)),
-                "function": function_name,
-                "function_params": function_params,
-                "events": [self._event_to_dict(e) for e in events],
-                "pool_transfers": pool_transfers,
-                "journal_entries": [je.to_dict() for je in journal_entries],
-                "wallet_roles": wallet_roles,
-                "positions": {k: v.to_dict() for k, v in self.positions.items()},
-                "summary": {
-                    "total_events": len(events),
-                    "total_journal_entries": len(journal_entries),
-                    "all_balanced": all(je.validate() for je in journal_entries),
-                    "involves_fund_wallets": len(wallet_roles) > 0
-                }
-            }
+            # Route to appropriate decoder based on type
+            if tx_type == "BLUR_LENDING":
+                result = self._decode_blur_transaction(
+                    tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash
+                )
+            elif tx_type == "ERC20_TRANSFER":
+                result = self._decode_erc20_transaction(
+                    tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash
+                )
+            elif tx_type == "NFT_TRANSFER":
+                result = self._decode_nft_transaction(
+                    tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash
+                )
+            elif tx_type == "ETH_TRANSFER":
+                result = self._decode_eth_transaction(
+                    tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash
+                )
+            else:
+                result = self._decode_generic_transaction(
+                    tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash
+                )
 
             # Store in cache
             self.decoded_cache[tx_hash] = result
 
-            logger.info(f"Decoded transaction {tx_hash[:10]}...: {function_name}")
+            logger.info(f"Decoded transaction {tx_hash[:10]}...: {result.get('tx_type', 'UNKNOWN')}")
             return result
 
         except Exception as e:
@@ -422,6 +471,259 @@ class BlurAutoDecoder:
             }
             self.decoded_cache[tx_hash] = error_result
             return error_result
+
+    def _decode_blur_transaction(self, tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash):
+        """Decode Blur lending transaction (original logic)"""
+        # Decode function call
+        function_name, function_params = self._decode_function(tx)
+
+        # Decode events
+        events = self._decode_events(receipt)
+
+        # Detect pool transfers
+        pool_transfers = self._decode_pool_transfers(receipt, fund_wallets)
+
+        # Determine wallet roles
+        wallet_roles = self._determine_wallet_roles(tx, receipt, fund_wallets, events)
+
+        # Generate journal entries
+        journal_entries = self._generate_journal_entries(
+            tx, receipt, block_time, eth_price,
+            function_name, function_params, events,
+            pool_transfers, wallet_roles, fund_wallets
+        )
+
+        return {
+            "status": "success",
+            "tx_hash": tx_hash,
+            "tx_type": "BLUR_LENDING",
+            "block": tx.blockNumber,
+            "timestamp": block_time.isoformat(),
+            "eth_price": float(eth_price),
+            "gas_used": receipt.gasUsed,
+            "from": tx['from'],
+            "to": tx['to'],
+            "value": float(Decimal(tx.value) / Decimal(10**18)),
+            "function": function_name,
+            "function_params": function_params,
+            "events": [self._event_to_dict(e) for e in events],
+            "pool_transfers": pool_transfers,
+            "journal_entries": [je.to_dict() for je in journal_entries],
+            "wallet_roles": wallet_roles,
+            "positions": {k: v.to_dict() for k, v in self.positions.items()},
+            "summary": {
+                "total_events": len(events),
+                "total_journal_entries": len(journal_entries),
+                "all_balanced": all(je.validate() for je in journal_entries),
+                "involves_fund_wallets": len(wallet_roles) > 0
+            }
+        }
+
+    def _decode_erc20_transaction(self, tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash):
+        """Decode ERC20 token transfer"""
+        transfers = []
+        fund_wallets_lower = [w.lower() for w in fund_wallets]
+
+        # Extract Transfer events
+        for log in receipt.logs:
+            if len(log.topics) > 0 and log.topics[0].hex() == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
+                try:
+                    from_addr = Web3.to_checksum_address('0x' + log.topics[1].hex()[-40:])
+                    to_addr = Web3.to_checksum_address('0x' + log.topics[2].hex()[-40:])
+                    amount = Decimal(int.from_bytes(log.data, 'big')) / Decimal(10**18)
+
+                    transfers.append({
+                        'from': from_addr,
+                        'to': to_addr,
+                        'amount': float(amount),
+                        'token': log.address,
+                        'involves_fund': (from_addr.lower() in fund_wallets_lower or to_addr.lower() in fund_wallets_lower)
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to decode transfer: {e}")
+
+        # Determine wallet roles
+        wallet_roles = {}
+        for transfer in transfers:
+            if transfer['from'].lower() in fund_wallets_lower:
+                wallet_roles[transfer['from']] = "SENDER"
+            if transfer['to'].lower() in fund_wallets_lower:
+                wallet_roles[transfer['to']] = "RECEIVER"
+
+        # Generate gas entry
+        journal_entries = []
+        gas_entry = self._journal_gas_fee(tx, receipt, block_time, eth_price, wallet_roles)
+        if gas_entry:
+            journal_entries.append(gas_entry)
+
+        return {
+            "status": "success",
+            "tx_hash": tx_hash,
+            "tx_type": "ERC20_TRANSFER",
+            "block": tx.blockNumber,
+            "timestamp": block_time.isoformat(),
+            "eth_price": float(eth_price),
+            "gas_used": receipt.gasUsed,
+            "from": tx['from'],
+            "to": tx['to'],
+            "value": float(Decimal(tx.value) / Decimal(10**18)),
+            "function": "ERC20 Transfer",
+            "events": [{"name": "Transfer", "args": t} for t in transfers],
+            "journal_entries": [je.to_dict() for je in journal_entries],
+            "wallet_roles": wallet_roles,
+            "transfers": transfers,
+            "summary": {
+                "total_events": len(transfers),
+                "total_journal_entries": len(journal_entries),
+                "all_balanced": all(je.validate() for je in journal_entries),
+                "involves_fund_wallets": len(wallet_roles) > 0
+            }
+        }
+
+    def _decode_nft_transaction(self, tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash):
+        """Decode NFT transfer (ERC721/ERC1155)"""
+        transfers = []
+        fund_wallets_lower = [w.lower() for w in fund_wallets]
+
+        # Extract NFT Transfer events
+        for log in receipt.logs:
+            if len(log.topics) > 0:
+                # ERC721 Transfer
+                if log.topics[0].hex() == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" and len(log.data) == 0:
+                    try:
+                        from_addr = Web3.to_checksum_address('0x' + log.topics[1].hex()[-40:])
+                        to_addr = Web3.to_checksum_address('0x' + log.topics[2].hex()[-40:])
+                        token_id = int.from_bytes(log.topics[3], 'big')
+
+                        transfers.append({
+                            'type': 'ERC721',
+                            'from': from_addr,
+                            'to': to_addr,
+                            'token_id': token_id,
+                            'contract': log.address
+                        })
+                    except:
+                        pass
+
+        wallet_roles = {}
+        for transfer in transfers:
+            if transfer['from'].lower() in fund_wallets_lower:
+                wallet_roles[transfer['from']] = "NFT_SENDER"
+            if transfer['to'].lower() in fund_wallets_lower:
+                wallet_roles[transfer['to']] = "NFT_RECEIVER"
+
+        journal_entries = []
+        gas_entry = self._journal_gas_fee(tx, receipt, block_time, eth_price, wallet_roles)
+        if gas_entry:
+            journal_entries.append(gas_entry)
+
+        return {
+            "status": "success",
+            "tx_hash": tx_hash,
+            "tx_type": "NFT_TRANSFER",
+            "block": tx.blockNumber,
+            "timestamp": block_time.isoformat(),
+            "eth_price": float(eth_price),
+            "gas_used": receipt.gasUsed,
+            "from": tx['from'],
+            "to": tx['to'],
+            "value": float(Decimal(tx.value) / Decimal(10**18)),
+            "function": "NFT Transfer",
+            "events": [{"name": "Transfer", "args": t} for t in transfers],
+            "journal_entries": [je.to_dict() for je in journal_entries],
+            "wallet_roles": wallet_roles,
+            "transfers": transfers,
+            "summary": {
+                "total_events": len(transfers),
+                "total_journal_entries": len(journal_entries),
+                "all_balanced": all(je.validate() for je in journal_entries),
+                "involves_fund_wallets": len(wallet_roles) > 0
+            }
+        }
+
+    def _decode_eth_transaction(self, tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash):
+        """Decode simple ETH transfer"""
+        fund_wallets_lower = [w.lower() for w in fund_wallets]
+        eth_amount = Decimal(tx.value) / Decimal(10**18)
+
+        wallet_roles = {}
+        if tx['from'].lower() in fund_wallets_lower:
+            wallet_roles[tx['from']] = "ETH_SENDER"
+        if tx.get('to') and tx['to'].lower() in fund_wallets_lower:
+            wallet_roles[tx['to']] = "ETH_RECEIVER"
+
+        journal_entries = []
+        gas_entry = self._journal_gas_fee(tx, receipt, block_time, eth_price, wallet_roles)
+        if gas_entry:
+            journal_entries.append(gas_entry)
+
+        return {
+            "status": "success",
+            "tx_hash": tx_hash,
+            "tx_type": "ETH_TRANSFER",
+            "block": tx.blockNumber,
+            "timestamp": block_time.isoformat(),
+            "eth_price": float(eth_price),
+            "gas_used": receipt.gasUsed,
+            "from": tx['from'],
+            "to": tx['to'],
+            "value": float(eth_amount),
+            "function": "ETH Transfer",
+            "events": [],
+            "journal_entries": [je.to_dict() for je in journal_entries],
+            "wallet_roles": wallet_roles,
+            "summary": {
+                "total_events": 0,
+                "total_journal_entries": len(journal_entries),
+                "all_balanced": all(je.validate() for je in journal_entries),
+                "involves_fund_wallets": len(wallet_roles) > 0
+            }
+        }
+
+    def _decode_generic_transaction(self, tx, receipt, block, block_time, eth_price, fund_wallets, tx_hash):
+        """Decode generic contract interaction"""
+        fund_wallets_lower = [w.lower() for w in fund_wallets]
+
+        wallet_roles = {}
+        if tx['from'].lower() in fund_wallets_lower:
+            wallet_roles[tx['from']] = "TX_SENDER"
+
+        journal_entries = []
+        gas_entry = self._journal_gas_fee(tx, receipt, block_time, eth_price, wallet_roles)
+        if gas_entry:
+            journal_entries.append(gas_entry)
+
+        # Try to extract any Transfer events
+        events = []
+        for log in receipt.logs:
+            if len(log.topics) > 0:
+                events.append({
+                    'address': log.address,
+                    'topic0': log.topics[0].hex() if log.topics else None
+                })
+
+        return {
+            "status": "success",
+            "tx_hash": tx_hash,
+            "tx_type": "CONTRACT_CALL",
+            "block": tx.blockNumber,
+            "timestamp": block_time.isoformat(),
+            "eth_price": float(eth_price),
+            "gas_used": receipt.gasUsed,
+            "from": tx['from'],
+            "to": tx['to'],
+            "value": float(Decimal(tx.value) / Decimal(10**18)),
+            "function": "Contract Call",
+            "events": events,
+            "journal_entries": [je.to_dict() for je in journal_entries],
+            "wallet_roles": wallet_roles,
+            "summary": {
+                "total_events": len(events),
+                "total_journal_entries": len(journal_entries),
+                "all_balanced": all(je.validate() for je in journal_entries),
+                "involves_fund_wallets": len(wallet_roles) > 0
+            }
+        }
 
     def _decode_function(self, tx) -> Tuple[str, Dict]:
         """Decode function call from transaction input"""
@@ -442,18 +744,34 @@ class BlurAutoDecoder:
         if not self.blur_lending_contract:
             return events
 
-        for log in receipt.logs:
+        # List of known Blur Lending events to check
+        blur_lending_events = [
+            'LoanOfferTaken', 'Repay', 'Refinance', 'StartAuction',
+            'Seize', 'BuyLocked', 'OfferCancelled', 'NonceIncremented'
+        ]
+
+        # Try to decode each known event type
+        for event_name in blur_lending_events:
             try:
-                event = self.blur_lending_contract.events._parse_log(log)
-                events.append(event)
-            except:
-                # Not a Blur Lending event, try Pool
-                if self.blur_pool_contract:
-                    try:
-                        event = self.blur_pool_contract.events._parse_log(log)
-                        events.append(event)
-                    except:
-                        pass
+                if hasattr(self.blur_lending_contract.events, event_name):
+                    event_instance = getattr(self.blur_lending_contract.events, event_name)
+                    decoded_events = event_instance().process_receipt(receipt)
+                    events.extend(decoded_events)
+            except Exception as e:
+                # Event not found in receipt, continue
+                pass
+
+        # Also check Blur Pool events
+        if self.blur_pool_contract:
+            blur_pool_events = ['Transfer', 'Deposit', 'Withdraw']
+            for event_name in blur_pool_events:
+                try:
+                    if hasattr(self.blur_pool_contract.events, event_name):
+                        event_instance = getattr(self.blur_pool_contract.events, event_name)
+                        decoded_events = event_instance().process_receipt(receipt)
+                        events.extend(decoded_events)
+                except Exception as e:
+                    pass
 
         return events
 
