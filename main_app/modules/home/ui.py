@@ -56,17 +56,17 @@ def home_dashboard_ui():
             class_="mb-4"
         ),
 
-        # Advanced Filters Panel
+        # Advanced Filters Panel (Optional)
         ui.card(
             ui.card_header(
                 ui.layout_columns(
-                    ui.h5("Transaction Filters"),
+                    ui.h5("Advanced Filters", ui.tags.small(" (Optional)", class_="text-muted ms-2")),
                     ui.input_switch("show_filters", "Show Filters", value=False),
-                    col_widths=[6, 6]
+                    col_widths=[8, 4]
                 )
             ),
             ui.output_ui("filter_controls"),
-            class_="mb-4"
+            class_="mb-3"
         ),
 
         # Status Indicators

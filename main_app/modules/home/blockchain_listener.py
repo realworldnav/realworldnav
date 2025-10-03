@@ -437,51 +437,78 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         if df.empty:
             return df
 
+        # Only apply filters if the filter panel is shown and inputs exist
+        # This prevents blocking the table render when filters are hidden
+        try:
+            filters_shown = input.show_filters() if hasattr(input, 'show_filters') else False
+        except:
+            filters_shown = False
+
+        if not filters_shown:
+            # Return unfiltered data when filters are hidden
+            return df
+
         # Apply transaction type filter
-        if hasattr(input, 'tx_type_filter') and input.tx_type_filter() != "all":
-            filter_type = input.tx_type_filter()
-            if filter_type == "in":
-                df = df[df['type'] == 'IN']
-            elif filter_type == "out":
-                df = df[df['type'] == 'OUT']
+        if hasattr(input, 'tx_type_filter'):
+            try:
+                if input.tx_type_filter() != "all":
+                    filter_type = input.tx_type_filter()
+                    if filter_type == "in":
+                        df = df[df['type'] == 'IN']
+                    elif filter_type == "out":
+                        df = df[df['type'] == 'OUT']
+            except:
+                pass
 
         # Apply token filter
-        if hasattr(input, 'token_filter') and input.token_filter() != "all":
-            token = input.token_filter()
-            if token == "eth":
-                df = df[df['token'] == 'ETH']
-            elif token == "erc20":
-                df = df[df['token'] != 'ETH']
-            elif token == "usdc":
-                df = df[df['token'].str.upper() == 'USDC']
-            elif token == "usdt":
-                df = df[df['token'].str.upper() == 'USDT']
+        if hasattr(input, 'token_filter'):
+            try:
+                if input.token_filter() != "all":
+                    token = input.token_filter()
+                    if token == "eth":
+                        df = df[df['token'] == 'ETH']
+                    elif token == "erc20":
+                        df = df[df['token'] != 'ETH']
+                    elif token == "usdc":
+                        df = df[df['token'].str.upper() == 'USDC']
+                    elif token == "usdt":
+                        df = df[df['token'].str.upper() == 'USDT']
+            except:
+                pass
 
         # Apply minimum value filter
-        if hasattr(input, 'min_value') and input.min_value() > 0:
-            df = df[df['amount'] >= input.min_value()]
+        if hasattr(input, 'min_value'):
+            try:
+                if input.min_value() > 0:
+                    df = df[df['amount'] >= input.min_value()]
+            except:
+                pass
 
         # Apply time range filter
-        if hasattr(input, 'time_range') and input.time_range() != "all":
-            time_range = input.time_range()
-            now = datetime.now(timezone.utc)
+        if hasattr(input, 'time_range'):
+            try:
+                if input.time_range() != "all":
+                    time_range = input.time_range()
+                    now = datetime.now(timezone.utc)
 
-            # Ensure timestamp is datetime
-            if 'timestamp' in df.columns and not df.empty:
-                if isinstance(df.iloc[0]['timestamp'], str):
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    # Ensure timestamp is datetime
+                    if 'timestamp' in df.columns and not df.empty:
+                        if isinstance(df.iloc[0]['timestamp'], str):
+                            df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-                if time_range == "24h":
-                    cutoff = now - timedelta(days=1)
-                elif time_range == "7d":
-                    cutoff = now - timedelta(days=7)
-                elif time_range == "30d":
-                    cutoff = now - timedelta(days=30)
-                else:
-                    cutoff = None
+                        if time_range == "24h":
+                            cutoff = now - timedelta(days=1)
+                        elif time_range == "7d":
+                            cutoff = now - timedelta(days=7)
+                        elif time_range == "30d":
+                            cutoff = now - timedelta(days=30)
+                        else:
+                            cutoff = None
 
-                if cutoff:
-                    df = df[df['timestamp'] >= cutoff]
+                        if cutoff:
+                            df = df[df['timestamp'] >= cutoff]
+            except:
+                pass
 
         return df
 

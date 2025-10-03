@@ -33,7 +33,7 @@ def server(input, output, session):
     # Get default values from environment (set by launcher) or use fallbacks
     import os
     default_client = os.environ.get('REALWORLDNAV_CLIENT', 'drip_capital')
-    default_fund = os.environ.get('REALWORLDNAV_FUND', 'fund_i_class_B_ETH')
+    default_fund = os.environ.get('REALWORLDNAV_FUND', 'holdings_class_B_ETH')
     
     # Client and fund selection reactives
     selected_client = reactive.calc(lambda: input.client() if hasattr(input, 'client') else default_client)
