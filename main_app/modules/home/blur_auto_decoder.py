@@ -726,13 +726,134 @@ class BlurAutoDecoder:
         }
 
     def _decode_function(self, tx) -> Tuple[str, Dict]:
-        """Decode function call from transaction input"""
+        """Decode function call from transaction input and extract loan details"""
         if not self.blur_lending_contract or not tx.input:
             return "Unknown", {}
 
         try:
             func_obj, func_params = self.blur_lending_contract.decode_function_input(tx.input)
-            return func_obj.fn_name, func_params
+            func_name = func_obj.fn_name
+
+            logger.info(f"Decoded function: {func_name}")
+
+            # Special handling for repay() - extract lien struct and calculate interest
+            if func_name == 'repay':
+                lien = func_params.get('lien')
+                lien_id = func_params.get('lienId')
+
+                if lien and lien_id:
+                    # Extract loan details from lien parameter
+                    if isinstance(lien, (tuple, list)):
+                        loan_amount = Decimal(lien[4]) / Decimal(10**18)
+                        position = LoanPosition(
+                            lien_id=lien_id,
+                            lender=lien[0],
+                            borrower=lien[1],
+                            collection=lien[2],
+                            token_id=lien[3],
+                            principal=loan_amount,
+                            rate=Decimal(lien[6]),
+                            start_time=datetime.fromtimestamp(lien[5], tz=timezone.utc),
+                            duration=90 * 24 * 3600,
+                            auction_duration=lien[8]
+                        )
+                    else:
+                        loan_amount = Decimal(lien.get('amount', 0)) / Decimal(10**18)
+                        position = LoanPosition(
+                            lien_id=lien_id,
+                            lender=lien.get('lender'),
+                            borrower=lien.get('borrower'),
+                            collection=lien.get('collection'),
+                            token_id=lien.get('tokenId', 0),
+                            principal=loan_amount,
+                            rate=Decimal(lien.get('rate', 0)),
+                            start_time=datetime.fromtimestamp(lien.get('startTime', 0), tz=timezone.utc),
+                            duration=90 * 24 * 3600,
+                            auction_duration=lien.get('auctionDuration', 0)
+                        )
+
+                    self.positions[lien_id] = position
+
+                    # Calculate interest as of repay block time
+                    block = w3.eth.get_block(tx.blockNumber)
+                    repay_time = datetime.fromtimestamp(block.timestamp, tz=timezone.utc)
+                    time_elapsed = (repay_time - position.start_time).total_seconds()
+                    total_debt = position.total_due(repay_time)
+                    interest = position.calculate_interest(repay_time)
+
+                    logger.info(f"Decoded Loan Details for repay():")
+                    logger.info(f"  Lien ID: {lien_id}")
+                    logger.info(f"  Principal: {position.principal:.6f} ETH")
+                    logger.info(f"  Rate: {position.rate} bps ({float(position.rate)/100:.2f}% annual)")
+                    logger.info(f"  Time Elapsed: {int(time_elapsed)} seconds ({time_elapsed/3600:.2f} hours)")
+                    logger.info(f"  Interest (continuous): {interest:.8f} ETH")
+                    logger.info(f"  Total Debt: {total_debt:.8f} ETH")
+
+                    position.repayment_amount = total_debt
+                    position.interest_paid = interest
+
+            # Special handling for refinanceAuction() - extract old loan details
+            elif func_name == 'refinanceAuction':
+                lien = func_params.get('lien')
+                lien_id = func_params.get('lienId')
+                new_rate = func_params.get('rate')
+
+                if lien and lien_id:
+                    if isinstance(lien, (tuple, list)):
+                        # Decode the lien tuple structure
+                        old_lender = lien[0]
+                        borrower = lien[1]
+                        collection = lien[2]
+                        token_id = lien[3]
+                        original_amount = Decimal(lien[4]) / Decimal(10**18)
+                        start_time = datetime.fromtimestamp(lien[5], tz=timezone.utc)
+                        original_rate = Decimal(lien[6])
+                        auction_start = lien[7]
+                        auction_duration = lien[8]
+
+                        # Create/update position with old loan data
+                        old_position = LoanPosition(
+                            lien_id=lien_id,
+                            lender=old_lender,
+                            borrower=borrower,
+                            collection=collection,
+                            token_id=token_id,
+                            principal=original_amount,
+                            rate=original_rate,
+                            start_time=start_time,
+                            duration=90 * 24 * 3600,
+                            auction_duration=auction_duration,
+                            status="IN_AUCTION"
+                        )
+
+                        self.positions[lien_id] = old_position
+
+                        # Calculate amounts for refinancing
+                        block = w3.eth.get_block(tx.blockNumber)
+                        refinance_time = datetime.fromtimestamp(block.timestamp, tz=timezone.utc)
+                        interest_accrued = old_position.calculate_interest(refinance_time)
+                        full_debt = old_position.principal + interest_accrued
+
+                        # Store refinance details
+                        old_position.refinance_details = {
+                            'new_lender': tx['from'],
+                            'new_rate': new_rate if new_rate else original_rate,
+                            'refinance_time': refinance_time,
+                            'old_debt': full_debt,
+                            'interest_at_refinance': interest_accrued
+                        }
+
+                        logger.info(f"Decoded Refinance Auction Details:")
+                        logger.info(f"  Lien ID: {lien_id}")
+                        logger.info(f"  Old Lender: {old_lender[:8]}...")
+                        logger.info(f"  Borrower: {borrower[:8]}...")
+                        logger.info(f"  Original Principal: {original_amount:.6f} ETH")
+                        logger.info(f"  Interest Accrued: {interest_accrued:.8f} ETH")
+                        logger.info(f"  Total Debt: {full_debt:.8f} ETH")
+                        logger.info(f"  New Lender: {tx['from'][:8]}...")
+
+            return func_name, func_params
+
         except Exception as e:
             logger.warning(f"Failed to decode function: {e}")
             return "Unknown", {}
@@ -761,9 +882,9 @@ class BlurAutoDecoder:
                 # Event not found in receipt, continue
                 pass
 
-        # Also check Blur Pool events
+        # Also check Blur Pool events (but skip Transfer - handled separately in pool_transfers)
         if self.blur_pool_contract:
-            blur_pool_events = ['Transfer', 'Deposit', 'Withdraw']
+            blur_pool_events = ['Deposit', 'Withdraw']
             for event_name in blur_pool_events:
                 try:
                     if hasattr(self.blur_pool_contract.events, event_name):
@@ -772,6 +893,52 @@ class BlurAutoDecoder:
                         events.extend(decoded_events)
                 except Exception as e:
                     pass
+
+        # Decode NFT events from all logs
+        for log in receipt.logs:
+            try:
+                # Skip if already processed by Blur contracts
+                if log.address.lower() in [BLUR_LENDING.lower(), BLUR_POOL.lower()]:
+                    continue
+
+                # Decode standard ERC721 events
+                if len(log.topics) > 0:
+                    topic0 = log.topics[0].hex()
+                    topic0_normalized = topic0 if topic0.startswith('0x') else f'0x{topic0}'
+
+                    # Transfer event: Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+                    if topic0_normalized == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
+                        if len(log.topics) == 4:  # ERC721 Transfer has 4 topics
+                            from_addr = Web3.to_checksum_address('0x' + log.topics[1].hex()[-40:])
+                            to_addr = Web3.to_checksum_address('0x' + log.topics[2].hex()[-40:])
+                            token_id = int(log.topics[3].hex(), 16)
+                            events.append({
+                                'event': 'NFT_Transfer',
+                                'args': {
+                                    'collection': log.address,
+                                    'from': from_addr,
+                                    'to': to_addr,
+                                    'tokenId': token_id
+                                }
+                            })
+
+                    # Approval event: Approval(address indexed owner, address indexed approved, uint256 indexed tokenId)
+                    elif topic0_normalized == "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925":
+                        if len(log.topics) == 4:
+                            owner = Web3.to_checksum_address('0x' + log.topics[1].hex()[-40:])
+                            approved = Web3.to_checksum_address('0x' + log.topics[2].hex()[-40:])
+                            token_id = int(log.topics[3].hex(), 16)
+                            events.append({
+                                'event': 'NFT_Approval',
+                                'args': {
+                                    'collection': log.address,
+                                    'owner': owner,
+                                    'approved': approved,
+                                    'tokenId': token_id
+                                }
+                            })
+            except Exception as e:
+                logger.warning(f"Failed to decode NFT event from log: {e}")
 
         return events
 
@@ -783,9 +950,14 @@ class BlurAutoDecoder:
 
         # Look for Transfer events (ERC20-style for Pool shares)
         for log in receipt.logs:
-            if log.address.lower() == pool_lower and len(log.topics) > 0:
-                # Transfer event signature
-                if log.topics[0].hex() == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
+            log_addr = log.address.lower()
+
+            if log_addr == pool_lower and len(log.topics) > 0:
+                topic0 = log.topics[0].hex()
+
+                # Transfer event signature (normalize with 0x prefix)
+                topic0_normalized = topic0 if topic0.startswith('0x') else f'0x{topic0}'
+                if topic0_normalized == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
                     try:
                         from_addr = Web3.to_checksum_address('0x' + log.topics[1].hex()[-40:])
                         to_addr = Web3.to_checksum_address('0x' + log.topics[2].hex()[-40:])
@@ -804,39 +976,125 @@ class BlurAutoDecoder:
         return transfers
 
     def _determine_wallet_roles(self, tx, receipt, fund_wallets: List[str], events: List) -> Dict[str, str]:
-        """Determine roles of fund wallets in transaction"""
-        roles = {}
+        """Determine the role of each fund wallet in the transaction (comprehensive)"""
+        wallet_roles = {}
         fund_wallets_lower = [w.lower() for w in fund_wallets]
 
-        # Check transaction sender
-        if tx['from'].lower() in fund_wallets_lower:
-            roles[tx['from']] = "GAS_PAYER"
+        # Decode function if not already done
+        try:
+            func_obj, func_params = self.blur_lending_contract.decode_function_input(tx.input)
+            func_name = func_obj.fn_name if func_obj else None
+        except:
+            func_name = None
 
-        # Analyze events for roles
+        # Function-based role determination
+        if func_name == "deposit":
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "DEPOSITOR"
+
+        elif func_name == "withdraw":
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "WITHDRAWER"
+
+        elif func_name == "repay":
+            lien_id = func_params.get('lienId') if func_params else None
+            if lien_id and lien_id in self.positions:
+                position = self.positions[lien_id]
+                if position.lender.lower() in fund_wallets_lower:
+                    wallet_roles[position.lender.lower()] = "LENDER_RECEIVING"
+                if position.borrower.lower() in fund_wallets_lower:
+                    wallet_roles[position.borrower.lower()] = "BORROWER_REPAYING"
+            elif tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "BORROWER_REPAYING"
+
+        elif func_name in ["borrow", "buyToBorrow", "buyToBorrowETH", "buyToBorrowV2"]:
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "BORROWER"
+
+        elif func_name in ["refinance", "refinanceAuction", "borrowerRefinance"]:
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "NEW_LENDER"
+
+        elif func_name == "startAuction":
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "LENDER_CALLING_LOAN"
+
+        elif func_name == "seize":
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "LENDER_SEIZING"
+
+        elif func_name in ["buyLocked", "buyLockedETH"]:
+            if tx['from'].lower() in fund_wallets_lower:
+                wallet_roles[tx['from'].lower()] = "LIQUIDATOR"
+
+        # Event-based role determination (supplement/override)
         for event in events:
             event_name = event['event'] if hasattr(event, 'event') else event.get('event', '')
+            args = event['args'] if hasattr(event, 'args') else event.get('args', {})
 
             if event_name == "LoanOfferTaken":
-                args = event['args'] if hasattr(event, 'args') else event.get('args', {})
-                lender = args.get('lender', '')
-                borrower = args.get('borrower', '')
+                lender = args.get("lender", "").lower()
+                borrower = args.get("borrower", "").lower()
+                if lender in fund_wallets_lower:
+                    wallet_roles[lender] = "LENDER"
+                if borrower in fund_wallets_lower:
+                    wallet_roles[borrower] = "BORROWER"
 
-                if lender.lower() in fund_wallets_lower:
-                    roles[lender] = "LENDER"
-                if borrower.lower() in fund_wallets_lower:
-                    roles[borrower] = "BORROWER"
+            elif event_name == "Repay":
+                lien_id = args.get("lienId")
+                if lien_id in self.positions:
+                    position = self.positions[lien_id]
+                    if position.lender.lower() in fund_wallets_lower:
+                        wallet_roles[position.lender.lower()] = "LENDER_RECEIVING"
+                    if position.borrower.lower() in fund_wallets_lower:
+                        wallet_roles[position.borrower.lower()] = "BORROWER_REPAYING"
 
-            elif event_name in ["Repay", "Refinance"]:
-                args = event['args'] if hasattr(event, 'args') else event.get('args', {})
-                lender = args.get('lender', '')
-                borrower = args.get('borrower', '')
+            elif event_name == "Refinance":
+                new_lender = args.get("newLender", "").lower()
+                lien_id = args.get("lienId")
 
-                if lender.lower() in fund_wallets_lower:
-                    roles[lender] = "LENDER_RECEIVING"
-                if borrower.lower() in fund_wallets_lower:
-                    roles[borrower] = "BORROWER_REPAYING"
+                if new_lender in fund_wallets_lower:
+                    wallet_roles[new_lender] = "NEW_LENDER"
 
-        return roles
+                if lien_id in self.positions:
+                    old_position = self.positions[lien_id]
+                    if old_position.lender.lower() in fund_wallets_lower:
+                        wallet_roles[old_position.lender.lower()] = "OLD_LENDER"
+                    if old_position.borrower.lower() in fund_wallets_lower:
+                        wallet_roles[old_position.borrower.lower()] = "BORROWER_REFINANCING"
+
+            elif event_name == "StartAuction":
+                lien_id = args.get("lienId")
+                if lien_id in self.positions:
+                    position = self.positions[lien_id]
+                    if position.lender.lower() in fund_wallets_lower:
+                        wallet_roles[position.lender.lower()] = "LENDER_CALLING_LOAN"
+
+            elif event_name == "Seize":
+                lien_id = args.get("lienId")
+                if lien_id in self.positions:
+                    position = self.positions[lien_id]
+                    if position.lender.lower() in fund_wallets_lower:
+                        wallet_roles[position.lender.lower()] = "LENDER_SEIZING"
+
+            elif event_name == "BuyLocked":
+                buyer = args.get("buyer", "").lower()
+                if buyer in fund_wallets_lower:
+                    wallet_roles[buyer] = "LIQUIDATOR"
+
+        # Check for Pool transfers to identify depositor/withdrawer roles
+        for log in receipt.logs:
+            if log.address.lower() == BLUR_POOL.lower() and len(log.topics) >= 3:
+                from_addr = ('0x' + log.topics[1].hex()[-40:]).lower()
+                to_addr = ('0x' + log.topics[2].hex()[-40:]).lower()
+
+                if from_addr in fund_wallets_lower and not wallet_roles.get(from_addr):
+                    wallet_roles[from_addr] = "POOL_DEPOSITOR"
+
+                if to_addr in fund_wallets_lower and not wallet_roles.get(to_addr):
+                    wallet_roles[to_addr] = "POOL_WITHDRAWER"
+
+        return wallet_roles
 
     def _generate_journal_entries(self, tx, receipt, block_time, eth_price,
                                  function_name, function_params, events,
@@ -853,7 +1111,7 @@ class BlurAutoDecoder:
             entries.extend(self._journal_loan_repayment(
                 tx, block_time, eth_price, events, pool_transfers, wallet_roles
             ))
-        elif function_name in ["refinance", "Refinance"]:
+        elif function_name in ["refinance", "Refinance", "borrowerRefinance"]:
             entries.extend(self._journal_refinance(
                 tx, block_time, eth_price, events, pool_transfers, wallet_roles
             ))
@@ -866,6 +1124,12 @@ class BlurAutoDecoder:
                 tx, block_time, eth_price, events, pool_transfers, wallet_roles
             ))
 
+        # Process pool transfers (deposits/withdrawals)
+        if pool_transfers:
+            entries.extend(self._journal_pool_transfers(
+                tx, block_time, eth_price, pool_transfers, wallet_roles
+            ))
+
         # Always add gas fee entry for gas payer
         gas_entry = self._journal_gas_fee(tx, receipt, block_time, eth_price, wallet_roles)
         if gas_entry:
@@ -874,27 +1138,403 @@ class BlurAutoDecoder:
         return entries
 
     def _journal_loan_repayment(self, tx, block_time, eth_price, events, pool_transfers, wallet_roles) -> List[JournalEntry]:
-        """Journal entries for loan repayment"""
+        """Create journal entry for loan repayment with principal/interest split"""
         entries = []
-        # TODO: Implement based on reference logic
+
+        # Find Repay event
+        for event in events:
+            event_name = event['event'] if hasattr(event, 'event') else event.get('event', '')
+            if event_name != "Repay":
+                continue
+
+            args = event['args'] if hasattr(event, 'args') else event.get('args', {})
+            lien_id = args.get('lienId')
+            position = self.positions.get(lien_id)
+
+            if not position:
+                logger.warning(f"No position found for lien_id {lien_id}")
+                continue
+
+            wallet_address = ""
+            wallet_role = "UNKNOWN"
+
+            if position.lender.lower() in [w.lower() for w in wallet_roles.keys()]:
+                wallet_address = position.lender
+                wallet_role = wallet_roles.get(position.lender.lower(), "LENDER_RECEIVING")
+            elif position.borrower.lower() in [w.lower() for w in wallet_roles.keys()]:
+                wallet_address = position.borrower
+                wallet_role = wallet_roles.get(position.borrower.lower(), "BORROWER_REPAYING")
+
+            if not wallet_address:
+                continue
+
+            entry = JournalEntry(
+                entry_id=f"JE_{tx.hash.hex()[:8]}_REPAY_{lien_id}",
+                date=block_time,
+                description=f"NFT Loan Repayment - Lien #{lien_id} ({wallet_role})",
+                tx_hash=tx.hash.hex(),
+                event_type=AccountingEventType.LOAN_REPAYMENT,
+                wallet_address=wallet_address,
+                wallet_role=wallet_role
+            )
+
+            # Calculate principal and interest
+            principal_eth = position.principal
+
+            # Use actual repayment if available from pool transfers, otherwise calculate
+            if hasattr(position, 'actual_repayment') and position.actual_repayment:
+                total_eth = position.actual_repayment
+                interest_eth = position.interest_paid
+            else:
+                interest_eth = position.calculate_interest(block_time)
+                total_eth = principal_eth + interest_eth
+
+            logger.info(f"Creating Journal Entry (Native ETH):")
+            logger.info(f"  Wallet Role: {wallet_role}")
+            logger.info(f"  Principal: {principal_eth:.6f} ETH")
+            logger.info(f"  Interest: {interest_eth:.6f} ETH")
+            logger.info(f"  Total: {total_eth:.6f} ETH")
+
+            if wallet_role == "LENDER_RECEIVING":
+                entry.add_debit(self.accounts["eth_wallet"], total_eth)
+                entry.add_credit(self.accounts["loans_receivable"], principal_eth)
+                entry.add_credit(self.accounts["interest_income"], interest_eth)
+                entry.add_tax_implication(TaxTreatment.NON_TAXABLE, principal_eth * eth_price, "Loan principal repayment")
+                entry.add_tax_implication(TaxTreatment.TAXABLE_INCOME, interest_eth * eth_price, "Interest income")
+
+            elif wallet_role == "BORROWER_REPAYING":
+                entry.add_debit(self.accounts["loan_payable"], principal_eth)
+                entry.add_debit(self.accounts["interest_expense"], interest_eth)
+                entry.add_credit(self.accounts["eth_wallet"], total_eth)
+                entry.add_tax_implication(TaxTreatment.NON_TAXABLE, principal_eth * eth_price, "Loan principal repayment")
+                entry.add_tax_implication(TaxTreatment.DEDUCTIBLE_EXPENSE, interest_eth * eth_price, "Interest expense")
+
+            entries.append(entry)
+
         return entries
 
     def _journal_refinance(self, tx, block_time, eth_price, events, pool_transfers, wallet_roles) -> List[JournalEntry]:
-        """Journal entries for refinancing"""
+        """Create journal entries for standard refinancing (3 parties: old lender, new lender, borrower)"""
         entries = []
-        # TODO: Implement based on reference logic
+
+        # Find Refinance event
+        for event in events:
+            event_name = event['event'] if hasattr(event, 'event') else event.get('event', '')
+            if event_name != "Refinance":
+                continue
+
+            args = event['args'] if hasattr(event, 'args') else event.get('args', {})
+            lien_id = args.get('lienId')
+            new_lender = args.get('newLender')
+            new_amount = Decimal(args.get('newAmount', 0)) / Decimal(10**18)
+
+            old_position = self.positions.get(lien_id)
+
+            # NEW LENDER ENTRY - Create new loan
+            if new_lender and new_lender.lower() in [w.lower() for w in wallet_roles.keys()]:
+                new_lender_entry = JournalEntry(
+                    entry_id=f"JE_{tx.hash.hex()[:8]}_NEW_{lien_id}",
+                    date=block_time,
+                    description=f"Refinance New Loan - Lien #{lien_id} (NEW_LENDER)",
+                    tx_hash=tx.hash.hex(),
+                    event_type=AccountingEventType.LOAN_ORIGINATION,
+                    wallet_address=new_lender,
+                    wallet_role="NEW_LENDER"
+                )
+                new_lender_entry.add_debit(self.accounts["loans_receivable"], new_amount)
+                new_lender_entry.add_credit(self.accounts["blur_pool"], new_amount)
+                entries.append(new_lender_entry)
+
+            # If no old position, create one from event data
+            if not old_position:
+                self.positions[lien_id] = LoanPosition(
+                    lien_id=lien_id,
+                    lender=new_lender,
+                    borrower="Unknown",
+                    collection=args.get('collection', ''),
+                    token_id=0,
+                    principal=new_amount,
+                    rate=Decimal(args.get('newRate', 0)),
+                    start_time=block_time,
+                    duration=90 * 24 * 3600,
+                    auction_duration=args.get('newAuctionDuration', 0),
+                    status="ACTIVE"
+                )
+                logger.info(f"Created new position from refinance: Lien #{lien_id}")
+                return entries
+
+            # OLD LENDER PAYOFF ENTRY
+            principal = old_position.principal
+            interest = old_position.calculate_interest(block_time)
+            payoff = principal + interest
+
+            if old_position.lender.lower() in [w.lower() for w in wallet_roles.keys()]:
+                old_lender_entry = JournalEntry(
+                    entry_id=f"JE_{tx.hash.hex()[:8]}_OLD_{lien_id}",
+                    date=block_time,
+                    description=f"Refinance Payoff - Lien #{lien_id} (OLD_LENDER)",
+                    tx_hash=tx.hash.hex(),
+                    event_type=AccountingEventType.LOAN_REFINANCE,
+                    wallet_address=old_position.lender,
+                    wallet_role="OLD_LENDER"
+                )
+                old_lender_entry.add_debit(self.accounts["blur_pool"], payoff)
+                old_lender_entry.add_credit(self.accounts["loans_receivable"], principal)
+                old_lender_entry.add_credit(self.accounts["interest_income"], interest)
+                old_lender_entry.add_tax_implication(TaxTreatment.TAXABLE_INCOME, interest * eth_price,
+                                                    "Interest income from refinancing")
+                entries.append(old_lender_entry)
+
+            # BORROWER ENTRY - Close old loan, open new
+            if old_position.borrower.lower() in [w.lower() for w in wallet_roles.keys()]:
+                borrower_entry = JournalEntry(
+                    entry_id=f"JE_{tx.hash.hex()[:8]}_BREFI_{lien_id}",
+                    date=block_time,
+                    description=f"Refinance - Lien #{lien_id} (BORROWER_REFINANCING)",
+                    tx_hash=tx.hash.hex(),
+                    event_type=AccountingEventType.LOAN_REFINANCE,
+                    wallet_address=old_position.borrower,
+                    wallet_role="BORROWER_REFINANCING"
+                )
+                borrower_entry.add_debit(self.accounts["loan_payable"], principal)
+                borrower_entry.add_debit(self.accounts["interest_expense"], interest)
+                borrower_entry.add_credit(self.accounts["blur_pool"], payoff)
+                borrower_entry.add_debit(self.accounts["blur_pool"], new_amount)
+                borrower_entry.add_credit(self.accounts["loan_payable"], new_amount)
+                borrower_entry.add_tax_implication(TaxTreatment.DEDUCTIBLE_EXPENSE, interest * eth_price,
+                                                  "Interest expense on refinancing")
+                entries.append(borrower_entry)
+
         return entries
 
     def _journal_refinance_auction(self, tx, block_time, eth_price, events, pool_transfers, wallet_roles) -> List[JournalEntry]:
-        """Journal entries for auction refinancing"""
+        """Create journal entries for auction refinancing with pool transfer analysis"""
         entries = []
-        # TODO: Implement based on reference logic
+
+        # Find Refinance event from auction
+        for event in events:
+            event_name = event['event'] if hasattr(event, 'event') else event.get('event', '')
+            if event_name != "Refinance":
+                continue
+
+            args = event['args'] if hasattr(event, 'args') else event.get('args', {})
+            lien_id = args.get('lienId')
+            new_lender = args.get('newLender')
+            new_amount = Decimal(args.get('newAmount', 0)) / Decimal(10**18)
+            new_rate = Decimal(args.get('newRate', 0))
+            collection = args.get('collection')
+
+            old_position = self.positions.get(lien_id)
+
+            # NEW LENDER ENTRY - Funding the new loan
+            if new_lender and new_lender.lower() in [w.lower() for w in wallet_roles.keys()]:
+                new_lender_entry = JournalEntry(
+                    entry_id=f"JE_{tx.hash.hex()[:8]}_NEW_LENDER_{lien_id}",
+                    date=block_time,
+                    description=f"Refinance Auction - New Loan Funded - Lien #{lien_id}",
+                    tx_hash=tx.hash.hex(),
+                    event_type=AccountingEventType.LOAN_ORIGINATION,
+                    wallet_address=new_lender,
+                    wallet_role="NEW_LENDER"
+                )
+
+                new_lender_entry.add_debit(self.accounts["loans_receivable"], new_amount)
+                new_lender_entry.add_credit(self.accounts["blur_pool"], new_amount)
+                new_lender_entry.add_debit(self.accounts["nft_collateral"], Decimal(0))  # Non-monetary
+
+                new_lender_entry.add_tax_implication(
+                    TaxTreatment.NON_TAXABLE,
+                    new_amount * eth_price,
+                    "Loan principal disbursement in refinancing auction"
+                )
+                entries.append(new_lender_entry)
+
+            # Check pool transfers for old lender payoff
+            for transfer in pool_transfers:
+                transfer_to = Web3.to_checksum_address(transfer['to'])
+                if transfer_to.lower() in [w.lower() for w in wallet_roles.keys()]:
+                    # One of our wallets received a payoff
+                    old_lender_entry = JournalEntry(
+                        entry_id=f"JE_{tx.hash.hex()[:8]}_OLD_LENDER_{lien_id}",
+                        date=block_time,
+                        description=f"Refinance Auction - Loan Payoff Received - Lien #{lien_id}",
+                        tx_hash=tx.hash.hex(),
+                        event_type=AccountingEventType.LOAN_REFINANCE,
+                        wallet_address=transfer_to,
+                        wallet_role="OLD_LENDER"
+                    )
+
+                    # Receive auction proceeds
+                    actual_proceeds = Decimal(str(transfer['amount']))
+                    old_lender_entry.add_debit(self.accounts["blur_pool"], actual_proceeds)
+                    old_lender_entry.add_credit(self.accounts["loans_receivable"], actual_proceeds)
+
+                    old_lender_entry.add_tax_implication(
+                        TaxTreatment.NON_TAXABLE,
+                        actual_proceeds * eth_price,
+                        "Loan principal recovered via refinancing auction"
+                    )
+
+                    # Remove NFT collateral
+                    old_lender_entry.add_credit(self.accounts["nft_collateral"], Decimal(0))  # Non-monetary
+
+                    entries.append(old_lender_entry)
+
+            # Update or create position
+            if old_position:
+                old_position.lender = new_lender
+                old_position.principal = new_amount
+                old_position.rate = new_rate
+                old_position.start_time = block_time
+                old_position.status = "ACTIVE"
+            else:
+                self.positions[lien_id] = LoanPosition(
+                    lien_id=lien_id,
+                    lender=new_lender,
+                    borrower="Unknown",
+                    collection=collection,
+                    token_id=0,
+                    principal=new_amount,
+                    rate=new_rate,
+                    start_time=block_time,
+                    duration=90 * 24 * 3600,
+                    auction_duration=args.get('newAuctionDuration', 0),
+                    status="ACTIVE"
+                )
+
+            logger.info(f"Generated {len(entries)} journal entries for refinance auction")
+
         return entries
 
     def _journal_loan_origination(self, tx, block_time, eth_price, events, pool_transfers, wallet_roles) -> List[JournalEntry]:
-        """Journal entries for new loan origination"""
+        """Create journal entry for loan origination"""
         entries = []
-        # TODO: Implement based on reference logic
+
+        # Find LoanOfferTaken event
+        for event in events:
+            event_name = event['event'] if hasattr(event, 'event') else event.get('event', '')
+            if event_name != "LoanOfferTaken":
+                continue
+
+            args = event['args'] if hasattr(event, 'args') else event.get('args', {})
+            lien_id = args.get('lienId')
+            lender = args.get('lender')
+            borrower = args.get('borrower')
+            loan_amount_wei = args.get('loanAmount', args.get('amount', 0))
+            loan_eth = Decimal(loan_amount_wei) / Decimal(10**18)
+
+            # Determine which fund wallet is involved and their role
+            wallet_address = ""
+            wallet_role = "UNKNOWN"
+
+            if lender.lower() in [w.lower() for w in wallet_roles.keys()]:
+                wallet_address = lender
+                wallet_role = wallet_roles.get(lender.lower(), "LENDER")
+            elif borrower.lower() in [w.lower() for w in wallet_roles.keys()]:
+                wallet_address = borrower
+                wallet_role = wallet_roles.get(borrower.lower(), "BORROWER")
+
+            if not wallet_address:
+                continue
+
+            entry = JournalEntry(
+                entry_id=f"JE_{tx.hash.hex()[:8]}_{lien_id}",
+                date=block_time,
+                description=f"NFT Loan Origination - Lien #{lien_id} ({wallet_role})",
+                tx_hash=tx.hash.hex(),
+                event_type=AccountingEventType.LOAN_ORIGINATION,
+                wallet_address=wallet_address,
+                wallet_role=wallet_role
+            )
+
+            if wallet_role == "LENDER":
+                entry.add_debit(self.accounts["loans_receivable"], loan_eth)
+                entry.add_credit(self.accounts["blur_pool"], loan_eth)
+                entry.add_tax_implication(TaxTreatment.NON_TAXABLE, loan_eth * eth_price, "Loan principal disbursement")
+            elif wallet_role == "BORROWER":
+                entry.add_debit(self.accounts["blur_pool"], loan_eth)
+                entry.add_credit(self.accounts["loan_payable"], loan_eth)
+                entry.add_tax_implication(TaxTreatment.NON_TAXABLE, loan_eth * eth_price, "Loan proceeds received")
+
+            entries.append(entry)
+
+        return entries
+
+    def _journal_pool_transfers(self, tx, block_time, eth_price, pool_transfers, wallet_roles) -> List[JournalEntry]:
+        """Create journal entries for Blur Pool deposits/withdrawals"""
+        entries = []
+
+        for transfer in pool_transfers:
+            from_addr = transfer['from']
+            to_addr = transfer['to']
+            amount = Decimal(str(transfer['amount']))
+            direction = transfer.get('direction', 'UNKNOWN')
+
+            # Determine which fund wallet is involved
+            wallet_address = None
+            wallet_role = None
+
+            if to_addr.lower() in [w.lower() for w in wallet_roles.keys()]:
+                wallet_address = to_addr
+                wallet_role = wallet_roles.get(to_addr.lower(), "POOL_WITHDRAWER")
+            elif from_addr.lower() in [w.lower() for w in wallet_roles.keys()]:
+                wallet_address = from_addr
+                wallet_role = wallet_roles.get(from_addr.lower(), "POOL_DEPOSITOR")
+
+            if not wallet_address:
+                continue
+
+            if direction == 'IN' or wallet_role == "POOL_WITHDRAWER":
+                # Receiving pool tokens (withdrawal from pool or receiving as proceeds)
+                entry = JournalEntry(
+                    entry_id=f"JE_{tx.hash.hex()[:8]}_POOL_IN",
+                    date=block_time,
+                    description=f"Blur Pool Tokens Received - {amount:.6f} BLUR POOL",
+                    tx_hash=tx.hash.hex(),
+                    event_type=AccountingEventType.LOAN_REFINANCE,  # Pool activity related to lending
+                    wallet_address=wallet_address,
+                    wallet_role=wallet_role
+                )
+
+                # Debit: Blur Pool asset (we received pool tokens)
+                # Credit: ETH/Cash (what we gave up - typically happens in a refinance)
+                # Since this is pool token receipt, we're tracking the pool share received
+                entry.add_debit(self.accounts["blur_pool"], amount)
+                entry.add_credit(self.accounts["loans_receivable"], amount)
+
+                entry.add_tax_implication(
+                    TaxTreatment.NON_TAXABLE,
+                    amount * eth_price,
+                    "Blur Pool tokens received (represents loan principal repaid)"
+                )
+
+                entries.append(entry)
+
+            elif direction == 'OUT' or wallet_role == "POOL_DEPOSITOR":
+                # Sending pool tokens (deposit to pool or using for lending)
+                entry = JournalEntry(
+                    entry_id=f"JE_{tx.hash.hex()[:8]}_POOL_OUT",
+                    date=block_time,
+                    description=f"Blur Pool Tokens Sent - {amount:.6f} BLUR POOL",
+                    tx_hash=tx.hash.hex(),
+                    event_type=AccountingEventType.LOAN_ORIGINATION,  # Pool activity for new lending
+                    wallet_address=wallet_address,
+                    wallet_role=wallet_role
+                )
+
+                # Debit: Loans Receivable (we're deploying capital)
+                # Credit: Blur Pool (we're giving up pool tokens)
+                entry.add_debit(self.accounts["loans_receivable"], amount)
+                entry.add_credit(self.accounts["blur_pool"], amount)
+
+                entry.add_tax_implication(
+                    TaxTreatment.NON_TAXABLE,
+                    amount * eth_price,
+                    "Blur Pool tokens sent (loan principal disbursement)"
+                )
+
+                entries.append(entry)
+
         return entries
 
     def _journal_gas_fee(self, tx, receipt, block_time, eth_price, wallet_roles) -> Optional[JournalEntry]:
@@ -939,7 +1579,7 @@ class BlurAutoDecoder:
         """Convert Web3 event to dictionary"""
         if hasattr(event, 'event'):
             return {
-                'name': event.event,
+                'event': event.event,  # Use 'event' key consistently
                 'args': dict(event.args) if hasattr(event, 'args') else {}
             }
         return event

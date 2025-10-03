@@ -7,7 +7,7 @@ from shiny import reactive, render, ui
 import pandas as pd
 from typing import Dict, Any, List
 from .blur_auto_decoder import blur_auto_decoder
-from .decoder_modal_ui import summary_card_ui, role_badge_ui, event_card_ui, journal_entry_card_ui
+from .decoder_modal_ui import summary_card_ui, role_badge_ui, event_card_ui, journal_entry_card_ui, log_section_ui, metadata_row_ui, raw_log_ui
 import logging
 
 logger = logging.getLogger(__name__)
@@ -388,6 +388,166 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
             "Copied to clipboard",
             type="success",
             duration=2
+        )
+
+    # ========================================================================
+    # LOGS TAB
+    # ========================================================================
+
+    @output
+    @render.ui
+    def decoder_modal_logs():
+        """Render detailed decoding logs and metadata"""
+        result = decode_result.get()
+
+        if not result or result.get("status") == "error":
+            return ui.div(
+                ui.p("No log data available", class_="text-muted text-center"),
+                style="padding: 2rem;"
+            )
+
+        # Transaction Metadata Section
+        metadata_section = log_section_ui(
+            "📋 Transaction Metadata",
+            "📋",
+            [
+                metadata_row_ui("Transaction Hash", result.get('tx_hash', 'N/A'), is_code=True),
+                metadata_row_ui("Block Number", f"{result.get('block', 'N/A'):,}" if result.get('block') else 'N/A'),
+                metadata_row_ui("Timestamp", str(result.get('timestamp', 'N/A'))),
+                metadata_row_ui("Transaction Type", result.get('tx_type', 'UNKNOWN')),
+                metadata_row_ui("ETH Price", f"${result.get('eth_price', 0):,.2f}"),
+                metadata_row_ui("Gas Used", f"{result.get('gas_used', 0):,}"),
+                metadata_row_ui("From Address", result.get('from', 'N/A'), is_code=True),
+                metadata_row_ui("To Address", result.get('to', 'N/A'), is_code=True),
+                metadata_row_ui("Value", f"{result.get('value', 0):.6f} ETH"),
+            ],
+            theme="primary"
+        )
+
+        # Function Decoding Section
+        func_name = result.get('function', 'N/A')
+        func_params = result.get('function_params', {})
+
+        func_params_content = []
+        if func_params:
+            for key, val in func_params.items():
+                val_str = str(val)
+                if len(val_str) > 100:
+                    val_str = val_str[:100] + "..."
+                func_params_content.append(
+                    metadata_row_ui(key, val_str, is_code=isinstance(val, (str, bytes)))
+                )
+        else:
+            func_params_content = [ui.p("No parameters", class_="text-muted", style="font-size: 0.875rem;")]
+
+        function_section = log_section_ui(
+            f"⚙️ Function Call: {func_name}",
+            "⚙️",
+            func_params_content,
+            theme="info"
+        )
+
+        # Decoded Events Section
+        events = result.get('events', [])
+        events_content = []
+        if events:
+            for i, event in enumerate(events):
+                event_name = event.get('event', 'Unknown')
+                event_args = event.get('args', {})
+
+                event_details = [
+                    ui.div(
+                        ui.strong(f"Event #{i+1}: {event_name}", style="color: var(--bs-success); font-size: 0.9rem;"),
+                        style="margin-bottom: 0.5rem;"
+                    )
+                ]
+
+                for key, val in event_args.items():
+                    val_str = str(val)
+                    if len(val_str) > 80:
+                        val_str = val_str[:80] + "..."
+                    event_details.append(metadata_row_ui(key, val_str, is_code=isinstance(val, (str, bytes))))
+
+                events_content.append(ui.div(*event_details, style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--bs-border-color);"))
+        else:
+            events_content = [ui.p("No events decoded", class_="text-muted", style="font-size: 0.875rem;")]
+
+        events_section = log_section_ui(
+            f"📡 Decoded Events ({len(events)})",
+            "📡",
+            events_content,
+            theme="success"
+        )
+
+        # Pool Transfers Section
+        pool_transfers = result.get('pool_transfers', [])
+        pool_content = []
+        if pool_transfers:
+            for i, transfer in enumerate(pool_transfers):
+                pool_content.append(
+                    ui.div(
+                        ui.strong(f"Transfer #{i+1}: {transfer['direction']}", style="font-size: 0.9rem; color: var(--bs-warning);"),
+                        metadata_row_ui("From", transfer.get('from', 'N/A'), is_code=True),
+                        metadata_row_ui("To", transfer.get('to', 'N/A'), is_code=True),
+                        metadata_row_ui("Amount", f"{transfer.get('amount', 0):.6f} ETH"),
+                        style="margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--bs-border-color);"
+                    )
+                )
+        else:
+            pool_content = [ui.p("No pool transfers", class_="text-muted", style="font-size: 0.875rem;")]
+
+        pool_section = log_section_ui(
+            f"🏊 Pool Transfers ({len(pool_transfers)})",
+            "🏊",
+            pool_content,
+            theme="warning"
+        )
+
+        # Wallet Roles Section
+        wallet_roles = result.get('wallet_roles', {})
+        roles_content = []
+        if wallet_roles:
+            for wallet, role in wallet_roles.items():
+                roles_content.append(
+                    ui.div(
+                        ui.code(wallet, style="font-size: 0.85rem; background: var(--bs-gray-200); padding: 0.25rem 0.5rem; border-radius: 0.25rem;"),
+                        ui.span(" → ", style="margin: 0 0.5rem; color: var(--bs-secondary);"),
+                        ui.span(role, style="font-weight: 600; color: var(--bs-primary);"),
+                        style="padding: 0.4rem 0;"
+                    )
+                )
+        else:
+            roles_content = [ui.p("No wallet roles identified", class_="text-muted", style="font-size: 0.875rem;")]
+
+        roles_section = log_section_ui(
+            "👥 Wallet Roles",
+            "👥",
+            roles_content,
+            theme="primary"
+        )
+
+        # Summary Stats
+        summary = result.get('summary', {})
+        stats_section = log_section_ui(
+            "📊 Decoding Summary",
+            "📊",
+            [
+                metadata_row_ui("Total Events Decoded", str(summary.get('total_events', 0))),
+                metadata_row_ui("Pool Transfers", str(len(pool_transfers))),
+                metadata_row_ui("Journal Entries Created", str(summary.get('total_journal_entries', 0))),
+                metadata_row_ui("All Entries Balanced", "✅ Yes" if summary.get('all_balanced') else "❌ No"),
+                metadata_row_ui("Involves Fund Wallets", "✅ Yes" if summary.get('involves_fund_wallets') else "❌ No"),
+            ],
+            theme="light"
+        )
+
+        return ui.div(
+            metadata_section,
+            function_section,
+            events_section,
+            pool_section,
+            roles_section,
+            stats_section,
         )
 
     # Return function to set current transaction

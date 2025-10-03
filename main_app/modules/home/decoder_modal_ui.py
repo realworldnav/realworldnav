@@ -54,6 +54,13 @@ def decoder_modal_ui(tx_hash: str):
                     style="padding: 1.5rem 0;"
                 )
             ),
+            ui.nav_panel(
+                "🔍 Logs",
+                ui.div(
+                    ui.output_ui("decoder_modal_logs"),
+                    style="padding: 1.5rem 0; max-height: 600px; overflow-y: auto;"
+                )
+            ),
             id="decoder_modal_tabs"
         ),
 
@@ -263,6 +270,72 @@ def event_card_ui(event_name: str, event_args: Dict[str, Any]):
             ]
         ),
         style="margin-bottom: 1rem;"
+    )
+
+
+def log_section_ui(title: str, icon: str, content: List, theme: str = "light"):
+    """Create a log section with expandable content"""
+    theme_colors = {
+        "primary": "var(--bs-primary)",
+        "success": "var(--bs-success)",
+        "info": "var(--bs-info)",
+        "warning": "var(--bs-warning)",
+        "danger": "var(--bs-danger)",
+        "light": "var(--bs-gray-600)"
+    }
+
+    color = theme_colors.get(theme, theme_colors["light"])
+
+    return ui.div(
+        ui.div(
+            ui.span(icon + " ", style=f"font-size: 1.1rem; margin-right: 0.5rem; color: {color};"),
+            ui.strong(title, style=f"color: {color}; font-size: 0.95rem;"),
+            style="margin-bottom: 0.75rem; display: flex; align-items: center;"
+        ),
+        ui.div(
+            *content,
+            style="background: var(--bs-gray-50); border-left: 3px solid " + color + "; padding: 1rem; border-radius: 0.25rem; margin-bottom: 1.5rem;"
+        )
+    )
+
+
+def metadata_row_ui(label: str, value: str, is_code: bool = False):
+    """Create a metadata row for the logs tab"""
+    value_content = ui.code(
+        value,
+        style="font-size: 0.85rem; background: var(--bs-gray-200); padding: 0.25rem 0.5rem; border-radius: 0.25rem; word-break: break-all;"
+    ) if is_code else ui.span(value, style="font-weight: 500; color: var(--bs-body-color);")
+
+    return ui.div(
+        ui.div(
+            ui.span(label + ":", style="color: var(--bs-secondary); font-size: 0.875rem; min-width: 140px; display: inline-block;"),
+            value_content,
+            style="display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0;"
+        )
+    )
+
+
+def raw_log_ui(log_index: int, address: str, topics: List[str], data: str):
+    """Create a raw log display card"""
+    return ui.div(
+        ui.div(
+            ui.strong(f"Log #{log_index}", style="color: var(--bs-primary); font-size: 0.9rem;"),
+            style="margin-bottom: 0.5rem;"
+        ),
+        ui.div(
+            metadata_row_ui("Address", address, is_code=True),
+            metadata_row_ui("Topics", f"{len(topics)} topics"),
+            *[
+                ui.div(
+                    ui.span(f"  Topic[{i}]:", style="color: var(--bs-secondary); font-size: 0.75rem; font-family: monospace; margin-left: 1rem;"),
+                    ui.code(topic, style="font-size: 0.75rem; background: var(--bs-gray-200); padding: 0.2rem 0.4rem; margin-left: 0.5rem; word-break: break-all;"),
+                    style="padding: 0.2rem 0;"
+                )
+                for i, topic in enumerate(topics)
+            ],
+            metadata_row_ui("Data", data[:66] + "..." if len(data) > 66 else data, is_code=True),
+        ),
+        style="background: var(--bs-light); border: 1px solid var(--bs-border-color); border-radius: 0.25rem; padding: 0.75rem; margin-bottom: 0.75rem; font-size: 0.875rem;"
     )
 
 
