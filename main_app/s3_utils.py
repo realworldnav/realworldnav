@@ -42,7 +42,8 @@ def safe_to_decimal(value):
         return Decimal('0')
 
 # -- Configure your bucket and TB file here
-BUCKET_NAME = "realworldnav-beta"
+import os
+BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "realworldnav-beta-1")
 TB_KEY = "drip_capital/fund/holdings_class_B_ETH/master_tb/20241231_master_tb_for_holdings_class_B_ETH.csv"
 GL_KEY = "drip_capital/all_posted_journal_entries.parquet"
 COA_KEY = "drip_capital/drip_capital_COA.csv"
@@ -55,6 +56,7 @@ REJECTED_TOKENS_KEY = "drip_capital/user_rejected_tokens.csv"
 PCAP_EXCEL_PREFIX = "drip_capital/PCAP/"  # Prefix for PCAP Excel files
 FIFO_LEDGER_KEY = "drip_capital/fifo_ledger_results.parquet"
 ABI_PREFIX = "drip_capital/smart_contract_ABIs/"  # Prefix for contract ABIs (note: capital ABIs)
+GL2_KEY = "drip_capital/general_ledger.parquet"  # New General Ledger 2
 
 # -- Create a reusable S3 client
 # Create S3 client - will be initialized when first used
@@ -169,8 +171,10 @@ def load_COA_file(key: str = COA_KEY) -> pd.DataFrame:
 
     df_coa = pd.read_csv(StringIO(data))
     df_coa.columns = df_coa.columns.str.strip()
+    # Drop rows with missing GL_Acct_Number, then convert to int
+    df_coa = df_coa.dropna(subset=["GL_Acct_Number"])
     df_coa["GL_Acct_Number"] = df_coa["GL_Acct_Number"].astype(int)
-    df_coa["GL_Acct_Name"] = df_coa["GL_Acct_Name"].astype(str)
+    df_coa["GL_Acct_Name"] = df_coa["GL_Acct_Name"].fillna("").astype(str)
     return df_coa
 
 def save_COA_file(df: pd.DataFrame, key: str = COA_KEY) -> bool:
@@ -199,18 +203,24 @@ def save_COA_file(df: pd.DataFrame, key: str = COA_KEY) -> bool:
         return False
     
 def save_GL_file(df: pd.DataFrame, key: str = GL_KEY):
-    # Retrieve stored dtypes
-    original_dtypes = df.attrs.get("dtypes")
-    if original_dtypes:
-        for col, dtype in original_dtypes.items():
-            try:
-                df[col] = df[col].astype(dtype)
-            except Exception as e:
-                # Ignore casting errors
-                pass
-    else:
-        # No dtypes specified, skip conversion
-        pass
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+
+    # Normalize numeric columns to float64 for parquet compatibility
+    # Parquet can't handle mixed Decimal/float types
+    numeric_cols = [
+        'debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
+        'net_debit_credit_crypto', 'net_debit_credit_USD',
+        'eth_usd_price', 'principal_crypto', 'principal_USD',
+        'interest_rec_crypto', 'interest_rec_USD',
+        'payoff_amount_crypto', 'payoff_amount_USD',
+        'annual_interest_rate'
+    ]
+
+    for col in numeric_cols:
+        if col in df.columns:
+            # Convert Decimal/object to float64
+            df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')
 
     # Save to Parquet
     buffer = BytesIO()
@@ -255,12 +265,141 @@ def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported file type for key: {key}")
 
-    # ✅ Assign unique transaction_id if not already present
+    # Assign unique transaction_id if not already present
     if "transaction_id" not in df.columns:
         df = df.reset_index(drop=True)
         df["transaction_id"] = df.index.astype(str)
 
     return df
+
+
+# ============= General Ledger 2 Functions =============
+
+def get_gl2_schema_columns():
+    """Return the schema columns for GL2 parquet file."""
+    return [
+        'tx_hash', 'entry_type', 'account_number', 'account_name',
+        'debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
+        'asset', 'description', 'category', 'platform',
+        'timestamp', 'posted_date', 'row_key'
+    ]
+
+def create_empty_GL2(key: str = GL2_KEY) -> bool:
+    """Create an empty GL2 parquet file with correct schema in S3."""
+    try:
+        from datetime import datetime, timezone
+
+        # Create empty DataFrame with schema columns
+        columns = get_gl2_schema_columns()
+        df = pd.DataFrame(columns=columns)
+
+        # Set proper dtypes
+        df = df.astype({
+            'tx_hash': 'object',
+            'entry_type': 'object',
+            'account_number': 'object',
+            'account_name': 'object',
+            'debit_crypto': 'float64',
+            'credit_crypto': 'float64',
+            'debit_USD': 'float64',
+            'credit_USD': 'float64',
+            'asset': 'object',
+            'description': 'object',
+            'category': 'object',
+            'platform': 'object',
+            'row_key': 'object'
+        })
+
+        # Save to parquet
+        buffer = BytesIO()
+        df.to_parquet(buffer, index=False)
+        buffer.seek(0)
+
+        get_s3_client().put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=buffer.getvalue()
+        )
+
+        logger.info(f"Created empty GL2 file at {key}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error creating empty GL2: {e}")
+        return False
+
+@lru_cache(maxsize=32)
+def load_GL2_file(key: str = GL2_KEY) -> pd.DataFrame:
+    """Load GL2 parquet file from S3. Creates empty file if not exists."""
+    try:
+        obj = get_s3_client().get_object(Bucket=BUCKET_NAME, Key=key)
+        content = obj["Body"].read()
+
+        table = pq.read_table(BytesIO(content))
+        df = table.to_pandas()
+
+        # Fix datetime columns to be UTC-aware
+        if "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors='coerce')
+        if "posted_date" in df.columns:
+            df["posted_date"] = pd.to_datetime(df["posted_date"], utc=True, errors='coerce')
+
+        # Cast financial columns to Decimal for precision
+        decimal_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD']
+        for col in decimal_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(safe_to_decimal)
+
+        return df
+
+    except get_s3_client().exceptions.NoSuchKey:
+        # File doesn't exist, create empty one
+        logger.info(f"GL2 file not found, creating empty file at {key}")
+        create_empty_GL2(key)
+        return pd.DataFrame(columns=get_gl2_schema_columns())
+
+    except Exception as e:
+        logger.error(f"Error loading GL2 file: {e}")
+        return pd.DataFrame(columns=get_gl2_schema_columns())
+
+def save_GL2_file(df: pd.DataFrame, key: str = GL2_KEY) -> bool:
+    """Save GL2 DataFrame to S3 with proper typing."""
+    try:
+        # Make a copy to avoid modifying the original
+        df = df.copy()
+
+        # Normalize numeric columns to float64 for parquet compatibility
+        numeric_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')
+
+        # Save to Parquet
+        buffer = BytesIO()
+        df.to_parquet(buffer, index=False)
+        buffer.seek(0)
+
+        get_s3_client().put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=buffer.getvalue()
+        )
+
+        # Clear cache since we've updated the data
+        load_GL2_file.cache_clear()
+
+        logger.info(f"Saved GL2 file with {len(df)} entries")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error saving GL2 file: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def clear_GL2_cache():
+    """Clear the GL2 file cache."""
+    load_GL2_file.cache_clear()
 
 
 def append_audit_log(changes_df: pd.DataFrame, key="drip_capital/gl_edit_log.csv"):

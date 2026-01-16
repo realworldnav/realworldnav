@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealWorldNAV - Investments | PrinceLLC</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/simplex/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #2563eb;
+        }
+
+        body {
+            min-height: 100vh;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            min-height: 100vh;
+            background: white;
+            border-right: 1px solid #dee2e6;
+            position: fixed;
+            left: 0;
+            top: 0;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .sidebar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sidebar-brand img {
+            height: 32px;
+            width: auto;
+        }
+
+        .client-logo {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .client-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section {
+            margin-top: 1.5rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            color: #495057;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .nav-link.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .nav-link i {
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            margin-bottom: 2rem;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .value-box {
+            background: white;
+            border-radius: 12px;
+            padding: 1.25rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border-left: 4px solid var(--primary-color);
+            height: 100%;
+        }
+
+        .value-box.success { border-left-color: #28a745; }
+        .value-box.warning { border-left-color: #ffc107; }
+        .value-box.info { border-left-color: #17a2b8; }
+        .value-box.danger { border-left-color: #dc3545; }
+
+        .value-box-title {
+            font-size: 0.8rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.25rem;
+        }
+
+        .value-box-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .value-box-subtitle {
+            font-size: 0.8rem;
+            color: #28a745;
+            margin-top: 0.25rem;
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            padding: 1rem 1.5rem;
+            border-radius: 12px 12px 0 0 !important;
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .table td {
+            vertical-align: middle;
+            font-size: 0.9rem;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+
+        .table tbody tr.selected {
+            background-color: rgba(37, 99, 235, 0.1);
+            border-left: 3px solid var(--primary-color);
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-active { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-completed { background: #cce5ff; color: #004085; }
+        .status-defaulted { background: #f8d7da; color: #721c24; }
+
+        .form-select, .form-control {
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            padding: 0.5rem 1rem;
+        }
+
+        .form-label {
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: #495057;
+        }
+
+        .fund-selector {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .nav-tabs .nav-link {
+            border-radius: 8px 8px 0 0;
+            color: #495057;
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 0.75rem 1.5rem;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: white;
+            border-color: #dee2e6 #dee2e6 white;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .nav-tabs {
+            border-bottom: 1px solid #dee2e6;
+            margin-bottom: 1.5rem;
+        }
+
+        .text-success { color: #28a745 !important; }
+        .text-danger { color: #dc3545 !important; }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+            border-radius: 8px;
+        }
+
+        .monospace {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+
+        .nft-thumbnail {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .crypto-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.75rem;
+        }
+
+        .crypto-eth { background: #627eea; color: white; }
+        .crypto-btc { background: #f7931a; color: white; }
+        .crypto-usdc { background: #2775ca; color: white; }
+        .crypto-sol { background: #9945ff; color: white; }
+
+        .filter-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .detail-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            color: #6c757d;
+            font-size: 0.875rem;
+        }
+
+        .detail-value {
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-brand">
+            <img src="../static/rwn_logo.png" alt="RealWorldNAV"> RealWorldNAV
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Client</label>
+            <select class="form-select">
+                <option selected>PrinceLLC</option>
+                <option>Drip Capital</option>
+            </select>
+        </div>
+
+        <div class="text-center mb-3">
+            <div class="client-logo mx-auto">PLC</div>
+            <div class="client-name">PrinceLLC</div>
+        </div>
+
+        <div class="fund-selector">
+            <label class="form-label">Select Fund</label>
+            <select class="form-select">
+                <option selected>Prince Growth Fund I</option>
+                <option>Prince Income Fund II</option>
+                <option>Prince Ventures III</option>
+            </select>
+        </div>
+
+        <div class="nav-section">
+            <a href="index.html" class="nav-link">
+                <i class="bi bi-house-door"></i> Home
+            </a>
+            <a href="fund-accounting.html" class="nav-link">
+                <i class="bi bi-calculator"></i> Fund Accounting
+            </a>
+            <a href="investments.html" class="nav-link active">
+                <i class="bi bi-briefcase"></i> Investments
+            </a>
+            <a href="general-ledger.html" class="nav-link">
+                <i class="bi bi-journal-text"></i> General Ledger
+            </a>
+            <a href="financial-reporting.html" class="nav-link">
+                <i class="bi bi-file-earmark-bar-graph"></i> Financial Reporting
+            </a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Investments</h1>
+            <p class="page-subtitle">Prince Growth Fund I - Portfolio Management</p>
+        </div>
+
+        <!-- Tabs -->
+        <ul class="nav nav-tabs">
+            <li class="nav-item">
+                <a class="nav-link active" href="#">Loan Portfolio</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">NFT Portfolio</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Cryptocurrencies</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Staking</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Reports</a>
+            </li>
+        </ul>
+
+        <!-- KPI Row -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="value-box">
+                    <div class="value-box-title">Total Portfolio</div>
+                    <div class="value-box-value">$8.2M</div>
+                    <div class="value-box-subtitle"><i class="bi bi-arrow-up"></i> +4.2% MTD</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box success">
+                    <div class="value-box-title">Active Loans</div>
+                    <div class="value-box-value">23</div>
+                    <div class="value-box-subtitle">$5.4M Principal</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box info">
+                    <div class="value-box-title">NFT Collateral</div>
+                    <div class="value-box-value">$2.1M</div>
+                    <div class="value-box-subtitle">47 NFTs</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box warning">
+                    <div class="value-box-title">Avg APY</div>
+                    <div class="value-box-value">12.4%</div>
+                    <div class="value-box-subtitle">Weighted Average</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filter-card">
+            <div class="row align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label">Loan ID</label>
+                    <select class="form-select">
+                        <option>All Loans</option>
+                        <option>LOAN-001</option>
+                        <option>LOAN-002</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Status</label>
+                    <select class="form-select">
+                        <option>All Status</option>
+                        <option>Active</option>
+                        <option>Completed</option>
+                        <option>Defaulted</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Platform</label>
+                    <select class="form-select">
+                        <option>All Platforms</option>
+                        <option>Arcade</option>
+                        <option>NFTfi</option>
+                        <option>Blend</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Date Range</label>
+                    <input type="text" class="form-control" value="Jan 1, 2025 - Jan 5, 2025">
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-primary me-2"><i class="bi bi-funnel"></i> Apply Filters</button>
+                    <button class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Row -->
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-table"></i> Loan Portfolio</span>
+                        <div>
+                            <button class="btn btn-sm btn-outline-secondary me-2"><i class="bi bi-download"></i> Export</button>
+                            <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrows-fullscreen"></i></button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-container">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Loan ID</th>
+                                        <th>Borrower</th>
+                                        <th>Principal</th>
+                                        <th>APY</th>
+                                        <th>Collateral</th>
+                                        <th>Status</th>
+                                        <th>Due Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="selected">
+                                        <td class="monospace">LOAN-0847</td>
+                                        <td class="monospace">0x7a2...f4c9</td>
+                                        <td>$250,000</td>
+                                        <td class="text-success">14.5%</td>
+                                        <td>BAYC #4521</td>
+                                        <td><span class="status-badge status-active">Active</span></td>
+                                        <td>Feb 15, 2025</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="monospace">LOAN-0846</td>
+                                        <td class="monospace">0x3b1...8e2a</td>
+                                        <td>$180,000</td>
+                                        <td class="text-success">12.0%</td>
+                                        <td>CryptoPunk #7842</td>
+                                        <td><span class="status-badge status-active">Active</span></td>
+                                        <td>Mar 1, 2025</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="monospace">LOAN-0845</td>
+                                        <td class="monospace">0x9c4...2d7f</td>
+                                        <td>$320,000</td>
+                                        <td class="text-success">11.5%</td>
+                                        <td>Azuki #2891</td>
+                                        <td><span class="status-badge status-active">Active</span></td>
+                                        <td>Jan 28, 2025</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="monospace">LOAN-0844</td>
+                                        <td class="monospace">0x5e8...a1b3</td>
+                                        <td>$95,000</td>
+                                        <td class="text-success">15.0%</td>
+                                        <td>Doodle #4102</td>
+                                        <td><span class="status-badge status-pending">Pending</span></td>
+                                        <td>Feb 8, 2025</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="monospace">LOAN-0843</td>
+                                        <td class="monospace">0x2f6...c9e4</td>
+                                        <td>$450,000</td>
+                                        <td class="text-success">10.5%</td>
+                                        <td>MAYC #12045</td>
+                                        <td><span class="status-badge status-completed">Completed</span></td>
+                                        <td>Jan 2, 2025</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="monospace">LOAN-0842</td>
+                                        <td class="monospace">0x8d3...7f2b</td>
+                                        <td>$175,000</td>
+                                        <td class="text-success">13.0%</td>
+                                        <td>CloneX #8912</td>
+                                        <td><span class="status-badge status-active">Active</span></td>
+                                        <td>Feb 22, 2025</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Loan Details - LOAN-0847</div>
+                    <div class="card-body">
+                        <div class="detail-card mb-3">
+                            <div class="detail-row">
+                                <span class="detail-label">Loan ID</span>
+                                <span class="detail-value monospace">LOAN-0847</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Platform</span>
+                                <span class="detail-value">Arcade Protocol</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Principal</span>
+                                <span class="detail-value">$250,000.00</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Interest Rate</span>
+                                <span class="detail-value text-success">14.5% APY</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Accrued Interest</span>
+                                <span class="detail-value">$4,562.50</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Origination Date</span>
+                                <span class="detail-value">Nov 15, 2024</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Maturity Date</span>
+                                <span class="detail-value">Feb 15, 2025</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">NFT Collateral</div>
+                    <div class="card-body">
+                        <div class="d-flex align-items-center mb-3">
+                            <div class="nft-thumbnail me-3">
+                                <i class="bi bi-image"></i>
+                            </div>
+                            <div>
+                                <div class="fw-bold">BAYC #4521</div>
+                                <small class="text-muted">Bored Ape Yacht Club</small>
+                            </div>
+                        </div>
+                        <div class="detail-card">
+                            <div class="detail-row">
+                                <span class="detail-label">Floor Price</span>
+                                <span class="detail-value">32.5 ETH</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">USD Value</span>
+                                <span class="detail-value">$108,550</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">LTV Ratio</span>
+                                <span class="detail-value text-warning">43.5%</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Liquidation</span>
+                                <span class="detail-value">65%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -164,21 +164,30 @@ def enhanced_fund_accounting_ui():
     # Import UIs here to avoid circular imports
     from .modules.fund_accounting.ui import pcap_ui
     from .modules.fund_accounting.trial_balance import trial_balance_ui
-    
+
     return shiny_ui.navset_tab(
         shiny_ui.nav_panel("NAV Analysis", fund_accounting_ui()),
         shiny_ui.nav_panel("Trial Balance", trial_balance_ui()),
-        shiny_ui.nav_panel("Performance", shiny_ui.div("Performance analysis coming soon...")),
-        shiny_ui.nav_panel("KPI Dashboard", fund_accounting_dashboard_ui()),
-        shiny_ui.nav_panel("PCAP", pcap_ui()),
+        shiny_ui.nav_panel("Performance (Demo)", shiny_ui.div(
+            shiny_ui.div("Performance analysis - Demo", class_="alert alert-info"),
+            "Performance metrics and analytics are coming soon. This module will show historical performance data derived from the General Ledger."
+        )),
+        shiny_ui.nav_panel("KPI Dashboard (Demo)", fund_accounting_dashboard_ui()),
+        shiny_ui.nav_panel("PCAP (Demo)", pcap_ui()),
         id="fund_accounting_tabs"
     )
 
 def enhanced_investments_ui():
-    """Investments with Dashboard + sub-navigation"""
+    """Investments with Dashboard + sub-navigation (Demo)"""
     return shiny_ui.navset_tab(
-        shiny_ui.nav_panel("Dashboard", investments_dashboard_ui()),
-        shiny_ui.nav_panel("Portfolio Overview", investments_ui()),
+        shiny_ui.nav_panel("Dashboard (Demo)", shiny_ui.div(
+            shiny_ui.div("Investments Dashboard - Demo", class_="alert alert-warning"),
+            investments_dashboard_ui()
+        )),
+        shiny_ui.nav_panel("Portfolio Overview (Demo)", shiny_ui.div(
+            shiny_ui.div("Portfolio Overview - Demo data. Real loan and NFT data integration coming soon.", class_="alert alert-warning"),
+            investments_ui()
+        )),
         id="investments_tabs"
     )
 
@@ -186,9 +195,12 @@ def enhanced_general_ledger_ui():
     """General Ledger with Dashboard + sub-navigation"""
     # Import here to avoid circular imports
     from .modules.general_ledger.chart_of_accounts import chart_of_accounts_ui
-    
+
     return shiny_ui.navset_tab(
-        shiny_ui.nav_panel("Dashboard", general_ledger_dashboard_ui()),
+        shiny_ui.nav_panel("Dashboard (Demo)", shiny_ui.div(
+            shiny_ui.div("GL Dashboard - Demo metrics. General Ledger tab has real transaction data.", class_="alert alert-info"),
+            general_ledger_dashboard_ui()
+        )),
         shiny_ui.nav_panel("General Ledger", general_ledger_ui()),
         shiny_ui.nav_panel("Chart of Accounts", chart_of_accounts_ui()),
         id="general_ledger_tabs"
@@ -197,9 +209,15 @@ def enhanced_general_ledger_ui():
 def enhanced_financial_reporting_ui():
     """Financial Reporting with Dashboard + sub-navigation"""
     return shiny_ui.navset_tab(
-        shiny_ui.nav_panel("Dashboard", financial_reporting_dashboard_ui()),
+        shiny_ui.nav_panel("Dashboard (Demo)", shiny_ui.div(
+            shiny_ui.div("Financial Dashboard - Demo metrics. Reports tab has real GL data.", class_="alert alert-info"),
+            financial_reporting_dashboard_ui()
+        )),
         shiny_ui.nav_panel("Reports", financial_reporting_ui()),
-        shiny_ui.nav_panel("Analytics", shiny_ui.div("Advanced analytics coming soon...")),
+        shiny_ui.nav_panel("Analytics (Demo)", shiny_ui.div(
+            shiny_ui.div("Analytics - Demo", class_="alert alert-info"),
+            "Advanced analytics coming soon. This module will show trend analysis and financial ratios derived from GL data."
+        )),
         id="financial_reporting_tabs"
     )
 
@@ -207,11 +225,9 @@ def enhanced_financial_reporting_ui():
 import os
 default_client = os.environ.get('REALWORLDNAV_CLIENT', 'drip_capital')
 
-client_selector = shiny_ui.div(
-    shiny_ui.input_select("client", "Select Client", {
-        "drip_capital": "Drip Capital"
-    }, selected=default_client, width="100%"),
-    class_="custom-dropdown"
+client_selector = shiny_ui.input_select(
+    "client", None, {"drip_capital": "Drip Capital"},
+    selected=default_client, width="100%"
 )
 
 # Fund selector will be reactive based on client selection
@@ -223,106 +239,62 @@ fund_selector = shiny_ui.output_ui("dynamic_fund_selector")
 app_ui = shiny_ui.page_sidebar(
     # Sidebar
     shiny_ui.sidebar(
-        # RealWorldNav title
+        # Logo and Brand
         shiny_ui.div(
-            shiny_ui.h3("RealWorldNAV", class_="app-title"),
-            class_="title-container"
+            shiny_ui.img(src="rwn_logo.png", alt="RealWorldNAV", class_="app-logo"),
+            shiny_ui.span("RealWorldNAV", class_="app-title"),
+            class_="logo-title-row"
         ),
-        
-        # Client selector
+
+        # Client & Fund Selection (combined)
         shiny_ui.div(
-            shiny_ui.h6("Client Selection", class_="section-header"),
-            client_selector,
+            shiny_ui.div(
+                shiny_ui.tags.label("Client", class_="section-header"),
+                client_selector,
+                class_="mb-3"
+            ),
+            shiny_ui.div(
+                shiny_ui.tags.label("Fund", class_="section-header"),
+                fund_selector,
+            ),
             class_="selector-section"
         ),
-        
-        # Dynamic client display
+
+        # Client display
+        shiny_ui.output_ui("client_display"),
+
+        # Navigation
         shiny_ui.div(
-            shiny_ui.output_ui("client_display"),
-            class_="client-display"
-        ),
-        
-        # Fund selector
-        shiny_ui.div(
-            shiny_ui.h6("Fund Selection", class_="section-header"),
-            fund_selector,
-            class_="fund-selector-section"
-        ),
-        
-        # Navigation menu
-        shiny_ui.div(
-            shiny_ui.h6("Navigation", class_="section-header"),
+            shiny_ui.tags.label("Navigation", class_="section-header"),
             shiny_ui.output_ui("nav_links"),
             class_="navigation-section"
         ),
-        
-        # Theme selector
-        theme_manager.get_theme_selector_ui(),
-        
-        # Additional info
-        shiny_ui.div(
-            shiny_ui.hr(),
-            shiny_ui.p("Debug Selection:", class_="debug-label"),
-            shiny_ui.div(
-                shiny_ui.output_code("nav_selection_debug"),
-                class_="debug-selection"
-            ),
-            class_="debug-section"
-        ),
-        
-        width=280,
+
+        width=260,
         position="left"
     ),
     
     # Main content area
     shiny_ui.div(
-        # Custom dropdown styling
-        shiny_ui.tags.style("""
-            /* Custom dropdown styling with chevron arrow */
-            .custom-dropdown select {
-                appearance: none !important;
-                -webkit-appearance: none !important;
-                -moz-appearance: none !important;
-                background-image: url('/dropdown.png') !important;
-                background-repeat: no-repeat !important;
-                background-position: right 12px center !important;
-                background-size: 14px 14px !important;
-                padding-right: 40px !important;
-                border: 1px solid #dee2e6 !important;
-                border-radius: 0.375rem !important;
-                font-size: 0.875rem !important;
-                line-height: 1.5 !important;
-                color: #212529 !important;
-                background-color: #fff !important;
-                transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out !important;
-            }
-            
-            .custom-dropdown select:focus {
-                border-color: #86b7fe !important;
-                outline: 0 !important;
-                box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25) !important;
-            }
-            
-            .custom-dropdown select:hover {
-                border-color: #b3d7ff !important;
-            }
-            
-            /* Ensure the dropdown arrow works in different themes */
-            [data-bs-theme="dark"] .custom-dropdown select {
-                background-color: #212529 !important;
-                color: #fff !important;
-                border-color: #495057 !important;
-            }
-        """),
-        
-        # Dynamic theme styles - make this reactive
-        shiny_ui.output_ui("theme_styles"),
-        
+        # Include Simplex theme from Bootswatch and Bootstrap Icons
+        shiny_ui.tags.head(
+            shiny_ui.tags.link(
+                rel="stylesheet",
+                href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/simplex/bootstrap.min.css"
+            ),
+            shiny_ui.tags.link(
+                rel="stylesheet",
+                href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css"
+            ),
+            shiny_ui.tags.link(
+                rel="stylesheet",
+                href="app.css"
+            ),
+        ),
+
         # Dynamic content based on sidebar selection
         shiny_ui.output_ui("main_content_area"),
-        
+
         class_="main-content"
-    ),
-    
-    theme=shiny_ui.Theme(theme_manager.get_bootstrap_theme())
+    )
 ) #('bootstrap', 'shiny', 'cerulean', 'cosmo', 'cyborg', 'darkly', 'flatly', 'journal', 'litera', 'lumen', 'lux', 'materia', 'minty', 'morph', 'pulse', 'quartz', 'sandstone', 'simplex', 'sketchy', 'slate', 'solar', 'spacelab', 'superhero', 'united', 'vapor', 'yeti', 'zephyr')

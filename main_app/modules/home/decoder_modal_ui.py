@@ -13,7 +13,7 @@ def decoder_modal_ui(tx_hash: str):
         # Modal Header
         ui.div(
             ui.h4(
-                ui.span("🔍 ", style="opacity: 0.7;"),
+                ui.HTML('<i class="bi bi-search me-2" style="opacity: 0.7;"></i>'),
                 "Transaction Decoded",
                 style="margin: 0; font-weight: 600;"
             ),
@@ -27,35 +27,35 @@ def decoder_modal_ui(tx_hash: str):
         # Tabbed Content
         ui.navset_tab(
             ui.nav_panel(
-                "📊 Summary",
+                ui.HTML('<i class="bi bi-bar-chart me-1"></i> Summary'),
                 ui.div(
                     ui.output_ui("decoder_modal_summary"),
                     style="padding: 1.5rem 0;"
                 )
             ),
             ui.nav_panel(
-                "📝 Events",
+                ui.HTML('<i class="bi bi-list-ul me-1"></i> Events'),
                 ui.div(
                     ui.output_ui("decoder_modal_events"),
                     style="padding: 1.5rem 0;"
                 )
             ),
             ui.nav_panel(
-                "💰 Accounting",
+                ui.HTML('<i class="bi bi-currency-dollar me-1"></i> Accounting'),
                 ui.div(
                     ui.output_ui("decoder_modal_accounting"),
                     style="padding: 1.5rem 0;"
                 )
             ),
             ui.nav_panel(
-                "🔄 Positions",
+                ui.HTML('<i class="bi bi-arrow-repeat me-1"></i> Positions'),
                 ui.div(
                     ui.output_ui("decoder_modal_positions"),
                     style="padding: 1.5rem 0;"
                 )
             ),
             ui.nav_panel(
-                "🔍 Logs",
+                ui.HTML('<i class="bi bi-terminal me-1"></i> Logs'),
                 ui.div(
                     ui.output_ui("decoder_modal_logs"),
                     style="padding: 1.5rem 0; max-height: 600px; overflow-y: auto;"
@@ -70,19 +70,19 @@ def decoder_modal_ui(tx_hash: str):
                 ui.div(
                     ui.input_action_button(
                         "decoder_copy_entries",
-                        "📋 Copy Entries",
+                        ui.HTML('<i class="bi bi-clipboard me-1"></i> Copy Entries'),
                         class_="btn btn-outline-secondary"
                     ),
                     ui.input_action_button(
                         "decoder_export_csv",
-                        "⬇️ Export CSV",
+                        ui.HTML('<i class="bi bi-download me-1"></i> Export CSV'),
                         class_="btn btn-outline-primary"
                     ),
                 ),
                 ui.div(
                     ui.input_action_button(
                         "decoder_post_to_gl",
-                        "✓ Post to General Ledger",
+                        ui.HTML('<i class="bi bi-check-lg me-1"></i> Post to General Ledger'),
                         class_="btn btn-success"
                     ),
                     style="text-align: right;"
@@ -103,62 +103,85 @@ def decoder_modal_ui(tx_hash: str):
 def summary_card_ui(title: str, value: str, subtitle: str = "", icon: str = "", theme: str = "light"):
     """Create a summary card component"""
     theme_colors = {
-        "primary": "var(--bs-primary)",
-        "success": "var(--bs-success)",
-        "info": "var(--bs-info)",
-        "warning": "var(--bs-warning)",
-        "danger": "var(--bs-danger)",
-        "light": "var(--bs-gray-600)"
+        "primary": "#0d6efd",
+        "success": "#198754",
+        "info": "#0dcaf0",
+        "warning": "#ffc107",
+        "danger": "#dc3545",
+        "light": "#6c757d"
     }
 
     color = theme_colors.get(theme, theme_colors["light"])
 
+    # Handle icon as HTML if it contains '<' (Bootstrap icon markup)
+    icon_element = ui.HTML(f'<span style="color: {color}; font-size: 1.2rem; margin-right: 0.5rem;">{icon}</span>') if icon else ui.span()
+
     return ui.div(
         ui.div(
-            ui.span(icon + " " if icon else "", style=f"color: {color}; font-size: 1.2rem;"),
-            ui.span(title, style="font-size: 0.875rem; color: var(--bs-secondary); font-weight: 500;"),
-            style="margin-bottom: 0.25rem;"
+            icon_element,
+            ui.span(title, style="font-size: 0.875rem; color: #6c757d; font-weight: 500;"),
+            style="margin-bottom: 0.25rem; display: flex; align-items: center;"
         ),
         ui.div(
             value,
-            style=f"font-size: 1.25rem; font-weight: 600; color: {color};"
+            style=f"font-size: 1.25rem; font-weight: 600; color: #212529;"
         ),
         ui.div(
             subtitle,
-            style="font-size: 0.75rem; color: var(--bs-secondary); margin-top: 0.25rem;"
+            style="font-size: 0.75rem; color: #6c757d; margin-top: 0.25rem;"
         ) if subtitle else ui.div(),
-        style="padding: 1rem; background: var(--bs-gray-100); border-radius: 0.375rem; margin-bottom: 1rem;"
+        style="padding: 1rem; background: #f8f9fa; border-radius: 0.375rem; margin-bottom: 1rem; border: 1px solid #dee2e6;"
     )
 
 
-def role_badge_ui(role: str, address: str):
-    """Create a wallet role badge"""
+def role_badge_ui(role: str, address: str, friendly_name: str = None):
+    """Create a wallet role badge with optional friendly name"""
     role_themes = {
-        "LENDER": ("primary", "🏦"),
-        "BORROWER": ("info", "👤"),
-        "NEW_LENDER": ("success", "🆕"),
-        "OLD_LENDER": ("warning", "📤"),
-        "BORROWER_REPAYING": ("info", "💰"),
-        "LENDER_RECEIVING": ("success", "✅"),
-        "LIQUIDATOR": ("danger", "⚡"),
-        "GAS_PAYER": ("secondary", "⛽")
+        "LENDER": ("primary", '<i class="bi bi-bank"></i>'),
+        "BORROWER": ("info", '<i class="bi bi-person"></i>'),
+        "NEW_LENDER": ("success", '<i class="bi bi-plus-circle"></i>'),
+        "OLD_LENDER": ("warning", '<i class="bi bi-box-arrow-up"></i>'),
+        "BORROWER_REPAYING": ("info", '<i class="bi bi-cash-coin"></i>'),
+        "LENDER_RECEIVING": ("success", '<i class="bi bi-check-circle"></i>'),
+        "LIQUIDATOR": ("danger", '<i class="bi bi-lightning"></i>'),
+        "GAS_PAYER": ("secondary", '<i class="bi bi-fuel-pump"></i>'),
+        "SENDER": ("warning", '<i class="bi bi-box-arrow-up-right"></i>'),
+        "RECEIVER": ("success", '<i class="bi bi-box-arrow-in-down"></i>'),
+        "ETH_SENDER": ("warning", '<i class="bi bi-box-arrow-up-right"></i>'),
+        "ETH_RECEIVER": ("success", '<i class="bi bi-box-arrow-in-down"></i>'),
+        "NFT_SENDER": ("warning", '<i class="bi bi-image"></i>'),
+        "NFT_RECEIVER": ("success", '<i class="bi bi-image"></i>'),
+        "TX_SENDER": ("secondary", '<i class="bi bi-send"></i>'),
+        "DEPOSITOR": ("success", '<i class="bi bi-box-arrow-in-down"></i>'),
+        "WITHDRAWER": ("warning", '<i class="bi bi-box-arrow-up"></i>'),
+        "POOL_DEPOSITOR": ("success", '<i class="bi bi-box-arrow-in-down"></i>'),
+        "POOL_WITHDRAWER": ("warning", '<i class="bi bi-box-arrow-up"></i>')
     }
 
-    theme, icon = role_themes.get(role, ("secondary", "❓"))
+    theme, icon = role_themes.get(role, ("secondary", '<i class="bi bi-question-circle"></i>'))
+
+    # Display friendly name if available, otherwise show shortened address
+    if friendly_name:
+        display_name = friendly_name
+        address_display = f"{address[:6]}...{address[-4:]}"
+    else:
+        display_name = None
+        address_display = f"{address[:6]}...{address[-4:]}"
 
     return ui.div(
-        ui.span(
-            icon + " ",
-            style="margin-right: 0.25rem;"
-        ),
+        ui.HTML(f'{icon} '),
         ui.span(
             role.replace("_", " ").title(),
             class_=f"badge bg-{theme}",
             style="font-size: 0.75rem; padding: 0.35em 0.65em; margin-right: 0.5rem;"
         ),
+        ui.span(
+            friendly_name if friendly_name else "",
+            style="font-weight: 600; margin-right: 0.5rem; color: #212529;"
+        ) if friendly_name else ui.span(),
         ui.code(
-            f"{address[:6]}...{address[-4:]}",
-            style="font-size: 0.75rem; background: var(--bs-gray-200); padding: 0.25rem 0.5rem; border-radius: 0.25rem;"
+            address_display,
+            style="font-size: 0.75rem; background: #e9ecef; padding: 0.25rem 0.5rem; border-radius: 0.25rem; color: #495057;"
         ),
         style="margin-bottom: 0.5rem; display: flex; align-items: center;"
     )
@@ -224,9 +247,10 @@ def journal_entry_card_ui(entry_num: int, description: str, wallet_role: str,
                     f"Tax: {tax_info}" if tax_info else "Tax: Not applicable",
                     style="font-size: 0.8rem; color: var(--bs-secondary);"
                 ),
-                ui.span(
-                    "✅ Balanced" if balanced else "❌ Imbalanced",
-                    style=f"font-size: 0.8rem; font-weight: 600; color: {'var(--bs-success)' if balanced else 'var(--bs-danger)'};"
+                ui.HTML(
+                    f'<span style="font-size: 0.8rem; font-weight: 600; color: {"var(--bs-success)" if balanced else "var(--bs-danger)"};">'
+                    f'<i class="bi bi-{"check-circle" if balanced else "x-circle"} me-1"></i>'
+                    f'{"Balanced" if balanced else "Imbalanced"}</span>'
                 ),
                 style="display: flex; justify-content: space-between; align-items: center;"
             ),
@@ -238,25 +262,25 @@ def journal_entry_card_ui(entry_num: int, description: str, wallet_role: str,
 
 def event_card_ui(event_name: str, event_args: Dict[str, Any]):
     """Create an event card for display"""
-    # Event icons mapping
+    # Event icons mapping (Bootstrap Icons)
     event_icons = {
-        "LoanOfferTaken": "📝",
-        "Repay": "💰",
-        "Refinance": "🔄",
-        "StartAuction": "🔨",
-        "Seize": "⚡",
-        "BuyLocked": "🛒",
-        "Transfer": "➡️"
+        "LoanOfferTaken": '<i class="bi bi-file-earmark-text"></i>',
+        "Repay": '<i class="bi bi-cash-coin"></i>',
+        "Refinance": '<i class="bi bi-arrow-repeat"></i>',
+        "StartAuction": '<i class="bi bi-hammer"></i>',
+        "Seize": '<i class="bi bi-lightning"></i>',
+        "BuyLocked": '<i class="bi bi-cart"></i>',
+        "Transfer": '<i class="bi bi-arrow-right"></i>'
     }
 
-    icon = event_icons.get(event_name, "📋")
+    icon = event_icons.get(event_name, '<i class="bi bi-list-ul"></i>')
 
     return ui.card(
         ui.card_header(
             ui.div(
-                ui.span(icon + " ", style="margin-right: 0.5rem; font-size: 1.2rem;"),
+                ui.HTML(f'{icon} '),
                 ui.strong(event_name),
-                style="display: flex; align-items: center;"
+                style="display: flex; align-items: center; gap: 0.5rem;"
             )
         ),
         ui.div(
@@ -288,7 +312,7 @@ def log_section_ui(title: str, icon: str, content: List, theme: str = "light"):
 
     return ui.div(
         ui.div(
-            ui.span(icon + " ", style=f"font-size: 1.1rem; margin-right: 0.5rem; color: {color};"),
+            ui.HTML(f'<span style="font-size: 1.1rem; margin-right: 0.5rem; color: {color};">{icon}</span>'),
             ui.strong(title, style=f"color: {color}; font-size: 0.95rem;"),
             style="margin-bottom: 0.75rem; display: flex; align-items: center;"
         ),

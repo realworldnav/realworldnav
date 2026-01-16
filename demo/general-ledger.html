@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealWorldNAV - General Ledger | PrinceLLC</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/simplex/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #2563eb;
+        }
+
+        body {
+            min-height: 100vh;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            min-height: 100vh;
+            background: white;
+            border-right: 1px solid #dee2e6;
+            position: fixed;
+            left: 0;
+            top: 0;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .sidebar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sidebar-brand img {
+            height: 32px;
+            width: auto;
+        }
+
+        .client-logo {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .client-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section {
+            margin-top: 1.5rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            color: #495057;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .nav-link.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .nav-link i {
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            margin-bottom: 2rem;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            padding: 1rem 1.5rem;
+            border-radius: 12px 12px 0 0 !important;
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #dee2e6;
+            white-space: nowrap;
+        }
+
+        .table td {
+            vertical-align: middle;
+            font-size: 0.875rem;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f8f9fa;
+        }
+
+        .form-select, .form-control {
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            padding: 0.5rem 1rem;
+        }
+
+        .form-label {
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: #495057;
+        }
+
+        .fund-selector {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .nav-tabs .nav-link {
+            border-radius: 8px 8px 0 0;
+            color: #495057;
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 0.75rem 1.5rem;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: white;
+            border-color: #dee2e6 #dee2e6 white;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .nav-tabs {
+            border-bottom: 1px solid #dee2e6;
+            margin-bottom: 1.5rem;
+        }
+
+        .text-success { color: #28a745 !important; }
+        .text-danger { color: #dc3545 !important; }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+            border-radius: 8px;
+        }
+
+        .monospace {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+
+        .filter-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .table-container {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .account-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .account-asset { background: #cce5ff; color: #004085; }
+        .account-liability { background: #f8d7da; color: #721c24; }
+        .account-equity { background: #d4edda; color: #155724; }
+        .account-revenue { background: #d1ecf1; color: #0c5460; }
+        .account-expense { background: #fff3cd; color: #856404; }
+
+        .je-number {
+            font-family: monospace;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+
+        .amount-cell {
+            text-align: right;
+            font-family: monospace;
+        }
+
+        .edit-mode-toggle {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .column-selector {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .column-checkbox {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .column-checkbox input {
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-brand">
+            <img src="../static/rwn_logo.png" alt="RealWorldNAV"> RealWorldNAV
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Client</label>
+            <select class="form-select">
+                <option selected>PrinceLLC</option>
+                <option>Drip Capital</option>
+            </select>
+        </div>
+
+        <div class="text-center mb-3">
+            <div class="client-logo mx-auto">PLC</div>
+            <div class="client-name">PrinceLLC</div>
+        </div>
+
+        <div class="fund-selector">
+            <label class="form-label">Select Fund</label>
+            <select class="form-select">
+                <option selected>Prince Growth Fund I</option>
+                <option>Prince Income Fund II</option>
+                <option>Prince Ventures III</option>
+            </select>
+        </div>
+
+        <div class="nav-section">
+            <a href="index.html" class="nav-link">
+                <i class="bi bi-house-door"></i> Home
+            </a>
+            <a href="fund-accounting.html" class="nav-link">
+                <i class="bi bi-calculator"></i> Fund Accounting
+            </a>
+            <a href="investments.html" class="nav-link">
+                <i class="bi bi-briefcase"></i> Investments
+            </a>
+            <a href="general-ledger.html" class="nav-link active">
+                <i class="bi bi-journal-text"></i> General Ledger
+            </a>
+            <a href="financial-reporting.html" class="nav-link">
+                <i class="bi bi-file-earmark-bar-graph"></i> Financial Reporting
+            </a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">General Ledger</h1>
+            <p class="page-subtitle">Prince Growth Fund I - Journal Entries & Chart of Accounts</p>
+        </div>
+
+        <!-- Tabs -->
+        <ul class="nav nav-tabs">
+            <li class="nav-item">
+                <a class="nav-link active" href="#">Journal Entries</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Chart of Accounts</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="crypto-tracker.html">Crypto Tracker</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">GL Analytics</a>
+            </li>
+        </ul>
+
+        <!-- Filters -->
+        <div class="filter-card">
+            <div class="row align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">GL Account</label>
+                    <select class="form-select">
+                        <option>All Accounts</option>
+                        <option>1000 - Cash & Equivalents</option>
+                        <option>1100 - Crypto Assets</option>
+                        <option>1200 - NFT Holdings</option>
+                        <option>2000 - Liabilities</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Wallet</label>
+                    <select class="form-select">
+                        <option>All Wallets</option>
+                        <option>0x7a2...f4c9 (Main)</option>
+                        <option>0x3b1...8e2a (Trading)</option>
+                        <option>0x9c4...2d7f (Custody)</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Date Range</label>
+                    <input type="text" class="form-control" value="Jan 1, 2025 - Jan 5, 2025">
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-primary me-2"><i class="bi bi-funnel"></i> Apply</button>
+                    <button class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Column Selector -->
+        <div class="column-selector">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong>Display Columns:</strong>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary me-2">Apply Columns</button>
+                    <button class="btn btn-sm btn-outline-secondary">Reset</button>
+                </div>
+            </div>
+            <div>
+                <label class="column-checkbox"><input type="checkbox" checked> JE Number</label>
+                <label class="column-checkbox"><input type="checkbox" checked> Date</label>
+                <label class="column-checkbox"><input type="checkbox" checked> Account</label>
+                <label class="column-checkbox"><input type="checkbox" checked> Description</label>
+                <label class="column-checkbox"><input type="checkbox" checked> Debit</label>
+                <label class="column-checkbox"><input type="checkbox" checked> Credit</label>
+                <label class="column-checkbox"><input type="checkbox" checked> Wallet</label>
+                <label class="column-checkbox"><input type="checkbox"> TX Hash</label>
+                <label class="column-checkbox"><input type="checkbox"> Block</label>
+            </div>
+        </div>
+
+        <!-- Edit Mode Toggle -->
+        <div class="edit-mode-toggle">
+            <div>
+                <span class="fw-bold">Edit Mode:</span>
+                <span class="ms-2 text-muted">Select rows to edit journal entries</span>
+            </div>
+            <div>
+                <div class="form-check form-switch d-inline-block me-3">
+                    <input class="form-check-input" type="checkbox" id="editModeToggle">
+                    <label class="form-check-label" for="editModeToggle">Enable Editing</label>
+                </div>
+                <button class="btn btn-sm btn-success me-2" disabled><i class="bi bi-check"></i> Save</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled><i class="bi bi-x"></i> Undo</button>
+            </div>
+        </div>
+
+        <!-- GL Table -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-table"></i> Journal Entries</span>
+                <div>
+                    <span class="badge bg-secondary me-2">247 entries</span>
+                    <button class="btn btn-sm btn-outline-success me-2"><i class="bi bi-plus"></i> New Entry</button>
+                    <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-download"></i> Export</button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-container">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>JE #</th>
+                                <th>Date</th>
+                                <th>Account</th>
+                                <th>Description</th>
+                                <th class="text-end">Debit</th>
+                                <th class="text-end">Credit</th>
+                                <th>Wallet</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="je-number">JE-2025-0147</td>
+                                <td>Jan 5, 2025</td>
+                                <td>
+                                    <span class="account-badge account-asset">1100</span>
+                                    Crypto Assets - ETH
+                                </td>
+                                <td>ETH Purchase - Coinbase Prime</td>
+                                <td class="amount-cell">$125,000.00</td>
+                                <td class="amount-cell">-</td>
+                                <td class="monospace">0x7a2...f4c9</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0147</td>
+                                <td>Jan 5, 2025</td>
+                                <td>
+                                    <span class="account-badge account-asset">1000</span>
+                                    Cash & Equivalents
+                                </td>
+                                <td>ETH Purchase - Coinbase Prime</td>
+                                <td class="amount-cell">-</td>
+                                <td class="amount-cell">$125,000.00</td>
+                                <td class="monospace">0x7a2...f4c9</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0146</td>
+                                <td>Jan 4, 2025</td>
+                                <td>
+                                    <span class="account-badge account-asset">1000</span>
+                                    Cash & Equivalents
+                                </td>
+                                <td>LP Capital Contribution - Smith Family Trust</td>
+                                <td class="amount-cell">$500,000.00</td>
+                                <td class="amount-cell">-</td>
+                                <td class="monospace">0x3b1...8e2a</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0146</td>
+                                <td>Jan 4, 2025</td>
+                                <td>
+                                    <span class="account-badge account-equity">3100</span>
+                                    Partners' Capital - Class A
+                                </td>
+                                <td>LP Capital Contribution - Smith Family Trust</td>
+                                <td class="amount-cell">-</td>
+                                <td class="amount-cell">$500,000.00</td>
+                                <td class="monospace">0x3b1...8e2a</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0145</td>
+                                <td>Jan 3, 2025</td>
+                                <td>
+                                    <span class="account-badge account-asset">1300</span>
+                                    Loan Receivables
+                                </td>
+                                <td>NFT Loan Interest Accrual - Arcade Protocol</td>
+                                <td class="amount-cell">$8,450.00</td>
+                                <td class="amount-cell">-</td>
+                                <td class="monospace">0x9c4...2d7f</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0145</td>
+                                <td>Jan 3, 2025</td>
+                                <td>
+                                    <span class="account-badge account-revenue">4100</span>
+                                    Interest Income
+                                </td>
+                                <td>NFT Loan Interest Accrual - Arcade Protocol</td>
+                                <td class="amount-cell">-</td>
+                                <td class="amount-cell">$8,450.00</td>
+                                <td class="monospace">0x9c4...2d7f</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0144</td>
+                                <td>Jan 2, 2025</td>
+                                <td>
+                                    <span class="account-badge account-expense">5100</span>
+                                    Management Fees
+                                </td>
+                                <td>Management Fee - Q4 2024</td>
+                                <td class="amount-cell">$62,000.00</td>
+                                <td class="amount-cell">-</td>
+                                <td class="monospace">0x7a2...f4c9</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0144</td>
+                                <td>Jan 2, 2025</td>
+                                <td>
+                                    <span class="account-badge account-liability">2100</span>
+                                    Accrued Expenses
+                                </td>
+                                <td>Management Fee - Q4 2024</td>
+                                <td class="amount-cell">-</td>
+                                <td class="amount-cell">$62,000.00</td>
+                                <td class="monospace">0x7a2...f4c9</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0143</td>
+                                <td>Jan 1, 2025</td>
+                                <td>
+                                    <span class="account-badge account-asset">1100</span>
+                                    Crypto Assets - ETH
+                                </td>
+                                <td>Staking Rewards - Ethereum</td>
+                                <td class="amount-cell">$12,340.00</td>
+                                <td class="amount-cell">-</td>
+                                <td class="monospace">0x7a2...f4c9</td>
+                            </tr>
+                            <tr>
+                                <td class="je-number">JE-2025-0143</td>
+                                <td>Jan 1, 2025</td>
+                                <td>
+                                    <span class="account-badge account-revenue">4200</span>
+                                    Staking Income
+                                </td>
+                                <td>Staking Rewards - Ethereum</td>
+                                <td class="amount-cell">-</td>
+                                <td class="amount-cell">$12,340.00</td>
+                                <td class="monospace">0x7a2...f4c9</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">Period Summary</div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <tbody>
+                                <tr>
+                                    <td>Total Debits</td>
+                                    <td class="text-end fw-bold">$707,790.00</td>
+                                </tr>
+                                <tr>
+                                    <td>Total Credits</td>
+                                    <td class="text-end fw-bold">$707,790.00</td>
+                                </tr>
+                                <tr class="table-success">
+                                    <td>Balance Check</td>
+                                    <td class="text-end fw-bold text-success"><i class="bi bi-check-circle"></i> Balanced</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">Entries by Account Type</div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <tbody>
+                                <tr>
+                                    <td><span class="account-badge account-asset">Asset</span></td>
+                                    <td class="text-end">142 entries</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="account-badge account-liability">Liability</span></td>
+                                    <td class="text-end">28 entries</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="account-badge account-equity">Equity</span></td>
+                                    <td class="text-end">35 entries</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="account-badge account-revenue">Revenue</span></td>
+                                    <td class="text-end">24 entries</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="account-badge account-expense">Expense</span></td>
+                                    <td class="text-end">18 entries</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

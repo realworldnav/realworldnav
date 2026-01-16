@@ -8,9 +8,43 @@ import pandas as pd
 from typing import Dict, Any, List
 from .blur_auto_decoder import blur_auto_decoder
 from .decoder_modal_ui import summary_card_ui, role_badge_ui, event_card_ui, journal_entry_card_ui, log_section_ui, metadata_row_ui, raw_log_ui
+from ...s3_utils import load_WALLET_file
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Cache wallet mappings for friendly name lookups
+_wallet_name_cache = None
+
+def _get_wallet_name_mapping() -> dict:
+    """Load and cache wallet name mappings from S3"""
+    global _wallet_name_cache
+    if _wallet_name_cache is None:
+        try:
+            df = load_WALLET_file()
+            if df is not None and not df.empty:
+                # Build mapping from wallet address to friendly name
+                # Normalize addresses to lowercase for consistent lookups
+                _wallet_name_cache = {}
+                for _, row in df.iterrows():
+                    address = str(row.get('wallet_address', row.get('address', ''))).lower().strip()
+                    name = str(row.get('wallet_name', row.get('name', row.get('friendly_name', '')))).strip()
+                    if address and name:
+                        _wallet_name_cache[address] = name
+                logger.info(f"Loaded {len(_wallet_name_cache)} wallet name mappings from S3")
+            else:
+                _wallet_name_cache = {}
+        except Exception as e:
+            logger.warning(f"Could not load wallet names from S3: {e}")
+            _wallet_name_cache = {}
+    return _wallet_name_cache
+
+def get_wallet_friendly_name(address: str) -> str:
+    """Get friendly name for a wallet address, or None if not found"""
+    if not address:
+        return None
+    mapping = _get_wallet_name_mapping()
+    return mapping.get(address.lower().strip())
 
 
 def register_decoder_modal_outputs(input, output, session, selected_fund):
@@ -53,7 +87,7 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
         if result.get("status") == "error":
             return ui.div(
                 ui.div(
-                    ui.span("❌ ", style="font-size: 1.5rem;"),
+                    ui.HTML('<i class="bi bi-x-circle" style="font-size: 1.5rem; color: var(--bs-danger);"></i>'),
                     ui.h5("Decoding Error", style="display: inline; margin-left: 0.5rem;"),
                     style="margin-bottom: 1rem;"
                 ),
@@ -69,28 +103,28 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
                     "Block Number",
                     f"#{result.get('block', 'N/A'):,}",
                     result.get('timestamp', ''),
-                    "🔗",
+                    '<i class="bi bi-link-45deg"></i>',
                     "primary"
                 ),
                 summary_card_ui(
                     "Function Called",
                     result.get('function', 'Unknown'),
                     "Decoded method",
-                    "⚙️",
+                    '<i class="bi bi-gear"></i>',
                     "info"
                 ),
                 summary_card_ui(
                     "ETH Price",
                     f"${result.get('eth_price', 0):,.2f}",
                     "At block time",
-                    "💵",
+                    '<i class="bi bi-currency-dollar"></i>',
                     "success"
                 ),
                 summary_card_ui(
                     "Gas Used",
                     f"{result.get('gas_used', 0):,}",
                     f"{result.get('value', 0):.6f} ETH value",
-                    "⛽",
+                    '<i class="bi bi-fuel-pump"></i>',
                     "warning"
                 ),
                 col_widths=[3, 3, 3, 3]
@@ -101,13 +135,13 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
                 ui.h5("Wallet Roles", style="margin-bottom: 1rem; font-weight: 600;"),
                 ui.div(
                     *[
-                        role_badge_ui(role, address)
+                        role_badge_ui(role, address, get_wallet_friendly_name(address))
                         for address, role in result.get('wallet_roles', {}).items()
                     ] if result.get('wallet_roles') else [
                         ui.p("No fund wallet involvement detected", class_="text-muted")
                     ]
                 ),
-                style="margin-top: 2rem; padding: 1rem; background: var(--bs-gray-100); border-radius: 0.375rem;"
+                style="margin-top: 2rem; padding: 1rem; background: #f8f9fa; border-radius: 0.375rem;"
             ),
 
             # Quick stats
@@ -115,21 +149,21 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
                 ui.h5("Decoding Results", style="margin: 2rem 0 1rem 0; font-weight: 600;"),
                 ui.layout_columns(
                     ui.div(
-                        ui.div("📝 Events Decoded", style="font-size: 0.875rem; color: var(--bs-secondary);"),
+                        ui.HTML('<div style="font-size: 0.875rem; color: var(--bs-secondary);"><i class="bi bi-file-text me-1"></i>Events Decoded</div>'),
                         ui.div(
                             str(result.get('summary', {}).get('total_events', 0)),
                             style="font-size: 2rem; font-weight: 600; color: var(--bs-primary);"
                         )
                     ),
                     ui.div(
-                        ui.div("💰 Journal Entries", style="font-size: 0.875rem; color: var(--bs-secondary);"),
+                        ui.HTML('<div style="font-size: 0.875rem; color: var(--bs-secondary);"><i class="bi bi-cash-coin me-1"></i>Journal Entries</div>'),
                         ui.div(
                             str(result.get('summary', {}).get('total_journal_entries', 0)),
                             style="font-size: 2rem; font-weight: 600; color: var(--bs-success);"
                         )
                     ),
                     ui.div(
-                        ui.div("✅ Balance Check", style="font-size: 0.875rem; color: var(--bs-secondary);"),
+                        ui.HTML('<div style="font-size: 0.875rem; color: var(--bs-secondary);"><i class="bi bi-check-circle me-1"></i>Balance Check</div>'),
                         ui.div(
                             "Balanced" if result.get('summary', {}).get('all_balanced', True) else "Imbalanced",
                             style=f"font-size: 1.5rem; font-weight: 600; color: {'var(--bs-success)' if result.get('summary', {}).get('all_balanced', True) else 'var(--bs-danger)'};"
@@ -205,7 +239,7 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
         if not journal_entries:
             return ui.div(
                 ui.div(
-                    ui.span("ℹ️ ", style="font-size: 1.5rem;"),
+                    ui.HTML('<i class="bi bi-info-circle" style="font-size: 1.5rem; color: var(--bs-info);"></i>'),
                     ui.p(
                         "No journal entries generated. This transaction may not involve fund wallets or may not require accounting entries.",
                         class_="text-muted",
@@ -408,8 +442,8 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
 
         # Transaction Metadata Section
         metadata_section = log_section_ui(
-            "📋 Transaction Metadata",
-            "📋",
+            '<i class="bi bi-list-ul me-1"></i> Transaction Metadata',
+            '<i class="bi bi-list-ul"></i>',
             [
                 metadata_row_ui("Transaction Hash", result.get('tx_hash', 'N/A'), is_code=True),
                 metadata_row_ui("Block Number", f"{result.get('block', 'N/A'):,}" if result.get('block') else 'N/A'),
@@ -441,8 +475,8 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
             func_params_content = [ui.p("No parameters", class_="text-muted", style="font-size: 0.875rem;")]
 
         function_section = log_section_ui(
-            f"⚙️ Function Call: {func_name}",
-            "⚙️",
+            f'<i class="bi bi-gear me-1"></i> Function Call: {func_name}',
+            '<i class="bi bi-gear"></i>',
             func_params_content,
             theme="info"
         )
@@ -473,8 +507,8 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
             events_content = [ui.p("No events decoded", class_="text-muted", style="font-size: 0.875rem;")]
 
         events_section = log_section_ui(
-            f"📡 Decoded Events ({len(events)})",
-            "📡",
+            f'<i class="bi bi-broadcast me-1"></i> Decoded Events ({len(events)})',
+            '<i class="bi bi-broadcast"></i>',
             events_content,
             theme="success"
         )
@@ -497,8 +531,8 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
             pool_content = [ui.p("No pool transfers", class_="text-muted", style="font-size: 0.875rem;")]
 
         pool_section = log_section_ui(
-            f"🏊 Pool Transfers ({len(pool_transfers)})",
-            "🏊",
+            f'<i class="bi bi-arrow-left-right me-1"></i> Pool Transfers ({len(pool_transfers)})',
+            '<i class="bi bi-arrow-left-right"></i>',
             pool_content,
             theme="warning"
         )
@@ -508,11 +542,14 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
         roles_content = []
         if wallet_roles:
             for wallet, role in wallet_roles.items():
+                friendly_name = get_wallet_friendly_name(wallet)
+                display_name = f"{friendly_name} " if friendly_name else ""
                 roles_content.append(
                     ui.div(
-                        ui.code(wallet, style="font-size: 0.85rem; background: var(--bs-gray-200); padding: 0.25rem 0.5rem; border-radius: 0.25rem;"),
-                        ui.span(" → ", style="margin: 0 0.5rem; color: var(--bs-secondary);"),
-                        ui.span(role, style="font-weight: 600; color: var(--bs-primary);"),
+                        ui.span(display_name, style="font-weight: 600; color: #0d6efd; margin-right: 0.5rem;") if friendly_name else ui.span(),
+                        ui.code(wallet, style="font-size: 0.85rem; background: #e9ecef; padding: 0.25rem 0.5rem; border-radius: 0.25rem;"),
+                        ui.span(" → ", style="margin: 0 0.5rem; color: #6c757d;"),
+                        ui.span(role, style="font-weight: 600; color: #0d6efd;"),
                         style="padding: 0.4rem 0;"
                     )
                 )
@@ -520,8 +557,8 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
             roles_content = [ui.p("No wallet roles identified", class_="text-muted", style="font-size: 0.875rem;")]
 
         roles_section = log_section_ui(
-            "👥 Wallet Roles",
-            "👥",
+            '<i class="bi bi-people me-1"></i> Wallet Roles',
+            '<i class="bi bi-people"></i>',
             roles_content,
             theme="primary"
         )
@@ -529,14 +566,14 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
         # Summary Stats
         summary = result.get('summary', {})
         stats_section = log_section_ui(
-            "📊 Decoding Summary",
-            "📊",
+            '<i class="bi bi-bar-chart me-1"></i> Decoding Summary',
+            '<i class="bi bi-bar-chart"></i>',
             [
                 metadata_row_ui("Total Events Decoded", str(summary.get('total_events', 0))),
                 metadata_row_ui("Pool Transfers", str(len(pool_transfers))),
                 metadata_row_ui("Journal Entries Created", str(summary.get('total_journal_entries', 0))),
-                metadata_row_ui("All Entries Balanced", "✅ Yes" if summary.get('all_balanced') else "❌ No"),
-                metadata_row_ui("Involves Fund Wallets", "✅ Yes" if summary.get('involves_fund_wallets') else "❌ No"),
+                metadata_row_ui("All Entries Balanced", "Yes" if summary.get('all_balanced') else "No"),
+                metadata_row_ui("Involves Fund Wallets", "Yes" if summary.get('involves_fund_wallets') else "No"),
             ],
             theme="light"
         )

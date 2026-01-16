@@ -9,7 +9,7 @@ from .trial_balance import trial_balance_ui, register_outputs as tb_register_out
 from .assets_liabilities import assets_liabilities_ui, register_outputs as al_register_outputs
 from .operating_expenses import operating_expenses_ui, register_outputs as oe_register_outputs
 from .management_fee import management_fee_ui, register_outputs as mf_register_outputs
-from .excel_export_new import generate_excel_report
+from .excel_export import generate_excel_report
 
 def register_outputs(output, input, selected_fund, selected_report_date):
     """Register all financial reporting outputs"""

@@ -125,33 +125,33 @@ class TransactionRuleEngine:
         # Debug hash to track
         debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
         
-        logger.info(f"🚀🚀🚀 RULE ENGINE: Starting rule processing for {len(transactions)} transactions 🚀🚀🚀")
+        logger.info(f"[RULE]RULE ENGINE: Starting rule processing for {len(transactions)} transactions 🚀🚀🚀")
         self.rule_stats['total_processed'] = len(transactions)
         
         # Check if debug hash is in the transactions
         debug_tx = None
-        logger.info(f"🚀🚀🚀 RULE ENGINE: Starting with {len(transactions)} transactions, searching for {debug_hash} 🚀🚀🚀")
+        logger.info(f"[RULE]RULE ENGINE: Starting with {len(transactions)} transactions, searching for {debug_hash} 🚀🚀🚀")
         
         # List all transaction hashes for debugging
         all_hashes = [tx.get('tx_hash', 'NO_HASH') for tx in transactions]
-        logger.info(f"🚀 RULE ENGINE: All transaction hashes: {all_hashes[:10]}..." if len(all_hashes) > 10 else f"🚀 RULE ENGINE: All transaction hashes: {all_hashes}")
+        logger.info(f"[RULE]RULE ENGINE: All transaction hashes: {all_hashes[:10]}..." if len(all_hashes) > 10 else f"[RULE]RULE ENGINE: All transaction hashes: {all_hashes}")
         
         for tx in transactions:
             tx_hash = tx.get('tx_hash', '').lower()
             if tx_hash == debug_hash.lower():
                 debug_tx = tx
-                logger.info(f"🚀🚀🚀 RULE ENGINE: DEBUG HASH FOUND! {debug_hash} 🚀🚀🚀")
-                logger.info(f"🚀 Initial transaction data: {debug_tx}")
+                logger.info(f"[RULE]RULE ENGINE: DEBUG HASH FOUND! {debug_hash} 🚀🚀🚀")
+                logger.info(f"[RULE]Initial transaction data: {debug_tx}")
                 break
         
         if not debug_tx:
-            logger.info(f"🚀 RULE ENGINE: DEBUG HASH NOT FOUND: {debug_hash} not in {len(transactions)} transactions")
+            logger.info(f"[RULE]RULE ENGINE: DEBUG HASH NOT FOUND: {debug_hash} not in {len(transactions)} transactions")
             # Check for partial matches
             partial_matches = [tx.get('tx_hash', '') for tx in transactions if debug_hash[:20].lower() in tx.get('tx_hash', '').lower()]
             if partial_matches:
-                logger.info(f"🚀 RULE ENGINE: Partial matches found: {partial_matches}")
+                logger.info(f"[RULE]RULE ENGINE: Partial matches found: {partial_matches}")
             else:
-                logger.info(f"🚀 RULE ENGINE: No partial matches found for debug hash")
+                logger.info(f"[RULE]RULE ENGINE: No partial matches found for debug hash")
         
         # Convert to DataFrame for easier processing
         df = pd.DataFrame(transactions)
@@ -167,14 +167,14 @@ class TransactionRuleEngine:
         def debug_after_rule(df, rule_name):
             debug_rows = df[df['tx_hash'].str.lower() == debug_hash.lower()]
             if not debug_rows.empty:
-                logger.info(f"🚀🚀 After {rule_name}: FOUND {len(debug_rows)} rows for debug hash! 🚀🚀")
+                logger.info(f"[RULE]After {rule_name}: FOUND {len(debug_rows)} rows for debug hash! 🚀🚀")
                 for idx, row in debug_rows.iterrows():
-                    logger.info(f"🚀 {rule_name} - Row {idx}: side={row.get('side')}, qty={row.get('qty')}, asset={row.get('asset')}, from={row.get('from_address')}, to={row.get('to_address')}")
+                    logger.info(f"[RULE]{rule_name} - Row {idx}: side={row.get('side')}, qty={row.get('qty')}, asset={row.get('asset')}, from={row.get('from_address')}, to={row.get('to_address')}")
             else:
-                logger.info(f"🚀 After {rule_name}: DEBUG HASH NOT FOUND in {len(df)} rows")
+                logger.info(f"[RULE]After {rule_name}: DEBUG HASH NOT FOUND in {len(df)} rows")
                 # Show sample of what hashes we do have
                 sample_hashes = df['tx_hash'].head(3).tolist() if 'tx_hash' in df.columns and not df.empty else []
-                logger.info(f"🚀 Sample hashes after {rule_name}: {sample_hashes}")
+                logger.info(f"[RULE]Sample hashes after {rule_name}: {sample_hashes}")
         
         df = self._apply_rule_0_wallet_filtering(df)
         debug_after_rule(df, "Rule 0 - Wallet Filtering")
@@ -206,14 +206,14 @@ class TransactionRuleEngine:
         # Final debug for our tracked hash
         final_debug_txs = [tx for tx in result if tx.get('tx_hash', '').lower() == debug_hash.lower()]
         if final_debug_txs:
-            logger.info(f"🚀🚀🚀 RULE ENGINE FINAL RESULT: FOUND {len(final_debug_txs)} transactions for debug hash! 🚀🚀🚀")
+            logger.info(f"[RULE]RULE ENGINE FINAL RESULT: FOUND {len(final_debug_txs)} transactions for debug hash! 🚀🚀🚀")
             for i, tx in enumerate(final_debug_txs):
-                logger.info(f"🚀 Final TX {i}: side={tx.get('side')}, qty={tx.get('qty')}, asset={tx.get('asset')}, from={tx.get('from_address')}, to={tx.get('to_address')}")
+                logger.info(f"[RULE]Final TX {i}: side={tx.get('side')}, qty={tx.get('qty')}, asset={tx.get('asset')}, from={tx.get('from_address')}, to={tx.get('to_address')}")
         else:
-            logger.info(f"🚀 RULE ENGINE FINAL RESULT: DEBUG HASH NOT FOUND in {len(result)} final transactions")
+            logger.info(f"[RULE]RULE ENGINE FINAL RESULT: DEBUG HASH NOT FOUND in {len(result)} final transactions")
             # Show sample of final hashes
             sample_final_hashes = [tx.get('tx_hash', 'NO_HASH') for tx in result[:3]]
-            logger.info(f"🚀 Sample final hashes: {sample_final_hashes}")
+            logger.info(f"[RULE]Sample final hashes: {sample_final_hashes}")
         
         logger.info(f"Rule processing complete: {len(result)} transactions after rules")
         self._log_rule_stats()
@@ -521,7 +521,7 @@ class TransactionRuleEngine:
         if df.empty:
             return df
         
-        logger.info(f"🚀🚀🚀 RULE 7 STARTING: Processing {len(df)} transactions for direction-based correction 🚀🚀🚀")
+        logger.info(f"[RULE]RULE 7 STARTING: Processing {len(df)} transactions for direction-based correction 🚀🚀🚀")
         
         correction_count = 0
         debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
@@ -547,7 +547,7 @@ class TransactionRuleEngine:
                 if wallet_addr:
                     known_wallets.add(wallet_addr.lower())
         
-        logger.info(f"🚀 RULE 7: Known fund wallets: {known_wallets}")
+        logger.info(f"[RULE]RULE 7: Known fund wallets: {known_wallets}")
         
         # Identify all intercompany transfers in the dataset
         intercompany_transfers = []
@@ -570,12 +570,12 @@ class TransactionRuleEngine:
                     'qty': row.get('qty', 0)
                 })
         
-        logger.info(f"🚀 RULE 7: Found {len(intercompany_transfers)} intercompany transfer records")
-        logger.info(f"🚀 RULE 7: Intercompany transfers: {intercompany_transfers}")
-        logger.info(f"🚀 RULE 7: Looking for debug hash {debug_hash} in dataset...")
-        logger.info(f"🚀 RULE 7: Debug hash in dataset: {debug_hash in all_hashes}")
+        logger.info(f"[RULE]RULE 7: Found {len(intercompany_transfers)} intercompany transfer records")
+        logger.info(f"[RULE]RULE 7: Intercompany transfers: {intercompany_transfers}")
+        logger.info(f"[RULE]RULE 7: Looking for debug hash {debug_hash} in dataset...")
+        logger.info(f"[RULE]RULE 7: Debug hash in dataset: {debug_hash in all_hashes}")
         if debug_hash not in all_hashes:
-            logger.info(f"🚀 RULE 7: Sample hashes in dataset: {list(all_hashes)[:5]}")
+            logger.info(f"[RULE]RULE 7: Sample hashes in dataset: {list(all_hashes)[:5]}")
         
         for idx, row in df.iterrows():
             tx_hash = row.get('tx_hash', '').lower()
@@ -719,7 +719,7 @@ class TransactionRuleEngine:
         self.rule_stats['rule_7_applied'] = correction_count
         
         # Final summary
-        logger.info(f"🚀🚀🚀 RULE 7 COMPLETE: Applied {correction_count} corrections to {len(df)} transactions 🚀🚀🚀")
+        logger.info(f"[RULE]RULE 7 COMPLETE: Applied {correction_count} corrections to {len(df)} transactions 🚀🚀🚀")
         
         # Show final state of any intercompany transfers
         final_intercompany = []
@@ -740,9 +740,9 @@ class TransactionRuleEngine:
                 })
         
         if final_intercompany:
-            logger.info(f"🚀 RULE 7 FINAL: Intercompany transfers after processing: {final_intercompany}")
+            logger.info(f"[RULE]RULE 7 FINAL: Intercompany transfers after processing: {final_intercompany}")
         else:
-            logger.info(f"🚀 RULE 7 FINAL: No intercompany transfers found in dataset")
+            logger.info(f"[RULE]RULE 7 FINAL: No intercompany transfers found in dataset")
         
         if correction_count > 0:
             logger.info(f"Rule 7: Applied direction-based corrections to {correction_count} transactions")

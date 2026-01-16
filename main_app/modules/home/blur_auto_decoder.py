@@ -282,6 +282,7 @@ class BlurAutoDecoder:
         self.positions: Dict[int, LoanPosition] = {}
         self.journal_entries: List[JournalEntry] = []
         self.contracts_cache = {}
+        self.decode_count = 0  # Counter for decoded transactions
 
         # Chart of Accounts
         self.accounts = {
@@ -457,7 +458,9 @@ class BlurAutoDecoder:
             # Store in cache
             self.decoded_cache[tx_hash] = result
 
-            logger.info(f"Decoded transaction {tx_hash[:10]}...: {result.get('tx_type', 'UNKNOWN')}")
+            # Increment counter (logging happens in blockchain_listener)
+            self.decode_count += 1
+            logger.debug(f"Decoded #{self.decode_count}: {result.get('tx_type', 'UNKNOWN')}")
             return result
 
         except Exception as e:

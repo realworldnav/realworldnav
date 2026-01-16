@@ -4,15 +4,13 @@ Blockchain Configuration Module
 Contains all blockchain-related constants, configurations, and settings
 for Web3 integration with Ethereum mainnet.
 """
-
+import os
 from decimal import Decimal
 
-# Infura API Configuration
-INFURA_URL = "https://mainnet.infura.io/v3/16f12641c1db46beb60e95cf4c88cbe1"
-INFURA_API_KEY = "16f12641c1db46beb60e95cf4c88cbe1"
-
-# Etherscan API Configuration (for fallback or additional data)
-ETHERSCAN_API_KEY = "P13CVTCP43NWU9GX5D9VBA2QMUTJDDS941"
+# API Configuration (from environment variables)
+INFURA_API_KEY = os.environ.get("INFURA_API_KEY", "")
+INFURA_URL = f"https://mainnet.infura.io/v3/{INFURA_API_KEY}"
+ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
 ETHERSCAN_BASE_URL = "https://api.etherscan.io/api"
 
 # Event Topic0 Hash Mappings

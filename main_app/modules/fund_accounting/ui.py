@@ -95,7 +95,7 @@ def pcap_ui():
                         4,
                         ui.download_button(
                             "download_pcap_pdf",
-                            "📄 Download PDF",
+                            ui.HTML('<i class="bi bi-file-earmark-pdf me-1"></i> Download PDF'),
                             class_="btn-primary w-100 mt-3"
                         )
                     ),
@@ -103,7 +103,7 @@ def pcap_ui():
                         4,
                         ui.download_button(
                             "download_pcap_json",
-                            "📊 Download JSON Data",
+                            "Download JSON Data",
                             class_="btn-info w-100 mt-3"
                         )
                     ),
@@ -111,7 +111,7 @@ def pcap_ui():
                         4,
                         ui.input_action_button(
                             "generate_all_pdfs",
-                            "📚 Generate All LP PDFs",
+                            "Generate All LP PDFs",
                             class_="btn-secondary w-100 mt-3"
                         )
                     )

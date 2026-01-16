@@ -320,7 +320,7 @@ def register_cryptocurrency_portfolio_outputs(output: Outputs, input: Inputs, se
         except Exception as e:
             print(f"Error in cryptocurrency portfolio summary: {e}")
             return ui.tags.div(
-                ui.tags.div("⚠️", class_="empty-icon"),
+                ui.HTML('<i class="bi bi-exclamation-triangle" style="font-size: 2rem; color: var(--bs-warning);"></i>'),
                 ui.tags.h5("Error Loading Summary", class_="mb-2"),
                 ui.tags.p("Unable to load cryptocurrency portfolio data", class_="text-muted"),
                 class_="empty-state"

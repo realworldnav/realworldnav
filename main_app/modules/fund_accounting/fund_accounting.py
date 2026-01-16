@@ -705,13 +705,13 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
         if currency == 'ETH':
             return f"{amount:,.6f} ETH"
             print("\n=== Data Source Check ===")
-            print(f"✓ GL Data: {len(gl_df)} records")
+            print(f"GL Data: {len(gl_df)} records")
             
             # TODO: Add these data sources when available
-            print("⚠ LP Commitments: Not loaded (would contain commitment amounts, terms)")
-            print("⚠ COA Data: Not loaded (would help classify accounts)")
-            print("⚠ Master TB: Not loaded (would provide additional balances)")
-            print("⚠ Wallet Mappings: Not loaded (would map crypto addresses)")
+            print("WARN:LP Commitments: Not loaded (would contain commitment amounts, terms)")
+            print("WARN:COA Data: Not loaded (would help classify accounts)")
+            print("WARN:Master TB: Not loaded (would provide additional balances)")
+            print("WARN:Wallet Mappings: Not loaded (would map crypto addresses)")
             
             # Create date range with proper timezone handling
             from .PCAP.excess import ensure_timezone_aware
@@ -1025,7 +1025,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
             )
         
         return ui.div(
-            ui.p(f"✅ PCAP report generated successfully"),
+            ui.p(ui.HTML('<i class="bi bi-check-circle me-1"></i>PCAP report generated successfully')),
             ui.p(f"As of: {summary.get('as_of_date', 'N/A')}"),
             ui.p(f"Currency: {summary.get('currency', 'N/A')}"),
             ui.p(f"Limited Partners: {summary.get('num_lps', 0)}"),

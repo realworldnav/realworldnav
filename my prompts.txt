@@ -1,0 +1,6 @@
+we need to channel the decoding engines here & 'c:\Users\charl\Documents\GitHub\realworldnav\decoding engines\realworld_nav_production_code_v1.ipynb' to be able to successfully process each hash picked up by the listeber. i      
+  want to revamp how we show decoding. in the home page, instead of analytics tab, lets replace it with Decoded Transactions. itll process and show detail for each transaction in a concise and efficient way with the ability to     
+  click each one and show more information. in that file i showed you, focus on the actual final decoding code, theres A LOT of extra stuff. work through it methodically and ASK ME LOTS OF QUESTIONS. here is the overall flow       
+  i want to accomplish big picture. listener grabs every hash related to my clients wallets, transactions all come in, decoding engine automatically detects through the abi detection code in that same file and figures out          
+  which engine it should be put through, then all the details of the transaction are used to create accounting journal entries that are automatically posted to the general ledger to prepare for financial statements which we        
+  will work on that half later. also later we will show all active loans by the information we are constintently receiving from the blockchain listener. 

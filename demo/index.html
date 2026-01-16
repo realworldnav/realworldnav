@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealWorldNAV - PrinceLLC Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/simplex/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #2563eb;
+        }
+
+        body {
+            min-height: 100vh;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            min-height: 100vh;
+            background: white;
+            border-right: 1px solid #dee2e6;
+            position: fixed;
+            left: 0;
+            top: 0;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .sidebar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sidebar-brand img {
+            height: 32px;
+            width: auto;
+        }
+
+        .client-logo {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .client-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section {
+            margin-top: 1.5rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            color: #495057;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .nav-link.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .nav-link i {
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            margin-bottom: 2rem;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .page-subtitle {
+            color: #6c757d;
+        }
+
+        .value-box {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border-left: 4px solid var(--primary-color);
+            height: 100%;
+        }
+
+        .value-box.success { border-left-color: #28a745; }
+        .value-box.warning { border-left-color: #ffc107; }
+        .value-box.info { border-left-color: #17a2b8; }
+        .value-box.danger { border-left-color: #dc3545; }
+
+        .value-box-title {
+            font-size: 0.875rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .value-box-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .value-box-subtitle {
+            font-size: 0.875rem;
+            color: #28a745;
+            margin-top: 0.25rem;
+        }
+
+        .value-box-subtitle.negative {
+            color: #dc3545;
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            padding: 1rem 1.5rem;
+            border-radius: 12px 12px 0 0 !important;
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .table td {
+            vertical-align: middle;
+        }
+
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .status-confirmed { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-active { background: #cce5ff; color: #004085; }
+
+        .form-select, .form-control {
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            padding: 0.5rem 1rem;
+        }
+
+        .form-label {
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: #495057;
+        }
+
+        .chart-placeholder {
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%);
+            border-radius: 8px;
+            height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .chart-line {
+            position: absolute;
+            bottom: 20%;
+            left: 5%;
+            right: 5%;
+            height: 60%;
+        }
+
+        .chart-line svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .monospace {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+        }
+
+        .text-success { color: #28a745 !important; }
+        .text-danger { color: #dc3545 !important; }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+            border-radius: 8px;
+            padding: 0.5rem 1.5rem;
+        }
+
+        .nav-tabs .nav-link {
+            border-radius: 8px 8px 0 0;
+            color: #495057;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: white;
+            border-color: #dee2e6 #dee2e6 white;
+            color: var(--primary-color);
+        }
+
+        .fund-selector {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-brand">
+            <img src="../static/rwn_logo.png" alt="RealWorldNAV"> RealWorldNAV
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Client</label>
+            <select class="form-select">
+                <option selected>PrinceLLC</option>
+                <option>Drip Capital</option>
+            </select>
+        </div>
+
+        <div class="text-center mb-3">
+            <div class="client-logo mx-auto">PLC</div>
+            <div class="client-name">PrinceLLC</div>
+        </div>
+
+        <div class="fund-selector">
+            <label class="form-label">Select Fund</label>
+            <select class="form-select">
+                <option selected>Prince Growth Fund I</option>
+                <option>Prince Income Fund II</option>
+                <option>Prince Ventures III</option>
+            </select>
+        </div>
+
+        <div class="nav-section">
+            <a href="index.html" class="nav-link active">
+                <i class="bi bi-house-door"></i> Home
+            </a>
+            <a href="fund-accounting.html" class="nav-link">
+                <i class="bi bi-calculator"></i> Fund Accounting
+            </a>
+            <a href="investments.html" class="nav-link">
+                <i class="bi bi-briefcase"></i> Investments
+            </a>
+            <a href="general-ledger.html" class="nav-link">
+                <i class="bi bi-journal-text"></i> General Ledger
+            </a>
+            <a href="financial-reporting.html" class="nav-link">
+                <i class="bi bi-file-earmark-bar-graph"></i> Financial Reporting
+            </a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Dashboard</h1>
+            <p class="page-subtitle">Prince Growth Fund I - Overview</p>
+        </div>
+
+        <!-- KPI Row -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="value-box">
+                    <div class="value-box-title">Current NAV</div>
+                    <div class="value-box-value">$24.8M</div>
+                    <div class="value-box-subtitle"><i class="bi bi-arrow-up"></i> +2.4% MTD</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box success">
+                    <div class="value-box-title">Total Assets</div>
+                    <div class="value-box-value">$31.2M</div>
+                    <div class="value-box-subtitle"><i class="bi bi-arrow-up"></i> +5.1% QTD</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box info">
+                    <div class="value-box-title">Cash Position</div>
+                    <div class="value-box-value">$4.2M</div>
+                    <div class="value-box-subtitle">16.9% of NAV</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box warning">
+                    <div class="value-box-title">Active Investments</div>
+                    <div class="value-box-value">47</div>
+                    <div class="value-box-subtitle">12 new this quarter</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>NAV Performance</span>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary">MTD</button>
+                            <button class="btn btn-outline-secondary active">QTD</button>
+                            <button class="btn btn-outline-secondary">YTD</button>
+                            <button class="btn btn-outline-secondary">ITD</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-placeholder">
+                            <div class="chart-line">
+                                <svg viewBox="0 0 400 150" preserveAspectRatio="none">
+                                    <defs>
+                                        <linearGradient id="gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                                            <stop offset="0%" style="stop-color:#2563eb;stop-opacity:0.3" />
+                                            <stop offset="100%" style="stop-color:#2563eb;stop-opacity:0" />
+                                        </linearGradient>
+                                    </defs>
+                                    <path d="M0,120 Q50,100 100,90 T200,70 T300,40 T400,30 L400,150 L0,150 Z" fill="url(#gradient)"/>
+                                    <path d="M0,120 Q50,100 100,90 T200,70 T300,40 T400,30" fill="none" stroke="#2563eb" stroke-width="3"/>
+                                    <circle cx="400" cy="30" r="5" fill="#2563eb"/>
+                                </svg>
+                            </div>
+                            <div class="position-absolute top-0 start-0 p-3">
+                                <small class="text-muted">Dec 2024 - Jan 2025</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Portfolio Allocation</div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span>Crypto Assets</span>
+                                <span class="fw-bold">42%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-primary" style="width: 42%"></div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span>NFT Collateral</span>
+                                <span class="fw-bold">28%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-success" style="width: 28%"></div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span>Loan Portfolio</span>
+                                <span class="fw-bold">18%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-info" style="width: 18%"></div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span>Cash & Equivalents</span>
+                                <span class="fw-bold">12%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar bg-warning" style="width: 12%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span>Recent Transactions</span>
+                        <button class="btn btn-sm btn-outline-primary">View All</button>
+                    </div>
+                    <div class="card-body p-0">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Type</th>
+                                    <th>Amount</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>Jan 5, 2025</td>
+                                    <td>ETH Purchase - Coinbase Prime</td>
+                                    <td>Investment</td>
+                                    <td class="text-danger">-$125,000.00</td>
+                                    <td><span class="status-badge status-confirmed">Confirmed</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Jan 4, 2025</td>
+                                    <td>LP Capital Contribution - Smith Family Trust</td>
+                                    <td>Contribution</td>
+                                    <td class="text-success">+$500,000.00</td>
+                                    <td><span class="status-badge status-confirmed">Confirmed</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Jan 3, 2025</td>
+                                    <td>NFT Loan Interest - Arcade Protocol</td>
+                                    <td>Income</td>
+                                    <td class="text-success">+$8,450.00</td>
+                                    <td><span class="status-badge status-confirmed">Confirmed</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Jan 2, 2025</td>
+                                    <td>Management Fee - Q4 2024</td>
+                                    <td>Expense</td>
+                                    <td class="text-danger">-$62,000.00</td>
+                                    <td><span class="status-badge status-pending">Pending</span></td>
+                                </tr>
+                                <tr>
+                                    <td>Jan 1, 2025</td>
+                                    <td>Staking Rewards - Ethereum</td>
+                                    <td>Income</td>
+                                    <td class="text-success">+$12,340.00</td>
+                                    <td><span class="status-badge status-confirmed">Confirmed</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

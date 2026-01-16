@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealWorldNAV - Financial Reporting | PrinceLLC</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/simplex/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #2563eb;
+        }
+
+        body {
+            min-height: 100vh;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            min-height: 100vh;
+            background: white;
+            border-right: 1px solid #dee2e6;
+            position: fixed;
+            left: 0;
+            top: 0;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .sidebar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sidebar-brand img {
+            height: 32px;
+            width: auto;
+        }
+
+        .client-logo {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .client-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section {
+            margin-top: 1.5rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            color: #495057;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .nav-link.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .nav-link i {
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            margin-bottom: 2rem;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            padding: 1rem 1.5rem;
+            border-radius: 12px 12px 0 0 !important;
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #dee2e6;
+        }
+
+        .table td {
+            vertical-align: middle;
+            font-size: 0.9rem;
+        }
+
+        .form-select, .form-control {
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            padding: 0.5rem 1rem;
+        }
+
+        .form-label {
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: #495057;
+        }
+
+        .fund-selector {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .nav-tabs .nav-link {
+            border-radius: 8px 8px 0 0;
+            color: #495057;
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 0.75rem 1.5rem;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: white;
+            border-color: #dee2e6 #dee2e6 white;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .nav-tabs {
+            border-bottom: 1px solid #dee2e6;
+            margin-bottom: 1.5rem;
+        }
+
+        .text-success { color: #28a745 !important; }
+        .text-danger { color: #dc3545 !important; }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+            border-radius: 8px;
+        }
+
+        .filter-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .financial-table {
+            font-size: 0.9rem;
+        }
+
+        .financial-table th {
+            text-align: right;
+            padding: 0.75rem;
+        }
+
+        .financial-table th:first-child {
+            text-align: left;
+        }
+
+        .financial-table td {
+            padding: 0.75rem;
+            text-align: right;
+            font-family: monospace;
+        }
+
+        .financial-table td:first-child {
+            text-align: left;
+            font-family: inherit;
+        }
+
+        .financial-table .section-header {
+            background: #f8f9fa;
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+
+        .financial-table .subtotal-row {
+            border-top: 1px solid #dee2e6;
+            font-weight: 600;
+        }
+
+        .financial-table .total-row {
+            border-top: 2px solid #333;
+            font-weight: 700;
+            background: #f8f9fa;
+        }
+
+        .financial-table .indent-1 {
+            padding-left: 2rem;
+        }
+
+        .financial-table .indent-2 {
+            padding-left: 3rem;
+        }
+
+        .change-positive {
+            color: #28a745;
+        }
+
+        .change-negative {
+            color: #dc3545;
+        }
+
+        .report-header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .report-header h2 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .report-header p {
+            color: #6c757d;
+            margin-bottom: 0;
+        }
+
+        .currency-selector {
+            display: inline-flex;
+            border: 1px solid #dee2e6;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        .currency-btn {
+            padding: 0.25rem 1rem;
+            border: none;
+            background: white;
+            color: #495057;
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        .currency-btn.active {
+            background: var(--primary-color);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-brand">
+            <img src="../static/rwn_logo.png" alt="RealWorldNAV"> RealWorldNAV
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Client</label>
+            <select class="form-select">
+                <option selected>PrinceLLC</option>
+                <option>Drip Capital</option>
+            </select>
+        </div>
+
+        <div class="text-center mb-3">
+            <div class="client-logo mx-auto">PLC</div>
+            <div class="client-name">PrinceLLC</div>
+        </div>
+
+        <div class="fund-selector">
+            <label class="form-label">Select Fund</label>
+            <select class="form-select">
+                <option selected>Prince Growth Fund I</option>
+                <option>Prince Income Fund II</option>
+                <option>Prince Ventures III</option>
+            </select>
+        </div>
+
+        <div class="nav-section">
+            <a href="index.html" class="nav-link">
+                <i class="bi bi-house-door"></i> Home
+            </a>
+            <a href="fund-accounting.html" class="nav-link">
+                <i class="bi bi-calculator"></i> Fund Accounting
+            </a>
+            <a href="investments.html" class="nav-link">
+                <i class="bi bi-briefcase"></i> Investments
+            </a>
+            <a href="general-ledger.html" class="nav-link">
+                <i class="bi bi-journal-text"></i> General Ledger
+            </a>
+            <a href="financial-reporting.html" class="nav-link active">
+                <i class="bi bi-file-earmark-bar-graph"></i> Financial Reporting
+            </a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Financial Reporting</h1>
+            <p class="page-subtitle">Prince Growth Fund I - Financial Statements</p>
+        </div>
+
+        <!-- Tabs -->
+        <ul class="nav nav-tabs">
+            <li class="nav-item">
+                <a class="nav-link active" href="#">Account Statement</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">NAV Changes</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Trial Balance</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Assets & Liabilities</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Operating Expenses</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Management Fee</a>
+            </li>
+        </ul>
+
+        <!-- Filters -->
+        <div class="filter-card">
+            <div class="row align-items-center">
+                <div class="col-md-3">
+                    <label class="form-label">Reporting Period</label>
+                    <select class="form-select">
+                        <option>January 2025</option>
+                        <option selected>Q4 2024</option>
+                        <option>Full Year 2024</option>
+                        <option>Inception to Date</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Comparison</label>
+                    <select class="form-select">
+                        <option>Prior Period</option>
+                        <option selected>Prior Quarter</option>
+                        <option>Prior Year</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Currency</label>
+                    <div class="currency-selector">
+                        <button class="currency-btn active">USD</button>
+                        <button class="currency-btn">ETH</button>
+                    </div>
+                </div>
+                <div class="col-md-4 text-end">
+                    <label class="form-label d-block">&nbsp;</label>
+                    <button class="btn btn-outline-success me-2"><i class="bi bi-file-earmark-excel"></i> Export Excel</button>
+                    <button class="btn btn-outline-danger"><i class="bi bi-file-earmark-pdf"></i> Export PDF</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Financial Report -->
+        <div class="card">
+            <div class="card-body">
+                <div class="report-header">
+                    <h2>Prince Growth Fund I</h2>
+                    <p>Statement of Assets, Liabilities, and Partners' Capital</p>
+                    <p>As of December 31, 2024</p>
+                </div>
+
+                <table class="table financial-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40%;">Account</th>
+                            <th style="width: 20%;">Dec 31, 2024</th>
+                            <th style="width: 20%;">Sep 30, 2024</th>
+                            <th style="width: 20%;">Change</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Assets Section -->
+                        <tr class="section-header">
+                            <td colspan="4">ASSETS</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Cash and Cash Equivalents</td>
+                            <td>$4,215,840</td>
+                            <td>$3,892,100</td>
+                            <td class="change-positive">+8.3%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Cryptocurrency Holdings</td>
+                            <td>$10,432,500</td>
+                            <td>$9,875,200</td>
+                            <td class="change-positive">+5.6%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-2">Ethereum (ETH)</td>
+                            <td>$7,845,200</td>
+                            <td>$7,125,000</td>
+                            <td class="change-positive">+10.1%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-2">Bitcoin (BTC)</td>
+                            <td>$1,892,300</td>
+                            <td>$2,015,200</td>
+                            <td class="change-negative">-6.1%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-2">Other Tokens</td>
+                            <td>$695,000</td>
+                            <td>$735,000</td>
+                            <td class="change-negative">-5.4%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">NFT Holdings (at Fair Value)</td>
+                            <td>$6,985,420</td>
+                            <td>$6,124,800</td>
+                            <td class="change-positive">+14.0%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Loans Receivable</td>
+                            <td>$5,412,500</td>
+                            <td>$4,850,000</td>
+                            <td class="change-positive">+11.6%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Accrued Interest Receivable</td>
+                            <td>$245,780</td>
+                            <td>$198,500</td>
+                            <td class="change-positive">+23.8%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Other Assets</td>
+                            <td>$125,000</td>
+                            <td>$118,400</td>
+                            <td class="change-positive">+5.6%</td>
+                        </tr>
+                        <tr class="subtotal-row">
+                            <td>Total Assets</td>
+                            <td>$27,417,040</td>
+                            <td>$25,059,000</td>
+                            <td class="change-positive">+9.4%</td>
+                        </tr>
+
+                        <!-- Liabilities Section -->
+                        <tr class="section-header">
+                            <td colspan="4">LIABILITIES</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Accounts Payable</td>
+                            <td>$85,200</td>
+                            <td>$72,400</td>
+                            <td class="change-negative">+17.7%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Accrued Management Fees</td>
+                            <td>$248,000</td>
+                            <td>$225,500</td>
+                            <td class="change-negative">+10.0%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Accrued Performance Fees</td>
+                            <td>$412,500</td>
+                            <td>$320,000</td>
+                            <td class="change-negative">+28.9%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Other Liabilities</td>
+                            <td>$45,800</td>
+                            <td>$38,200</td>
+                            <td class="change-negative">+19.9%</td>
+                        </tr>
+                        <tr class="subtotal-row">
+                            <td>Total Liabilities</td>
+                            <td>$791,500</td>
+                            <td>$656,100</td>
+                            <td class="change-negative">+20.6%</td>
+                        </tr>
+
+                        <!-- Partners' Capital Section -->
+                        <tr class="section-header">
+                            <td colspan="4">PARTNERS' CAPITAL</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">General Partner</td>
+                            <td>$532,511</td>
+                            <td>$488,058</td>
+                            <td class="change-positive">+9.1%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Limited Partners - Class A</td>
+                            <td>$18,542,890</td>
+                            <td>$17,025,400</td>
+                            <td class="change-positive">+8.9%</td>
+                        </tr>
+                        <tr>
+                            <td class="indent-1">Limited Partners - Class B</td>
+                            <td>$7,550,139</td>
+                            <td>$6,889,442</td>
+                            <td class="change-positive">+9.6%</td>
+                        </tr>
+                        <tr class="subtotal-row">
+                            <td>Total Partners' Capital</td>
+                            <td>$26,625,540</td>
+                            <td>$24,402,900</td>
+                            <td class="change-positive">+9.1%</td>
+                        </tr>
+
+                        <!-- Total -->
+                        <tr class="total-row">
+                            <td>Total Liabilities & Partners' Capital</td>
+                            <td>$27,417,040</td>
+                            <td>$25,059,000</td>
+                            <td class="change-positive">+9.4%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Key Metrics</div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <tbody>
+                                <tr>
+                                    <td>NAV per Share</td>
+                                    <td class="text-end fw-bold">$1,337.28</td>
+                                </tr>
+                                <tr>
+                                    <td>Total Shares Outstanding</td>
+                                    <td class="text-end fw-bold">19,912</td>
+                                </tr>
+                                <tr>
+                                    <td>QTD Return</td>
+                                    <td class="text-end fw-bold text-success">+9.1%</td>
+                                </tr>
+                                <tr>
+                                    <td>YTD Return</td>
+                                    <td class="text-end fw-bold text-success">+24.8%</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Income Summary (Q4)</div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <tbody>
+                                <tr>
+                                    <td>Interest Income</td>
+                                    <td class="text-end">$425,800</td>
+                                </tr>
+                                <tr>
+                                    <td>Staking Rewards</td>
+                                    <td class="text-end">$185,200</td>
+                                </tr>
+                                <tr>
+                                    <td>Realized Gains</td>
+                                    <td class="text-end">$892,400</td>
+                                </tr>
+                                <tr>
+                                    <td>Unrealized Gains</td>
+                                    <td class="text-end">$1,245,000</td>
+                                </tr>
+                                <tr class="table-success">
+                                    <td class="fw-bold">Net Income</td>
+                                    <td class="text-end fw-bold">$2,222,640</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">Expense Summary (Q4)</div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <tbody>
+                                <tr>
+                                    <td>Management Fees</td>
+                                    <td class="text-end">$248,000</td>
+                                </tr>
+                                <tr>
+                                    <td>Performance Fees</td>
+                                    <td class="text-end">$412,500</td>
+                                </tr>
+                                <tr>
+                                    <td>Admin & Legal</td>
+                                    <td class="text-end">$45,200</td>
+                                </tr>
+                                <tr>
+                                    <td>Custody Fees</td>
+                                    <td class="text-end">$18,500</td>
+                                </tr>
+                                <tr class="table-warning">
+                                    <td class="fw-bold">Total Expenses</td>
+                                    <td class="text-end fw-bold">$724,200</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

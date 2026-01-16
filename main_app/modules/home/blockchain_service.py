@@ -217,6 +217,12 @@ class EtherscanClient:
 
         return pd.DataFrame(processed)
 
+    def _normalize_hash(self, hash_str: str) -> str:
+        """Ensure hash has 0x prefix"""
+        if not hash_str:
+            return ''
+        return hash_str if hash_str.startswith('0x') else f'0x{hash_str}'
+
     def _process_token_transfers(self, transfers: List[Dict], wallet_address: str) -> pd.DataFrame:
         """Process token transfer data into DataFrame"""
         processed = []
@@ -232,8 +238,13 @@ class EtherscanClient:
                 decimals = int(transfer.get('tokenDecimal', 18))
                 amount = value / (10 ** decimals) if decimals > 0 else value
 
+                # Filter zero-value transfers (dust attacks/scam airdrops)
+                if amount == 0:
+                    logger.debug(f"Skipping zero-value token transfer: {transfer.get('hash', '')}")
+                    continue
+
                 processed_tx = {
-                    'hash': transfer.get('hash', ''),
+                    'hash': self._normalize_hash(transfer.get('hash', '')),
                     'block': int(transfer.get('blockNumber', 0)),
                     'from': transfer.get('from', ''),
                     'to': transfer.get('to', ''),

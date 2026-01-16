@@ -205,7 +205,7 @@ def register_outputs(output, input, session, selected_fund):
 
         edited_df_store.set(df.copy())
         selected_row_store.set(None)
-        ui.notification_show("✅ Entry updated locally", duration=3000)
+        ui.notification_show("Entry updated locally", duration=3000)
 
 
     @reactive.effect
@@ -216,14 +216,14 @@ def register_outputs(output, input, session, selected_fund):
             df = edited_df_store.get()
             if df is not None and not df.empty:
                 save_GL_file(df)
-                ui.notification_show("✅ GL saved to S3", duration=3000)
+                ui.notification_show("GL saved to S3", duration=3000)
                 print("✅ Saved to S3")
             else:
                 print("⚠️ Nothing to save")
-                ui.notification_show("⚠️ Nothing to save", duration=3000)
+                ui.notification_show("Nothing to save", duration=3000)
         except Exception as e:
             print("❌ Failed to save:", e)
-            ui.notification_show(f"❌ Failed to save: {e}", duration=5000)
+            ui.notification_show(f"Failed to save: {e}", duration=5000)
 
     @output
     @render.ui
@@ -253,7 +253,7 @@ def register_outputs(output, input, session, selected_fund):
     def undo_changes():
         print("↩️ Undoing GL edits")
         edited_df_store.set(df_gl().copy().head(100))
-        ui.notification_show("↩️ Changes reverted", duration=3000)
+        ui.notification_show("Changes reverted", duration=3000)
 
     # === Add New GL Entry Modal Logic ===
     @reactive.effect
@@ -276,7 +276,7 @@ def register_outputs(output, input, session, selected_fund):
         
         m = ui.modal(
             ui.div(
-                ui.h4("➕ Add New Journal Entry", class_="mb-4"),
+                ui.h4(ui.HTML('<i class="bi bi-plus-lg me-2"></i>Add New Journal Entry'), class_="mb-4"),
                 
                 # Basic Transaction Information Section
                 ui.h6("Basic Transaction Information", class_="mt-3 mb-2", style="color: #6c757d; border-bottom: 1px solid #eee; padding-bottom: 0.5rem;"),
@@ -700,7 +700,7 @@ def register_outputs(output, input, session, selected_fund):
             
             
             if not all([new_date, new_transaction_type, new_account_name]):
-                ui.notification_show("⚠️ Missing required fields: Date, Transaction Type, and Account Name", duration=5000)
+                ui.notification_show("Missing required fields: Date, Transaction Type, and Account Name", duration=5000)
                 return
             
             # Load current GL data
@@ -851,16 +851,16 @@ def register_outputs(output, input, session, selected_fund):
                 # Refresh edited_df_store with new data
                 edited_df_store.set(load_GL_file().copy().head(100))
                 
-                ui.notification_show(f"✅ New journal entry {new_transaction_id} added successfully!", duration=5000)
+                ui.notification_show(f"New journal entry {new_transaction_id} added successfully!", duration=5000)
             except Exception as save_error:
                 print(f"ERROR - GL: Failed to save new entry to S3: {save_error}")
-                ui.notification_show(f"❌ Failed to save entry: {save_error}", duration=5000)
+                ui.notification_show(f"Failed to save entry: {save_error}", duration=5000)
                 
         except Exception as e:
             print(f"ERROR in handle_add_new_gl_entry: {e}")
             import traceback
             traceback.print_exc()
-            ui.notification_show(f"❌ Error adding entry: {e}", duration=5000)
+            ui.notification_show(f"Error adding entry: {e}", duration=5000)
 
     # === Delete GL Entry Logic ===
     @reactive.effect
@@ -872,7 +872,7 @@ def register_outputs(output, input, session, selected_fund):
             # Get current selected row data
             row = selected_row_store.get()
             if not row:
-                ui.notification_show("⚠️ Please select an entry to delete", duration=5000)
+                ui.notification_show("Please select an entry to delete", duration=5000)
                 return
             
             transaction_id = row.get("transaction_id")
@@ -883,7 +883,7 @@ def register_outputs(output, input, session, selected_fund):
             # Show confirmation modal
             confirm_modal = ui.modal(
                 ui.div(
-                    ui.h4("⚠️ Confirm Entry Deletion", class_="mb-4 text-danger"),
+                    ui.h4(ui.HTML('<i class="bi bi-exclamation-triangle me-2"></i>Confirm Entry Deletion'), class_="mb-4 text-danger"),
                     ui.p(f"Are you sure you want to delete the following journal entry?", class_="mb-3"),
                     ui.div(
                         ui.strong(f"Transaction ID: {transaction_id}"),
@@ -897,7 +897,7 @@ def register_outputs(output, input, session, selected_fund):
                         style="background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;"
                     ),
                     ui.div(
-                        ui.tags.strong("⚠️ Warning: ", class_="text-danger"),
+                        ui.tags.strong(ui.HTML('<i class="bi bi-exclamation-triangle me-1"></i>Warning: '), class_="text-danger"),
                         "This action cannot be undone. The journal entry will be permanently removed from your General Ledger.",
                         class_="alert alert-warning"
                     ),
@@ -920,7 +920,7 @@ def register_outputs(output, input, session, selected_fund):
             print(f"ERROR in handle_delete_gl_entry: {e}")
             import traceback
             traceback.print_exc()
-            ui.notification_show(f"❌ Error: {e}", duration=5000)
+            ui.notification_show(f"Error: {e}", duration=5000)
 
     @reactive.effect
     @reactive.event(input.confirm_delete_gl)
@@ -945,7 +945,7 @@ def register_outputs(output, input, session, selected_fund):
             mask = gl_df["transaction_id"] == transaction_id
             
             if not mask.any():
-                ui.notification_show(f"❌ Transaction {transaction_id} not found", duration=5000)
+                ui.notification_show(f"Transaction {transaction_id} not found", duration=5000)
                 return
             
             # Remove the entry
@@ -967,16 +967,16 @@ def register_outputs(output, input, session, selected_fund):
                 # Refresh edited_df_store with new data
                 edited_df_store.set(load_GL_file().copy().head(100))
                 
-                ui.notification_show(f"✅ Journal entry {transaction_id} deleted successfully!", duration=5000)
+                ui.notification_show(f"Journal entry {transaction_id} deleted successfully!", duration=5000)
             except Exception as save_error:
                 print(f"ERROR - GL: Failed to delete entry from S3: {save_error}")
-                ui.notification_show(f"❌ Failed to delete entry: {save_error}", duration=5000)
+                ui.notification_show(f"Failed to delete entry: {save_error}", duration=5000)
                 
         except Exception as e:
             print(f"ERROR in handle_confirm_delete_gl: {e}")
             import traceback
             traceback.print_exc()
-            ui.notification_show(f"❌ Error deleting entry: {e}", duration=5000)
+            ui.notification_show(f"Error deleting entry: {e}", duration=5000)
 
     @reactive.effect
     @reactive.event(input.cancel_delete_gl)
@@ -992,10 +992,10 @@ def register_outputs(output, input, session, selected_fund):
     def add_gl_trigger():
         """Button to trigger Add GL Entry modal"""
         return ui.card(
-            ui.card_header("➕ Entry Management"),
+            ui.card_header(ui.HTML('<i class="bi bi-plus-lg me-2"></i>Entry Management')),
             ui.div(
                 ui.p("Create new Journal Entries with all required transaction details.", class_="text-muted mb-3"),
-                ui.input_action_button("show_add_gl_modal", "➕ Add New Entry", class_="btn btn-primary btn-lg"),
+                ui.input_action_button("show_add_gl_modal", ui.HTML('<i class="bi bi-plus-lg me-1"></i> Add New Entry'), class_="btn btn-primary btn-lg"),
                 style="text-align: center; padding: 2rem;"
             )
         )

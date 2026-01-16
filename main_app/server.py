@@ -8,6 +8,7 @@ from .modules.general_ledger.general_ledger import register_outputs as register_
 from .modules.general_ledger.chart_of_accounts import register_chart_of_accounts_outputs
 from .modules.general_ledger.crypto_tracker import register_crypto_tracker_outputs
 from .modules.general_ledger.gl_analytics import register_gl_analytics_outputs
+from .modules.general_ledger_v2 import general_ledger_v2_ui, register_gl2_outputs
 
 from .modules.investments.loan_portfolio import register_outputs as register_loan_portfolio_outputs
 from .modules.investments.nft_portfolio import register_nft_portfolio_outputs
@@ -311,31 +312,32 @@ def server(input, output, session):
     @output
     @render.ui
     def nav_links():
-        """Generate clickable navigation links"""
-        sections = {
-            "home": "Home",
-            "fund_accounting": "Fund Accounting",
-            "investments": "Investments",
-            "general_ledger": "General Ledger",
-            "financial_reporting": "Financial Reporting"
-        }
-        
+        """Generate clickable navigation links with Bootstrap icons"""
+        sections = [
+            ("home", "Home", "bi-house-door"),
+            ("fund_accounting", "Fund Accounting", "bi-calculator"),
+            ("investments", "Investments", "bi-briefcase"),
+            ("general_ledger", "General Ledger", "bi-journal-text"),
+            ("general_ledger_v2", "General Ledger 2", "bi-book"),
+            ("financial_reporting", "Financial Reporting", "bi-file-earmark-bar-graph"),
+        ]
+
         links = []
-        for section_id, section_name in sections.items():
+        for section_id, section_name, icon in sections:
             is_active = current_section.get() == section_id
-            css_classes = ["nav-link"]
-            if is_active:
-                css_classes.append("nav-link-active")
-            
+            css_classes = "nav-link active" if is_active else "nav-link"
+
             links.append(
                 ui.div(
-                    section_name,
+                    ui.tags.i(class_=f"bi {icon}"),
+                    f" {section_name}",
                     onclick=f"Shiny.setInputValue('nav_click', '{section_id}', {{priority: 'event'}});",
-                    class_=" ".join(css_classes)
+                    class_=css_classes,
+                    style="cursor: pointer;"
                 )
             )
-        
-        return ui.div(*links)
+
+        return ui.div(*links, class_="nav-section")
     
     # Handle navigation clicks
     @reactive.effect
@@ -345,26 +347,7 @@ def server(input, output, session):
         if section:
             current_section.set(section)
     
-    # Reactive theme styles output
-    @output
-    @render.ui
-    @reactive.event(input.theme_selector, ignore_none=False)
-    def theme_styles():
-        """Generate reactive theme styles based on selected theme"""
-        try:
-            # Handle theme selector dropdown
-            if hasattr(input, 'theme_selector') and input.theme_selector():
-                theme_id = input.theme_selector()
-                theme_manager.set_current_theme(theme_id)
-            else:
-                # Use default theme
-                theme_id = theme_manager.current_theme
-        except Exception as e:
-            # Theme selector error, use default
-            theme_id = theme_manager.current_theme
-        
-        # Always return the current theme styles
-        return theme_manager.get_theme_ui_element()
+    # Theme styles now handled via CDN in ui.py
 
     # Create investment dashboard calculations
     dashboard_calcs = create_investment_dashboard_calculations(selected_fund)
@@ -381,6 +364,9 @@ def server(input, output, session):
     register_crypto_tracker_outputs(output, input, session)
     
     register_gl_analytics_outputs(output, input, session, selected_fund)
+
+    # Register General Ledger 2 outputs
+    register_gl2_outputs(input, output, session)
 
     # Register home blockchain listener outputs with fund selection
     register_blockchain_listener_outputs(input, output, session, selected_fund)
@@ -406,6 +392,8 @@ def server(input, output, session):
             return enhanced_investments_ui()
         elif section == "general_ledger":
             return enhanced_general_ledger_ui()
+        elif section == "general_ledger_v2":
+            return general_ledger_v2_ui()
         elif section == "financial_reporting":
             return enhanced_financial_reporting_ui()
         else:
@@ -1290,7 +1278,7 @@ def server(input, output, session):
                     ui.hr(),
                     ui.div(
                         ui.span("Period Balance Check", style="font-weight: 600;"),
-                        ui.span("✅ Balanced" if balance_check else "❌ Imbalanced", 
+                        ui.span("Balanced" if balance_check else "Imbalanced",
                                style=f"float: right; color: {'var(--bs-success)' if balance_check else 'var(--bs-danger)'};")
                     ),
                     style="padding-top: 0.5rem;"
@@ -1311,10 +1299,4 @@ def server(input, output, session):
                 class_="error-state"
             )
 
-    @output
-    @render.code
-    def nav_selection_debug():
-        client = selected_client()
-        fund = selected_fund() if hasattr(input, 'fund') and input.fund() else "N/A"
-        section = input.main_section() if hasattr(input, 'main_section') else "N/A"
-        return f"Client: {client}\nFund: {fund}\nSection: {section}"
+    # Debug output removed - cleaner UI

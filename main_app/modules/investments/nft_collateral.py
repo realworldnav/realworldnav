@@ -2,6 +2,7 @@ from shiny import ui, reactive, render, req
 from shiny import App, Inputs, Outputs, Session
 from shiny.render import DataGrid
 
+import os
 import pandas as pd
 import requests
 import json
@@ -10,17 +11,13 @@ from functools import lru_cache
 import time
 from typing import Dict, Optional
 
-# NFTScan API Configuration
-NFTSCAN_API_KEY = "L47BjfbSQELgYhlQvU2FecI4"
+# API Configuration (from environment variables)
+NFTSCAN_API_KEY = os.environ.get("NFTSCAN_API_KEY", "")
 NFTSCAN_BASE_URL = "https://api.nftscan.com"
-
-# Alternative API configurations
-OPENSEA_API_KEY = "your_opensea_api_key_here"  # You'd need to get this
+OPENSEA_API_KEY = os.environ.get("OPENSEA_API_KEY", "")
 OPENSEA_BASE_URL = "https://api.opensea.io/api/v1"
-
-# Alchemy API Configuration
+ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
 ALCHEMY_BASE_URL = "https://eth-mainnet.g.alchemy.com/v2"
-ALCHEMY_API_KEY = "mmhv6R8fVVR6JnSoHSHD3KRsAWxuTPJV"
 
 # Cache configuration
 CACHE_EXPIRY_HOURS = 24  # Cache NFT metadata for 24 hours
@@ -46,7 +43,7 @@ def test_api_connectivity():
             
             response = requests.get(url, headers=headers, timeout=5)
             results[name] = {
-                "status": "✅ Connected",
+                "status": "Connected",
                 "status_code": response.status_code,
                 "error": None
             }
@@ -397,7 +394,7 @@ def get_nft_collection_info(contract_address: str) -> Dict:
 # === UI ===
 def nft_ui():
     return ui.page_fluid(
-        ui.h2("🖼️ NFT Collateral", class_="mt-3"),
+        ui.h2(ui.HTML('<i class="bi bi-image me-2"></i>NFT Collateral'), class_="mt-3"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.div(ui.input_selectize("nft_contract_filter", "Filter by Contract:", ["All Contracts"], options={"create": False}), class_="custom-dropdown"),
@@ -559,7 +556,7 @@ def register_nft_outputs(output: Outputs, input: Inputs, session: Session, selec
         """Display detailed NFT information"""
         nft = selected_nft_store.get()
         if not nft:
-            return ui.p("⚠️ Select an NFT row to view details.")
+            return ui.p(ui.HTML('<i class="bi bi-info-circle me-1"></i>Select an NFT row to view details.'))
         
         try:
             # Fetch NFT metadata
@@ -567,8 +564,8 @@ def register_nft_outputs(output: Outputs, input: Inputs, session: Session, selec
             token_id = nft.get("token_id", "")
             
             if not contract_address or not token_id:
-                return ui.p("⚠️ Invalid NFT data.")
-            
+                return ui.p(ui.HTML('<i class="bi bi-exclamation-triangle me-1"></i>Invalid NFT data.'))
+
             metadata = get_nft_metadata_with_fallback(contract_address, token_id)
             collection_info = get_nft_collection_info(contract_address)
             
@@ -577,7 +574,7 @@ def register_nft_outputs(output: Outputs, input: Inputs, session: Session, selec
                 metadata = get_fallback_nft_data(contract_address, token_id)
                 elements = []
                 elements.append(ui.tags.div(
-                    ui.tags.span("⚠️ API Unavailable", class_="badge bg-warning text-dark me-2"),
+                    ui.HTML('<span class="badge bg-warning text-dark me-2"><i class="bi bi-exclamation-triangle me-1"></i>API Unavailable</span>'),
                     ui.tags.span("Using cached data", class_="text-muted small")
                 ))
             else:
@@ -626,17 +623,17 @@ def register_nft_outputs(output: Outputs, input: Inputs, session: Session, selec
         """Display NFT image preview"""
         nft = selected_nft_store.get()
         if not nft:
-            return ui.p("⚠️ Select an NFT row to view image.")
+            return ui.p(ui.HTML('<i class="bi bi-info-circle me-1"></i>Select an NFT row to view image.'))
         
         try:
             contract_address = nft.get("collateral_address", "")
             token_id = nft.get("token_id", "")
             
             if not contract_address or not token_id:
-                return ui.p("⚠️ Invalid NFT data.")
-            
+                return ui.p(ui.HTML('<i class="bi bi-exclamation-triangle me-1"></i>Invalid NFT data.'))
+
             metadata = get_nft_metadata_with_fallback(contract_address, token_id)
-            
+
             if metadata and "image" in metadata:
                 image_url = metadata["image"]
                 return ui.div(
@@ -650,10 +647,9 @@ def register_nft_outputs(output: Outputs, input: Inputs, session: Session, selec
                 )
             else:
                 return ui.div(
-                    ui.tags.div(
-                        "🖼️",
-                        style="font-size: 4rem; text-align: center; color: #ccc;",
-                        class_="d-flex align-items-center justify-content-center"
+                    ui.HTML(
+                        '<div style="font-size: 4rem; text-align: center; color: #ccc;" class="d-flex align-items-center justify-content-center">'
+                        '<i class="bi bi-image"></i></div>'
                     ),
                     ui.tags.p("Image not available", class_="text-center text-muted")
                 )

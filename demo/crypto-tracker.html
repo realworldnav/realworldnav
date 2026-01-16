@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RealWorldNAV - Crypto Tracker | PrinceLLC</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootswatch@5.3.2/dist/simplex/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #2563eb;
+        }
+
+        body {
+            min-height: 100vh;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            min-height: 100vh;
+            background: white;
+            border-right: 1px solid #dee2e6;
+            position: fixed;
+            left: 0;
+            top: 0;
+            padding: 1rem;
+            overflow-y: auto;
+            z-index: 100;
+        }
+
+        .sidebar-brand {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sidebar-brand img {
+            height: 32px;
+            width: auto;
+        }
+
+        .client-logo {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .client-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 1.5rem;
+        }
+
+        .nav-section {
+            margin-top: 1.5rem;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            color: #495057;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background-color: #e9ecef;
+            color: #333;
+        }
+
+        .nav-link.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .nav-link i {
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            margin-bottom: 2rem;
+        }
+
+        .page-title {
+            font-size: 1.75rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            padding: 1rem 1.5rem;
+            border-radius: 12px 12px 0 0 !important;
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid #dee2e6;
+            white-space: nowrap;
+        }
+
+        .table td {
+            vertical-align: middle;
+            font-size: 0.85rem;
+        }
+
+        .table tbody tr:hover {
+            background-color: #f8f9fa;
+            cursor: pointer;
+        }
+
+        .table tbody tr.selected {
+            background-color: rgba(37, 99, 235, 0.15);
+            border-left: 3px solid var(--primary-color);
+        }
+
+        .form-select, .form-control {
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            padding: 0.5rem 1rem;
+        }
+
+        .form-label {
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: #495057;
+        }
+
+        .fund-selector {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .nav-tabs .nav-link {
+            border-radius: 8px 8px 0 0;
+            color: #495057;
+            background: transparent;
+            border: 1px solid transparent;
+            padding: 0.75rem 1.5rem;
+        }
+
+        .nav-tabs .nav-link.active {
+            background-color: white;
+            border-color: #dee2e6 #dee2e6 white;
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .nav-tabs {
+            border-bottom: 1px solid #dee2e6;
+            margin-bottom: 1.5rem;
+        }
+
+        .text-success { color: #28a745 !important; }
+        .text-danger { color: #dc3545 !important; }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+            border-radius: 8px;
+        }
+
+        .monospace {
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+        }
+
+        .filter-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .table-container {
+            max-height: 350px;
+            overflow-y: auto;
+        }
+
+        .badge-buy {
+            background: #d4edda;
+            color: #155724;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge-sell {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        /* Transaction Details Modal/Panel */
+        .transaction-detail-panel {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            border: 2px solid var(--primary-color);
+        }
+
+        .detail-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .detail-section-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #6c757d;
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            color: #6c757d;
+            font-size: 0.85rem;
+        }
+
+        .detail-value {
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-align: right;
+        }
+
+        .tx-hash {
+            background: #e9ecef;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.8rem;
+            word-break: break-all;
+        }
+
+        .decoded-function {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            overflow-x: auto;
+        }
+
+        .decoded-function .keyword {
+            color: #569cd6;
+        }
+
+        .decoded-function .function-name {
+            color: #dcdcaa;
+        }
+
+        .decoded-function .string {
+            color: #ce9178;
+        }
+
+        .decoded-function .number {
+            color: #b5cea8;
+        }
+
+        .decoded-function .address {
+            color: #4ec9b0;
+        }
+
+        .journal-entry-table th {
+            font-size: 0.75rem;
+        }
+
+        .journal-entry-table td {
+            font-size: 0.85rem;
+        }
+
+        .account-badge {
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .account-asset { background: #cce5ff; color: #004085; }
+        .account-expense { background: #fff3cd; color: #856404; }
+        .account-revenue { background: #d1ecf1; color: #0c5460; }
+
+        .etherscan-btn {
+            background: #3498db;
+            border: none;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+        }
+
+        .etherscan-btn:hover {
+            background: #2980b9;
+            color: white;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+
+        .status-confirmed { background: #28a745; }
+        .status-pending { background: #ffc107; }
+
+        .amount-cell {
+            text-align: right;
+            font-family: monospace;
+        }
+
+        .value-box {
+            background: white;
+            border-radius: 12px;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .value-box.success { border-left-color: #28a745; }
+        .value-box.warning { border-left-color: #ffc107; }
+        .value-box.info { border-left-color: #17a2b8; }
+
+        .value-box-title {
+            font-size: 0.75rem;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .value-box-value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .click-hint {
+            background: rgba(37, 99, 235, 0.1);
+            border: 1px dashed var(--primary-color);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            text-align: center;
+            color: var(--primary-color);
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-brand">
+            <img src="../static/rwn_logo.png" alt="RealWorldNAV"> RealWorldNAV
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Client</label>
+            <select class="form-select">
+                <option selected>PrinceLLC</option>
+                <option>Drip Capital</option>
+            </select>
+        </div>
+
+        <div class="text-center mb-3">
+            <div class="client-logo mx-auto">PLC</div>
+            <div class="client-name">PrinceLLC</div>
+        </div>
+
+        <div class="fund-selector">
+            <label class="form-label">Select Fund</label>
+            <select class="form-select">
+                <option selected>Prince Growth Fund I</option>
+                <option>Prince Income Fund II</option>
+                <option>Prince Ventures III</option>
+            </select>
+        </div>
+
+        <div class="nav-section">
+            <a href="index.html" class="nav-link">
+                <i class="bi bi-house-door"></i> Home
+            </a>
+            <a href="fund-accounting.html" class="nav-link">
+                <i class="bi bi-calculator"></i> Fund Accounting
+            </a>
+            <a href="investments.html" class="nav-link">
+                <i class="bi bi-briefcase"></i> Investments
+            </a>
+            <a href="general-ledger.html" class="nav-link active">
+                <i class="bi bi-journal-text"></i> General Ledger
+            </a>
+            <a href="financial-reporting.html" class="nav-link">
+                <i class="bi bi-file-earmark-bar-graph"></i> Financial Reporting
+            </a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Crypto Tracker</h1>
+            <p class="page-subtitle">Prince Growth Fund I - FIFO Cost Basis & Transaction Accounting</p>
+        </div>
+
+        <!-- Sub-tabs within GL -->
+        <ul class="nav nav-tabs">
+            <li class="nav-item">
+                <a class="nav-link" href="general-ledger.html">Journal Entries</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">Chart of Accounts</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link active" href="#">Crypto Tracker</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="#">GL Analytics</a>
+            </li>
+        </ul>
+
+        <!-- Crypto Tracker Sub-tabs -->
+        <div class="mb-3">
+            <ul class="nav nav-pills nav-fill" style="max-width: 500px;">
+                <li class="nav-item">
+                    <a class="nav-link" href="#">Overview</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#">History</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link active" href="#" style="background: var(--primary-color);">FIFO Tracker</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#">Token Fetcher</a>
+                </li>
+            </ul>
+        </div>
+
+        <!-- KPI Row -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="value-box">
+                    <div class="value-box-title">Total Crypto Value</div>
+                    <div class="value-box-value">$10.4M</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box success">
+                    <div class="value-box-title">Unrealized P&L</div>
+                    <div class="value-box-value text-success">+$1.82M</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box info">
+                    <div class="value-box-title">Realized Gains YTD</div>
+                    <div class="value-box-value">$485,200</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="value-box warning">
+                    <div class="value-box-title">Transactions</div>
+                    <div class="value-box-value">1,247</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filter-card">
+            <div class="row align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label">Wallet</label>
+                    <select class="form-select">
+                        <option>All Wallets</option>
+                        <option selected>0x7a2...f4c9 (Main)</option>
+                        <option>0x3b1...8e2a (Trading)</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Token</label>
+                    <select class="form-select">
+                        <option>All Tokens</option>
+                        <option selected>ETH</option>
+                        <option>WETH</option>
+                        <option>USDC</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Side</label>
+                    <select class="form-select">
+                        <option selected>All</option>
+                        <option>Buy</option>
+                        <option>Sell</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Date Range</label>
+                    <input type="text" class="form-control" value="Dec 1, 2024 - Jan 5, 2025">
+                </div>
+                <div class="col-md-3">
+                    <button class="btn btn-primary me-2"><i class="bi bi-funnel"></i> Apply</button>
+                    <button class="btn btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i> Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- FIFO Ledger Table -->
+            <div class="col-md-7">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-table"></i> FIFO Ledger</span>
+                        <div>
+                            <span class="badge bg-secondary me-2">47 transactions</span>
+                            <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-download"></i> Export</button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="click-hint">
+                            <i class="bi bi-hand-index"></i> Click a row to view transaction details, decoded data, and journal entries
+                        </div>
+                        <div class="table-container">
+                            <table class="table table-hover mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Hash</th>
+                                        <th>Asset</th>
+                                        <th>Side</th>
+                                        <th class="text-end">Qty</th>
+                                        <th class="text-end">Price</th>
+                                        <th class="text-end">Cost Basis</th>
+                                        <th class="text-end">Realized G/L</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>Jan 5, 2025</td>
+                                        <td class="monospace">0x8f4a...2e91</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-buy">BUY</span></td>
+                                        <td class="amount-cell">37.500000</td>
+                                        <td class="amount-cell">$3,340.00</td>
+                                        <td class="amount-cell">$125,250.00</td>
+                                        <td class="amount-cell">-</td>
+                                    </tr>
+                                    <tr class="selected">
+                                        <td>Jan 3, 2025</td>
+                                        <td class="monospace">0x2b7c...9f3d</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-sell">SELL</span></td>
+                                        <td class="amount-cell">15.000000</td>
+                                        <td class="amount-cell">$3,425.00</td>
+                                        <td class="amount-cell">$42,150.00</td>
+                                        <td class="amount-cell text-success">+$9,225.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Jan 2, 2025</td>
+                                        <td class="monospace">0x6d1e...4a82</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-buy">BUY</span></td>
+                                        <td class="amount-cell">25.000000</td>
+                                        <td class="amount-cell">$3,280.00</td>
+                                        <td class="amount-cell">$82,000.00</td>
+                                        <td class="amount-cell">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Dec 28, 2024</td>
+                                        <td class="monospace">0x9c3f...7b21</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-sell">SELL</span></td>
+                                        <td class="amount-cell">10.000000</td>
+                                        <td class="amount-cell">$3,380.00</td>
+                                        <td class="amount-cell">$28,100.00</td>
+                                        <td class="amount-cell text-success">+$5,700.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Dec 22, 2024</td>
+                                        <td class="monospace">0x1a5b...c4e8</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-buy">BUY</span></td>
+                                        <td class="amount-cell">50.000000</td>
+                                        <td class="amount-cell">$3,150.00</td>
+                                        <td class="amount-cell">$157,500.00</td>
+                                        <td class="amount-cell">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Dec 18, 2024</td>
+                                        <td class="monospace">0x4e8d...a1f6</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-buy">BUY</span></td>
+                                        <td class="amount-cell">20.000000</td>
+                                        <td class="amount-cell">$3,210.00</td>
+                                        <td class="amount-cell">$64,200.00</td>
+                                        <td class="amount-cell">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Dec 15, 2024</td>
+                                        <td class="monospace">0x7f2a...5d93</td>
+                                        <td><strong>ETH</strong></td>
+                                        <td><span class="badge-sell">SELL</span></td>
+                                        <td class="amount-cell">8.500000</td>
+                                        <td class="amount-cell">$3,290.00</td>
+                                        <td class="amount-cell">$23,800.00</td>
+                                        <td class="amount-cell text-success">+$4,165.00</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transaction Details Panel -->
+            <div class="col-md-5">
+                <div class="card transaction-detail-panel">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-info-circle"></i> Transaction Details</span>
+                        <span class="status-indicator status-confirmed"></span>
+                        <small class="text-success">Confirmed</small>
+                    </div>
+                    <div class="card-body">
+                        <!-- Transaction Hash -->
+                        <div class="detail-section">
+                            <div class="detail-section-title">Transaction Hash</div>
+                            <div class="tx-hash">0x2b7c8e4a1f9d3c6b5e2a8f7d4c1b9e6a3f8d2c7b9f3d...</div>
+                            <div class="mt-2">
+                                <a href="https://etherscan.io/tx/0x2b7c8e4a1f9d3c6b5e2a8f7d4c1b9e6a3f8d2c7b9f3d" target="_blank" class="etherscan-btn">
+                                    <i class="bi bi-box-arrow-up-right"></i> View on Etherscan
+                                </a>
+                            </div>
+                        </div>
+
+                        <!-- Basic Info -->
+                        <div class="detail-section">
+                            <div class="detail-section-title">Transaction Info</div>
+                            <div class="detail-row">
+                                <span class="detail-label">Date & Time</span>
+                                <span class="detail-value">Jan 3, 2025 14:32:18 UTC</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Block</span>
+                                <span class="detail-value monospace">19,847,293</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">From</span>
+                                <span class="detail-value monospace">0x7a2...f4c9</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">To (Uniswap V3)</span>
+                                <span class="detail-value monospace">0x68b...3C4F</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Gas Used</span>
+                                <span class="detail-value">184,521 (0.0042 ETH)</span>
+                            </div>
+                        </div>
+
+                        <!-- Decoded Transaction -->
+                        <div class="detail-section">
+                            <div class="detail-section-title">
+                                <i class="bi bi-code-slash"></i> Decoded Transaction
+                            </div>
+                            <div class="decoded-function">
+<span class="keyword">function</span> <span class="function-name">exactInputSingle</span>(<br>
+&nbsp;&nbsp;tokenIn: <span class="address">0xC02a...6Cc2</span> <span class="string">(WETH)</span>,<br>
+&nbsp;&nbsp;tokenOut: <span class="address">0xA0b8...eB48</span> <span class="string">(USDC)</span>,<br>
+&nbsp;&nbsp;fee: <span class="number">3000</span>,<br>
+&nbsp;&nbsp;recipient: <span class="address">0x7a2...f4c9</span>,<br>
+&nbsp;&nbsp;amountIn: <span class="number">15000000000000000000</span> <span class="string">(15 ETH)</span>,<br>
+&nbsp;&nbsp;amountOutMin: <span class="number">51000000000</span> <span class="string">($51,000 USDC)</span>,<br>
+&nbsp;&nbsp;sqrtPriceLimitX96: <span class="number">0</span><br>
+)
+                            </div>
+                            <div class="mt-2 small text-muted">
+                                <i class="bi bi-lightning"></i> Uniswap V3: Swap 15 ETH → 51,375 USDC @ $3,425/ETH
+                            </div>
+                        </div>
+
+                        <!-- FIFO Cost Basis Calculation -->
+                        <div class="detail-section">
+                            <div class="detail-section-title">
+                                <i class="bi bi-calculator"></i> FIFO Cost Basis Calculation
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Quantity Sold</span>
+                                <span class="detail-value">15.000000 ETH</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Sale Price</span>
+                                <span class="detail-value">$3,425.00 / ETH</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Proceeds</span>
+                                <span class="detail-value">$51,375.00</span>
+                            </div>
+                            <hr class="my-2">
+                            <div class="detail-row">
+                                <span class="detail-label">Lot 1 (Dec 22): 10 ETH @ $3,150</span>
+                                <span class="detail-value">$31,500.00</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Lot 2 (Dec 18): 5 ETH @ $3,210</span>
+                                <span class="detail-value">$16,050.00</span>
+                            </div>
+                            <hr class="my-2">
+                            <div class="detail-row">
+                                <span class="detail-label">Total Cost Basis</span>
+                                <span class="detail-value">$42,150.00</span>
+                            </div>
+                            <div class="detail-row" style="background: #d4edda; margin: 0 -1rem; padding: 0.5rem 1rem;">
+                                <span class="detail-label fw-bold">Realized Gain</span>
+                                <span class="detail-value text-success fw-bold">+$9,225.00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Generated Journal Entries -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="bi bi-journal-check"></i> Generated Journal Entries
+                    </div>
+                    <div class="card-body p-0">
+                        <table class="table journal-entry-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Account</th>
+                                    <th class="text-end">Debit</th>
+                                    <th class="text-end">Credit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>
+                                        <span class="account-badge account-asset">1100</span>
+                                        USDC Holdings
+                                    </td>
+                                    <td class="amount-cell">$51,375.00</td>
+                                    <td class="amount-cell">-</td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span class="account-badge account-asset">1100</span>
+                                        ETH Holdings
+                                    </td>
+                                    <td class="amount-cell">-</td>
+                                    <td class="amount-cell">$42,150.00</td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span class="account-badge account-revenue">4300</span>
+                                        Realized Gains - Crypto
+                                    </td>
+                                    <td class="amount-cell">-</td>
+                                    <td class="amount-cell">$9,225.00</td>
+                                </tr>
+                                <tr class="table-light">
+                                    <td class="fw-bold">Totals</td>
+                                    <td class="amount-cell fw-bold">$51,375.00</td>
+                                    <td class="amount-cell fw-bold">$51,375.00</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div class="p-3 border-top">
+                            <small class="text-muted">
+                                <i class="bi bi-info-circle"></i>
+                                Memo: Uniswap V3 Swap - Sold 15 ETH for 51,375 USDC - Realized gain $9,225
+                            </small>
+                        </div>
+                    </div>
+                    <div class="card-footer bg-white">
+                        <button class="btn btn-success btn-sm me-2">
+                            <i class="bi bi-check-circle"></i> Post to GL
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm">
+                            <i class="bi bi-pencil"></i> Edit Entry
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

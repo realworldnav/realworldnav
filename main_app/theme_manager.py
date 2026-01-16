@@ -211,18 +211,39 @@ class ThemeManager:
         /* Custom Component Classes */
         
         /* Sidebar Components */
+        .app-logo {
+            width: 40px !important;
+            height: 40px !important;
+            margin-right: 10px !important;
+        }
+
+        .logo-title-row {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 0.75rem 1rem !important;
+            margin-bottom: 1rem !important;
+        }
+
         .app-title {
             color: var(--text-primary) !important;
             font-weight: 600 !important;
-            margin-bottom: 1rem !important;
+            margin: 0 !important;
         }
-        
+
         .title-container {
             text-align: center !important;
             padding-bottom: 1rem !important;
             border-bottom: 1px solid var(--border-light) !important;
         }
-        
+
+        /* Sidebar padding for logos */
+        .bslib-sidebar-layout > .sidebar {
+            padding-top: 1rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+
         .section-header {
             margin-top: 1rem !important;
             margin-bottom: 0.5rem !important;
@@ -247,28 +268,32 @@ class ThemeManager:
         
         .client-display {
             text-align: center !important;
-            padding: 1rem 0 !important;
+            padding: 1rem !important;
             border-bottom: 1px solid var(--border-light) !important;
             margin-bottom: 1rem !important;
         }
-        
+
         .client-display-content {
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
+            gap: 12px !important;
+            padding: 0.5rem !important;
         }
-        
+
         .client-logo {
-            margin-right: 12px !important;
+            flex-shrink: 0 !important;
             vertical-align: middle !important;
         }
-        
+
         .client-name {
             display: inline-block !important;
             margin: 0 !important;
             vertical-align: middle !important;
             color: var(--text-primary) !important;
             font-weight: 600 !important;
+            font-size: 1rem !important;
+            white-space: nowrap !important;
         }
         
         .debug-section {

@@ -72,6 +72,29 @@ Each module follows a consistent pattern:
 - `file_parser.py` - Data parsing utilities
 - `s3_storage.py` - S3 operations wrapper
 
+### Transaction Decoders
+
+**See `DECODER_WORKFLOW.md` for full documentation.**
+
+The `main_app/services/decoders/` module handles blockchain transaction decoding for NFT lending platforms:
+
+```
+decoders/
+├── base.py              # BaseDecoder, JournalEntry, DecodedTransaction
+├── gondi_decoder.py     # ✅ COMPLETE - Gondi multi-source lending
+├── blur_decoder.py      # ⚠️ Needs process_log() fix
+├── nftfi_decoder.py     # ❌ Placeholder
+├── arcade_decoder.py    # ❌ Placeholder
+└── registry.py          # Routes transactions to correct decoder
+```
+
+**Development workflow:**
+1. Test in `debug_decoder.py` (run: `python debug_decoder.py`)
+2. Extract working code to `main_app/services/decoders/{platform}_decoder.py`
+3. Add to registry
+
+**Critical:** Use `process_log()` not `process_receipt()` for event decoding!
+
 ### UI Patterns
 
 **Universal Header**: Fund and date selectors available across all modules

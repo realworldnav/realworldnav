@@ -159,7 +159,7 @@ def trial_balance_ui():
         """),
         
         shiny_ui.card(
-            shiny_ui.card_header("📊 Trial Balance Generator"),
+            shiny_ui.card_header("Trial Balance Generator"),
             
             shiny_ui.card_body(
                 shiny_ui.layout_columns(
@@ -219,20 +219,20 @@ def trial_balance_ui():
                 
                 # Export Options
                 shiny_ui.card(
-                    shiny_ui.card_header("📄 Export Trial Balance"),
+                    shiny_ui.card_header("Export Trial Balance"),
                     shiny_ui.card_body(
                         shiny_ui.layout_columns(
                             shiny_ui.div(
                                 shiny_ui.download_button(
                                     "download_tb_csv",
-                                    "📊 Download CSV",
+                                    "Download CSV",
                                     class_="btn-success w-100"
                                 ),
                             ),
                             shiny_ui.div(
                                 shiny_ui.download_button(
                                     "download_tb_pdf",
-                                    "📋 Download PDF",
+                                    shiny_ui.HTML('<i class="bi bi-file-earmark-pdf me-1"></i> Download PDF'),
                                     class_="btn-primary w-100"
                                 ),
                             ),
@@ -379,15 +379,15 @@ def register_outputs(output, input, selected_fund):
             df['date'] = df['date'].apply(clean_date_utc)
             
             # Verify all dates are UTC
-            print(f"✅ Date timezone after cleaning: {df['date'].dt.tz}")
-            print(f"📅 Sample cleaned dates: {df['date'].head()}")
+            print(f"Date timezone after cleaning: {df['date'].dt.tz}")
+            print(f"Sample cleaned dates: {df['date'].head()}")
             
             # Check for any remaining NaT dates
             nat_count = df['date'].isna().sum()
-            print(f"📊 NaT dates after cleaning: {nat_count}")
+            print(f"NaT dates after cleaning: {nat_count}")
             
             if nat_count > 0:
-                print("⚠️  Records with NaT dates:")
+                print("Records with NaT dates:")
                 nat_records = df[df['date'].isna()]
                 # Check which columns are available for debugging
                 debug_cols = []
@@ -760,7 +760,7 @@ def register_outputs(output, input, selected_fund):
             if not unbalanced_days:
                 return shiny_ui.div(
                     shiny_ui.div(
-                        shiny_ui.span("✅ All days are balanced!", class_="text-success fw-bold"),
+                        shiny_ui.HTML('<i class="bi bi-check-circle me-1"></i><span class="text-success fw-bold">All days are balanced!</span>'),
                         shiny_ui.span(" (All daily debits equal credits within 0.0001 threshold)", class_="text-muted"),
                         class_="alert alert-success"
                     ),
@@ -780,7 +780,7 @@ def register_outputs(output, input, selected_fund):
             
             return shiny_ui.div(
                 shiny_ui.div(
-                    shiny_ui.h6("⚠️ Unbalanced Days Detected", class_="alert-heading text-warning mb-2"),
+                    shiny_ui.h6(shiny_ui.HTML('<i class="bi bi-exclamation-triangle me-1"></i>Unbalanced Days Detected'), class_="alert-heading text-warning mb-2"),
                     shiny_ui.p(
                         f"Found {len(unbalanced_days)} day(s) where debits don't equal credits (threshold: 0.0001 ETH):",
                         class_="mb-2"
@@ -810,7 +810,7 @@ def register_outputs(output, input, selected_fund):
         
         return shiny_ui.card(
             shiny_ui.card_header(
-                f"📋 GL Entries for {account_info['account_name']} (#{account_info['gl_acct_number']})"
+                shiny_ui.HTML(f'<i class="bi bi-list-ul me-2"></i>GL Entries for {account_info["account_name"]} (#{account_info["gl_acct_number"]})')
             ),
             shiny_ui.card_body(
                 shiny_ui.layout_columns(
@@ -915,7 +915,7 @@ def register_outputs(output, input, selected_fund):
         # Check if trial balance data is available
         if input.generate_tb() == 0:
             return shiny_ui.div(
-                shiny_ui.p("⚠️ Please generate trial balance first before downloading", class_="text-warning"),
+                shiny_ui.p(shiny_ui.HTML('<i class="bi bi-info-circle me-1"></i>Please generate trial balance first before downloading'), class_="text-warning"),
                 class_="alert alert-warning"
             )
         
@@ -924,12 +924,12 @@ def register_outputs(output, input, selected_fund):
         
         if tb_df.empty or 'Error' in tb_df.columns or 'Message' in tb_df.columns:
             return shiny_ui.div(
-                shiny_ui.p("⚠️ No trial balance data available for download", class_="text-warning"),
+                shiny_ui.p(shiny_ui.HTML('<i class="bi bi-exclamation-triangle me-1"></i>No trial balance data available for download'), class_="text-warning"),
                 class_="alert alert-warning"
             )
-        
+
         return shiny_ui.div(
-            shiny_ui.p("✅ Trial balance data ready for download", class_="text-success"),
+            shiny_ui.p(shiny_ui.HTML('<i class="bi bi-check-circle me-1"></i>Trial balance data ready for download'), class_="text-success"),
             class_="alert alert-success"
         )
     
@@ -1339,7 +1339,7 @@ def generate_trial_balance_html(tb_df, unbalanced_days, report_info):
         
         balance_alert = f"""
         <div class="alert alert-warning">
-            <strong>⚠️ Unbalanced Days Detected</strong><br>
+            <strong><i class="bi bi-exclamation-triangle"></i> Unbalanced Days Detected</strong><br>
             Found {len(unbalanced_days)} day(s) where debits don't equal credits:
             <ul style="margin: 0.5rem 0 0 1rem; padding: 0;">
                 {unbalanced_list}
@@ -1349,7 +1349,7 @@ def generate_trial_balance_html(tb_df, unbalanced_days, report_info):
     else:
         balance_alert = """
         <div class="alert alert-success">
-            <strong>✅ All Days Balanced</strong><br>
+            <strong><i class="bi bi-check-circle"></i> All Days Balanced</strong><br>
             All daily debits equal credits within 0.0001 threshold.
         </div>
         """

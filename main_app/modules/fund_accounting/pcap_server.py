@@ -377,7 +377,7 @@ def register_pcap_outputs(output, input, session=None):
         # Add the combined/summary sheet first if it exists
         for summary_name in ['All_LPs_Combined', 'All LPs Combined', 'All_Partners', 'Summary']:
             if summary_name in processor.excel_data:
-                sheet_choices[summary_name] = f"📊 {summary_name} (Summary)"
+                sheet_choices[summary_name] = f"{summary_name} (Summary)"
                 break
         
         # Add LP sheets with display names
@@ -385,9 +385,9 @@ def register_pcap_outputs(output, input, session=None):
             if lp in processor.excel_data:
                 display_name = processor.get_lp_display_name(lp)
                 if display_name != lp:
-                    sheet_choices[lp] = f"👤 {display_name} ({lp})"
+                    sheet_choices[lp] = f"{display_name} ({lp})"
                 else:
-                    sheet_choices[lp] = f"👤 {lp}"
+                    sheet_choices[lp] = f"{lp}"
         
         # If no sheets available, show a message
         if not sheet_choices:

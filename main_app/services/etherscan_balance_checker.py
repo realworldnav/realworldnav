@@ -12,14 +12,12 @@ from typing import Dict, List, Optional, Tuple
 from decimal import Decimal, getcontext
 import time
 
+from main_app.config.blockchain_config import ETHERSCAN_API_KEY, ETHERSCAN_BASE_URL
+
 logger = logging.getLogger(__name__)
 
 # Set decimal precision for financial calculations
 getcontext().prec = 28
-
-# Etherscan API configuration
-ETHERSCAN_API_KEY = "P13CVTCP43NWU9GX5D9VBA2QMUTJDDS941"
-ETHERSCAN_BASE_URL = "https://api.etherscan.io/api"
 
 
 class EtherscanBalanceChecker:
@@ -170,11 +168,11 @@ class EtherscanBalanceChecker:
                 
                 # Determine status
                 if abs(difference) < Decimal('0.000001'):  # Very small difference threshold
-                    status = "✅ Match"
+                    status = "Match"
                 elif abs(difference_percent) < 1.0:  # Less than 1% difference
-                    status = "⚠️ Minor Diff"
+                    status = "Minor Diff"
                 else:
-                    status = "❌ Mismatch"
+                    status = "Mismatch"
                 
                 verification_results.append({
                     'wallet_address': wallet_address,
@@ -200,7 +198,7 @@ class EtherscanBalanceChecker:
                     'difference_percent': 0,
                     'fifo_eth_value': float(fifo_eth_value) if 'fifo_eth_value' in locals() else 0,
                     'fifo_cost_basis': float(fifo_cost_basis) if 'fifo_cost_basis' in locals() else 0,
-                    'status': "❌ Error",
+                    'status': "Error",
                     'last_checked': pd.Timestamp.now()
                 })
         

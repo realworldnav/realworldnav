@@ -407,37 +407,37 @@ def gl_analytics_ui():
     return ui.div(
         # Summary metrics
         ui.card(
-            ui.card_header("📊 GL Analytics Overview"),
+            ui.card_header(ui.HTML('<i class="bi bi-bar-chart me-2"></i>GL Analytics Overview')),
             ui.output_ui("gl_analytics_summary")
         ),
-        
+
         # Charts layout
         ui.layout_columns(
             # Transaction volume over time
             ui.card(
-                ui.card_header("📈 Transaction Volume Trends"),
+                ui.card_header(ui.HTML('<i class="bi bi-graph-up me-2"></i>Transaction Volume Trends')),
                 ui.output_ui("transaction_volume_chart"),
                 full_screen=True
             ),
             # Account category breakdown
             ui.card(
-                ui.card_header("🥧 Category Breakdown"),
+                ui.card_header(ui.HTML('<i class="bi bi-pie-chart me-2"></i>Category Breakdown')),
                 ui.output_ui("account_category_breakdown"),
                 full_screen=True
             ),
             col_widths=[8, 4]
         ),
-        
+
         ui.layout_columns(
             # Top accounts analysis
             ui.card(
-                ui.card_header("🏆 Most Active Accounts"),
+                ui.card_header(ui.HTML('<i class="bi bi-trophy me-2"></i>Most Active Accounts')),
                 ui.output_ui("top_accounts_analysis"),
                 full_screen=True
             ),
             # Balance trends
             ui.card(
-                ui.card_header("📊 Balance Trends"),
+                ui.card_header(ui.HTML('<i class="bi bi-graph-up-arrow me-2"></i>Balance Trends')),
                 ui.output_ui("balance_trends_chart"),
                 full_screen=True
             ),

@@ -476,7 +476,7 @@ def register_chart_of_accounts_outputs(output: Outputs, input: Inputs, session: 
                         
                         # Action buttons - Save Edit, Save to S3, Delete, Cancel
                         ui.div(
-                            ui.input_action_button("save_account_edit", "💾 Save Edit", class_="btn btn-primary me-2"),
+                            ui.input_action_button("save_account_edit", ui.HTML('<i class="bi bi-floppy me-1"></i> Save Edit'), class_="btn btn-primary me-2"),
                             ui.input_action_button("save_edit_to_s3", "Save to S3", class_="btn btn-success me-2"),
                             ui.input_action_button("delete_account", "Delete", class_="btn btn-danger me-2"),
                             ui.input_action_button("cancel_account_edit", "Cancel", class_="btn btn-secondary"),
@@ -557,7 +557,7 @@ def register_chart_of_accounts_outputs(output: Outputs, input: Inputs, session: 
         """Show the add account modal"""
         m = ui.modal(
             ui.div(
-                ui.h4("➕ Add New Account", class_="mb-4"),
+                ui.h4(ui.HTML('<i class="bi bi-plus-lg me-2"></i>Add New Account'), class_="mb-4"),
                 
                 # Basic Information Section
                 ui.h6("Basic Information", class_="mt-3 mb-2", style="color: #6c757d; border-bottom: 1px solid #eee; padding-bottom: 0.5rem;"),
@@ -1104,10 +1104,10 @@ def register_chart_of_accounts_outputs(output: Outputs, input: Inputs, session: 
     def add_account_trigger():
         """Button to trigger Add Account modal"""
         return ui.card(
-            ui.card_header("➕ Account Management"),
+            ui.card_header(ui.HTML('<i class="bi bi-plus-lg me-2"></i>Account Management')),
             ui.div(
                 ui.p("Create new Chart of Accounts entries with all required fields.", class_="text-muted mb-3"),
-                ui.input_action_button("show_add_account_modal", "➕ Add New Account", class_="btn btn-primary btn-lg"),
+                ui.input_action_button("show_add_account_modal", ui.HTML('<i class="bi bi-plus-lg me-1"></i> Add New Account'), class_="btn btn-primary btn-lg"),
                 style="text-align: center; padding: 2rem;"
             )
         )
@@ -1152,7 +1152,7 @@ def chart_of_accounts_ui():
             ui.tags.div(
                 # COA Preview Table
                 ui.card(
-                    ui.card_header("📋 Chart of Accounts Preview"),
+                    ui.card_header(ui.HTML('<i class="bi bi-list-ul me-2"></i>Chart of Accounts Preview')),
                     ui.p("Click on any row to see details and edit below", class_="text-muted mb-3"),
                     ui.div(
                         ui.output_data_frame("chart_of_accounts_preview"),
@@ -1165,7 +1165,7 @@ def chart_of_accounts_ui():
                 
                 # Detailed View
                 ui.card(
-                    ui.card_header("🔍 Complete Chart of Accounts Details"),
+                    ui.card_header(ui.HTML('<i class="bi bi-search me-2"></i>Complete Chart of Accounts Details')),
                     ui.p("All columns from your COA file", class_="text-muted mb-3"),
                     ui.div(
                         ui.output_data_frame("chart_of_accounts_detailed"),

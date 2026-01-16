@@ -7,6 +7,15 @@ __pycache__/
 env/
 venv/
 ENV/
+.venv/
+.venv-*/
+
+# Temp files
+tmpclaude-*
+nul
+
+# Archive (old/unused code)
+archive/
 build/
 develop-eggs/
 dist/
@@ -27,6 +36,8 @@ wheels/
 .env
 .env.local
 .env.*.local
+setup_aws.bat
+setup_aws.ps1
 
 # IDE
 .vscode/

@@ -4,10 +4,18 @@ from datetime import datetime, timedelta, timezone
 import asyncio
 import os
 from .blockchain_service import blockchain_service
-from .blur_auto_decoder import blur_auto_decoder
+from .blur_auto_decoder import blur_auto_decoder  # Keep for backwards compatibility
 from .decoder_modal_ui import decoder_modal_ui, decoder_modal_styles
 from .decoder_modal_outputs import register_decoder_modal_outputs
+from .decoded_transactions_outputs import register_decoded_transactions_outputs
 import logging
+
+# Import the new DecoderRegistry
+try:
+    from ...services.decoders import DecoderRegistry
+    DECODER_REGISTRY_AVAILABLE = True
+except ImportError:
+    DECODER_REGISTRY_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +29,16 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     initialization_status = reactive.value("initializing")
     error_message = reactive.value("")
     decoded_tx_cache = reactive.value({})  # Cache of decoded transactions
+    decoder_registry = reactive.value(None)  # New multi-platform decoder registry
+    registry_init_attempts = reactive.value(0)  # Retry counter for Web3 initialization
+    MAX_REGISTRY_INIT_ATTEMPTS = 3  # Max retries before giving up
 
     # Register decoder modal outputs
     set_current_tx = register_decoder_modal_outputs(input, output, session, selected_fund)
+
+    # Register decoded transactions outputs (new tab)
+    # Pass both registry and local cache for fallback when registry unavailable
+    register_decoded_transactions_outputs(output, input, session, decoder_registry, decoded_tx_cache)
 
     # Create wallet selector UI with friendly names filtered by fund
     @output
@@ -71,7 +86,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             wallet_choices["error"] = "Error loading wallets"
 
         # Add custom wallet option
-        wallet_choices["custom"] = "➕ Enter Custom Address..."
+        wallet_choices["custom"] = "+ Enter Custom Address..."
 
         # Set default to specific wallet address, or fallback to first valid wallet
         preferred_wallet = "0xF9B64dc47dbE8c75f6FFC573cbC7599404bfe5A7"
@@ -533,9 +548,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
             cached_decode = decoded_tx_cache.get().get(tx_hash)
             if cached_decode and cached_decode.get('status') == 'success':
-                decode_icon = "🔍"  # Successfully decoded
+                decode_icon = "[D]"  # Successfully decoded
             elif cached_decode and cached_decode.get('status') == 'error':
-                decode_icon = "❌"  # Decode error
+                decode_icon = "[!]"  # Decode error
             else:
                 decode_icon = ""  # Not yet decoded or pending
             # Format hash
@@ -597,10 +612,106 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             height="500px"
         )
 
-    # Auto-decode Blur transactions in background
+    # Initialize DecoderRegistry when fund wallets are available (with retry logic)
     @reactive.effect
-    def auto_decode_blur_transactions():
-        """Automatically decode Blur transactions in background"""
+    @reactive.event(selected_fund, registry_init_attempts)
+    def initialize_decoder_registry():
+        """
+        Initialize the multi-platform decoder registry with retry logic.
+
+        Tries multiple Web3 sources and retries if connection fails.
+        Resets retry counter on fund change or successful init.
+        """
+        if not DECODER_REGISTRY_AVAILABLE:
+            logger.info("DecoderRegistry not available (import failed), using legacy blur_auto_decoder")
+            return
+
+        attempts = registry_init_attempts.get()
+        if attempts >= MAX_REGISTRY_INIT_ATTEMPTS:
+            logger.warning(f"DecoderRegistry init failed after {attempts} attempts, using legacy decoder")
+            return
+
+        try:
+            from ...s3_utils import load_WALLET_file
+
+            wallet_df = load_WALLET_file()
+            current_fund = selected_fund()
+
+            # Reset attempts on fund change
+            if attempts > 0 and decoder_registry.get() is not None:
+                registry_init_attempts.set(0)
+                return
+
+            if wallet_df.empty:
+                logger.warning("No wallet data available")
+                return
+
+            fund_wallets = wallet_df[wallet_df['fund_id'] == current_fund]
+            fund_wallet_addresses = fund_wallets['wallet_address'].str.strip().tolist()
+
+            if not fund_wallet_addresses:
+                logger.warning(f"No fund wallets found for {current_fund}")
+                return
+
+            # Try multiple Web3 sources
+            w3 = None
+
+            # Source 1: blockchain_service.infura.w3_http (primary)
+            try:
+                if (hasattr(blockchain_service, 'infura') and
+                    blockchain_service.infura is not None and
+                    hasattr(blockchain_service.infura, 'w3_http') and
+                    blockchain_service.infura.w3_http is not None):
+                    w3 = blockchain_service.infura.w3_http
+                    logger.debug("Got Web3 from blockchain_service.infura.w3_http")
+            except Exception as e:
+                logger.debug(f"Could not get Web3 from infura: {e}")
+
+            # Source 2: blur_auto_decoder.w3 (fallback)
+            if w3 is None:
+                try:
+                    from .blur_auto_decoder import w3 as blur_w3
+                    if blur_w3 is not None:
+                        w3 = blur_w3
+                        logger.debug("Got Web3 from blur_auto_decoder")
+                except Exception as e:
+                    logger.debug(f"Could not get Web3 from blur_auto_decoder: {e}")
+
+            if w3 is None:
+                logger.warning(f"Web3 not available (attempt {attempts + 1}/{MAX_REGISTRY_INIT_ATTEMPTS}), will retry")
+                # Schedule retry in 5 seconds
+                if attempts < MAX_REGISTRY_INIT_ATTEMPTS - 1:
+                    reactive.invalidate_later(5.0)
+                    registry_init_attempts.set(attempts + 1)
+                return
+
+            # Verify connection with actual RPC call (is_connected() is unreliable for HTTP)
+            try:
+                chain_id = w3.eth.chain_id
+                logger.info(f"Web3 connected to chain {chain_id}")
+            except Exception as e:
+                logger.warning(f"Web3 not connected (attempt {attempts + 1}): {e}")
+                # Schedule retry
+                if attempts < MAX_REGISTRY_INIT_ATTEMPTS - 1:
+                    reactive.invalidate_later(5.0)
+                    registry_init_attempts.set(attempts + 1)
+                return
+
+            # Create registry with fund_id for GL posting
+            registry = DecoderRegistry(w3, fund_wallet_addresses, fund_id=current_fund)
+            decoder_registry.set(registry)
+            registry_init_attempts.set(0)  # Reset counter on success
+            logger.info(f"Initialized DecoderRegistry with {len(fund_wallet_addresses)} wallets for {current_fund}")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize DecoderRegistry: {e}")
+            if attempts < MAX_REGISTRY_INIT_ATTEMPTS - 1:
+                registry_init_attempts.set(attempts + 1)
+
+    # Auto-decode transactions in background (uses new registry when available)
+    @reactive.effect
+    def auto_decode_transactions():
+        """Automatically decode transactions in background using multi-platform registry"""
         df = transaction_data.get()
 
         if df.empty:
@@ -622,34 +733,48 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         # Check each transaction
         current_cache = decoded_tx_cache.get().copy()
+        registry = decoder_registry.get()
         updated = False
+        decode_count = 0
+        tx_types = {}
 
-        # Process ALL transactions, starting from most recent (head = newest)
-        for _, row in df.head(50).iterrows():  # Process top 50 transactions
+        # Process transactions, starting from most recent
+        for _, row in df.head(50).iterrows():
             tx_hash = row.get('hash', '')
 
             if not tx_hash or tx_hash in current_cache:
                 continue
 
-            # Decode ALL transactions (not just Blur)
-            # The decoder will categorize and route appropriately
             try:
-                result = blur_auto_decoder.decode_transaction(
-                    tx_hash,
-                    fund_wallet_addresses,
-                    wallet_metadata=None
-                )
+                # Use new DecoderRegistry if available
+                if registry:
+                    decoded = registry.decode_transaction(tx_hash)
+                    result = decoded.to_dict()
+                    tx_type = result.get('category', 'UNKNOWN')
+                else:
+                    # Fallback to legacy blur_auto_decoder
+                    result = blur_auto_decoder.decode_transaction(
+                        tx_hash,
+                        fund_wallet_addresses,
+                        wallet_metadata=None
+                    )
+                    tx_type = result.get('tx_type', 'UNKNOWN')
+
                 current_cache[tx_hash] = result
                 updated = True
-                tx_type = result.get('tx_type', 'UNKNOWN')
-                logger.info(f"Auto-decoded {tx_type} transaction: {tx_hash[:10]}...")
+                decode_count += 1
+                tx_types[tx_type] = tx_types.get(tx_type, 0) + 1
             except Exception as e:
-                logger.error(f"Failed to auto-decode {tx_hash}: {e}")
+                logger.error(f"Failed to auto-decode {tx_hash[:10]}: {e}")
                 current_cache[tx_hash] = {"status": "error", "error": str(e)}
                 updated = True
 
         if updated:
             decoded_tx_cache.set(current_cache)
+            # Log summary
+            if decode_count > 0:
+                types_summary = ", ".join(f"{k}:{v}" for k, v in tx_types.items())
+                logger.info(f"Auto-decoded {decode_count} transactions ({types_summary})")
 
     # Show decoder modal when user clicks decoded icon
     @reactive.effect
