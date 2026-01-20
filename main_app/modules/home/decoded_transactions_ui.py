@@ -333,19 +333,34 @@ def transaction_card_ui(decoded: Dict[str, Any]) -> ui.Tag:
     # Calculate display value from journal entries (actual amounts, not tx.value)
     # Sum up all debit amounts from journal entries as the transaction amount
     display_value = 0.0
+    display_asset = "ETH"  # Default asset
     if journal_entries:
         for je in journal_entries:
             entries = je.get('entries', [])
             for entry in entries:
                 if entry.get('type') == 'DEBIT':
                     display_value += float(entry.get('amount', 0))
+                    # Get asset from the entry (prefer non-ETH assets for display)
+                    entry_asset = entry.get('asset', 'ETH')
+                    if entry_asset and entry_asset != 'ETH':
+                        display_asset = entry_asset
+
+    # Also check function_params for token info
+    function_params = decoded.get('function_params', {})
+    if function_params and function_params.get('token'):
+        display_asset = function_params.get('token')
 
     # Fall back to tx.value if no journal entries
     if display_value == 0.0:
         display_value = float(tx_value)
 
-    # Calculate USD value
-    usd_value = display_value * float(eth_price) if eth_price else 0
+    # Calculate USD value based on asset type
+    # Stablecoins (USDC, USDT, DAI) are 1:1 with USD
+    stablecoins = {'USDC', 'USDT', 'DAI', 'FRAX', 'LUSD'}
+    if display_asset.upper() in stablecoins:
+        usd_value = display_value  # 1:1 with USD
+    else:
+        usd_value = display_value * float(eth_price) if eth_price else 0
     value = display_value  # Use display_value for the card
 
     # Platform badge color
@@ -382,7 +397,7 @@ def transaction_card_ui(decoded: Dict[str, Any]) -> ui.Tag:
         ui.layout_columns(
             # Amount column
             ui.div(
-                ui.div(f"{value:.4f} ETH", class_="amount-display"),
+                ui.div(f"{value:.4f} {display_asset}", class_="amount-display"),
                 ui.div(f"${usd_value:,.2f}", class_="usd-amount"),
             ),
             # Function/Address column

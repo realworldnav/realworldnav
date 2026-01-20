@@ -49,7 +49,7 @@ def test_api_connectivity():
             }
         except Exception as e:
             results[name] = {
-                "status": "❌ Failed",
+                "status": "[ERROR] Failed",
                 "status_code": None,
                 "error": str(e)
             }
@@ -72,9 +72,9 @@ def diagnose_network_issue():
     for domain in domains:
         try:
             ip = socket.gethostbyname(domain)
-            diagnostics["dns_resolution"][domain] = f"✅ Resolved to {ip}"
+            diagnostics["dns_resolution"][domain] = f"[OK] Resolved to {ip}"
         except socket.gaierror as e:
-            diagnostics["dns_resolution"][domain] = f"❌ DNS resolution failed: {e}"
+            diagnostics["dns_resolution"][domain] = f"[ERROR] DNS resolution failed: {e}"
     
     # Test basic HTTP connectivity
     test_urls = [
@@ -86,9 +86,9 @@ def diagnose_network_issue():
     for name, url in test_urls:
         try:
             response = requests.get(url, timeout=5)
-            diagnostics["basic_connectivity"][name] = f"✅ HTTP {response.status_code}"
+            diagnostics["basic_connectivity"][name] = f"[OK] HTTP {response.status_code}"
         except Exception as e:
-            diagnostics["basic_connectivity"][name] = f"❌ Failed: {e}"
+            diagnostics["basic_connectivity"][name] = f"[ERROR] Failed: {e}"
     
     return diagnostics
 

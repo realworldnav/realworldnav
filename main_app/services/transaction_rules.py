@@ -125,12 +125,12 @@ class TransactionRuleEngine:
         # Debug hash to track
         debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
         
-        logger.info(f"[RULE]RULE ENGINE: Starting rule processing for {len(transactions)} transactions 🚀🚀🚀")
+        logger.info(f"[RULE]RULE ENGINE: Starting rule processing for {len(transactions)} transactions [START][START][START]")
         self.rule_stats['total_processed'] = len(transactions)
         
         # Check if debug hash is in the transactions
         debug_tx = None
-        logger.info(f"[RULE]RULE ENGINE: Starting with {len(transactions)} transactions, searching for {debug_hash} 🚀🚀🚀")
+        logger.info(f"[RULE]RULE ENGINE: Starting with {len(transactions)} transactions, searching for {debug_hash} [START][START][START]")
         
         # List all transaction hashes for debugging
         all_hashes = [tx.get('tx_hash', 'NO_HASH') for tx in transactions]
@@ -140,7 +140,7 @@ class TransactionRuleEngine:
             tx_hash = tx.get('tx_hash', '').lower()
             if tx_hash == debug_hash.lower():
                 debug_tx = tx
-                logger.info(f"[RULE]RULE ENGINE: DEBUG HASH FOUND! {debug_hash} 🚀🚀🚀")
+                logger.info(f"[RULE]RULE ENGINE: DEBUG HASH FOUND! {debug_hash} [START][START][START]")
                 logger.info(f"[RULE]Initial transaction data: {debug_tx}")
                 break
         
@@ -167,7 +167,7 @@ class TransactionRuleEngine:
         def debug_after_rule(df, rule_name):
             debug_rows = df[df['tx_hash'].str.lower() == debug_hash.lower()]
             if not debug_rows.empty:
-                logger.info(f"[RULE]After {rule_name}: FOUND {len(debug_rows)} rows for debug hash! 🚀🚀")
+                logger.info(f"[RULE]After {rule_name}: FOUND {len(debug_rows)} rows for debug hash! [START][START]")
                 for idx, row in debug_rows.iterrows():
                     logger.info(f"[RULE]{rule_name} - Row {idx}: side={row.get('side')}, qty={row.get('qty')}, asset={row.get('asset')}, from={row.get('from_address')}, to={row.get('to_address')}")
             else:
@@ -206,7 +206,7 @@ class TransactionRuleEngine:
         # Final debug for our tracked hash
         final_debug_txs = [tx for tx in result if tx.get('tx_hash', '').lower() == debug_hash.lower()]
         if final_debug_txs:
-            logger.info(f"[RULE]RULE ENGINE FINAL RESULT: FOUND {len(final_debug_txs)} transactions for debug hash! 🚀🚀🚀")
+            logger.info(f"[RULE]RULE ENGINE FINAL RESULT: FOUND {len(final_debug_txs)} transactions for debug hash! [START][START][START]")
             for i, tx in enumerate(final_debug_txs):
                 logger.info(f"[RULE]Final TX {i}: side={tx.get('side')}, qty={tx.get('qty')}, asset={tx.get('asset')}, from={tx.get('from_address')}, to={tx.get('to_address')}")
         else:
@@ -512,8 +512,8 @@ class TransactionRuleEngine:
         FIXED VERSION: Only corrects ACTUALLY incorrect classifications.
         
         The blockchain service correctly identifies most transactions:
-        - Tokens coming IN → direction="in", side="buy" ✅ CORRECT
-        - Tokens going OUT → direction="out", side="sell" ✅ CORRECT
+        - Tokens coming IN → direction="in", side="buy" [OK] CORRECT
+        - Tokens going OUT → direction="out", side="sell" [OK] CORRECT
         
         This rule should ONLY correct cases where the initial logic failed,
         such as complex DeFi interactions or unusual contract patterns.
@@ -521,7 +521,7 @@ class TransactionRuleEngine:
         if df.empty:
             return df
         
-        logger.info(f"[RULE]RULE 7 STARTING: Processing {len(df)} transactions for direction-based correction 🚀🚀🚀")
+        logger.info(f"[RULE]RULE 7 STARTING: Processing {len(df)} transactions for direction-based correction [START][START][START]")
         
         correction_count = 0
         debug_hash = "0x6139dba1b74796d2fa1af26e70074a1e7b891a0170f7153dea95ac3db65daba6"
@@ -591,28 +591,28 @@ class TransactionRuleEngine:
                        wallet_addr.lower() == debug_from_wallet.lower() or 
                        wallet_addr.lower() == debug_to_wallet.lower())
             if is_debug:
-                logger.info(f"🔧🔧🔧 RULE 7 ENHANCED DEBUG: Processing tx={tx_hash} 🔧🔧🔧")
-                logger.info(f"🔧 WALLET FOCUS: wallet_addr={wallet_addr}")
-                logger.info(f"🔧 BEFORE RULE 7: side={current_side}, qty={current_qty}")
-                logger.info(f"🔧 ADDRESSES: from_addr={from_addr}")
-                logger.info(f"🔧 ADDRESSES: to_addr={to_addr}") 
-                logger.info(f"🔧 event_type={event_type}")
-                logger.info(f"🔧 known_wallets includes wallet_addr: {wallet_addr in known_wallets}")
-                logger.info(f"🔧 known_wallets includes from_addr: {from_addr in known_wallets}")
-                logger.info(f"🔧 known_wallets includes to_addr: {to_addr in known_wallets}")
-                logger.info(f"🔧 IS TARGET FROM WALLET: {wallet_addr.lower() == debug_from_wallet.lower()}")
-                logger.info(f"🔧 IS TARGET TO WALLET: {wallet_addr.lower() == debug_to_wallet.lower()}")
+                logger.info(f"[FIX][FIX][FIX] RULE 7 ENHANCED DEBUG: Processing tx={tx_hash} [FIX][FIX][FIX]")
+                logger.info(f"[FIX] WALLET FOCUS: wallet_addr={wallet_addr}")
+                logger.info(f"[FIX] BEFORE RULE 7: side={current_side}, qty={current_qty}")
+                logger.info(f"[FIX] ADDRESSES: from_addr={from_addr}")
+                logger.info(f"[FIX] ADDRESSES: to_addr={to_addr}") 
+                logger.info(f"[FIX] event_type={event_type}")
+                logger.info(f"[FIX] known_wallets includes wallet_addr: {wallet_addr in known_wallets}")
+                logger.info(f"[FIX] known_wallets includes from_addr: {from_addr in known_wallets}")
+                logger.info(f"[FIX] known_wallets includes to_addr: {to_addr in known_wallets}")
+                logger.info(f"[FIX] IS TARGET FROM WALLET: {wallet_addr.lower() == debug_from_wallet.lower()}")
+                logger.info(f"[FIX] IS TARGET TO WALLET: {wallet_addr.lower() == debug_to_wallet.lower()}")
             
             # Only process Transfer events for now
             if event_type != 'Transfer':
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: Skipping - not a Transfer event")
+                    logger.info(f"[FIX] RULE 7 DEBUG: Skipping - not a Transfer event")
                 continue
                 
             # Skip if this wallet is not one of our known wallets
             if wallet_addr not in known_wallets:
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: Skipping - wallet not in known wallets")
+                    logger.info(f"[FIX] RULE 7 DEBUG: Skipping - wallet not in known wallets")
                 continue
             
             # Determine the EXPECTED correct classification based on transaction flow
@@ -627,9 +627,9 @@ class TransactionRuleEngine:
                 case_applied = "Case 1: External → Our Wallet (Expected: BUY)"
                 
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: {case_applied}")
-                    logger.info(f"🔧 EXPECTED: side=buy, qty={expected_qty}")
-                    logger.info(f"🔧 CURRENT:  side={current_side}, qty={current_qty}")
+                    logger.info(f"[FIX] RULE 7 DEBUG: {case_applied}")
+                    logger.info(f"[FIX] EXPECTED: side=buy, qty={expected_qty}")
+                    logger.info(f"[FIX] CURRENT:  side={current_side}, qty={current_qty}")
             
             # Case 2: Tokens going OUT of our wallet (to external address)  
             elif from_addr == wallet_addr and to_addr not in known_wallets:
@@ -638,9 +638,9 @@ class TransactionRuleEngine:
                 case_applied = "Case 2: Our Wallet → External (Expected: SELL)"
                 
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: {case_applied}")
-                    logger.info(f"🔧 EXPECTED: side=sell, qty={expected_qty}")
-                    logger.info(f"🔧 CURRENT:  side={current_side}, qty={current_qty}")
+                    logger.info(f"[FIX] RULE 7 DEBUG: {case_applied}")
+                    logger.info(f"[FIX] EXPECTED: side=sell, qty={expected_qty}")
+                    logger.info(f"[FIX] CURRENT:  side={current_side}, qty={current_qty}")
             
             # Case 3: Intercompany transfers (between our wallets)
             elif from_addr in known_wallets and to_addr in known_wallets:
@@ -654,8 +654,8 @@ class TransactionRuleEngine:
                     case_applied = "Case 3a: Intercompany FROM wallet (Expected: SELL)"
                     
                     if is_debug:
-                        logger.info(f"🔧 RULE 7 DEBUG: {case_applied}")
-                        logger.info(f"🔧 This wallet ({wallet_addr}) is the FROM address → should be SELL")
+                        logger.info(f"[FIX] RULE 7 DEBUG: {case_applied}")
+                        logger.info(f"[FIX] This wallet ({wallet_addr}) is the FROM address → should be SELL")
                         
                 elif wallet_addr == to_addr:
                     expected_side = 'buy' 
@@ -663,22 +663,22 @@ class TransactionRuleEngine:
                     case_applied = "Case 3b: Intercompany TO wallet (Expected: BUY)"
                     
                     if is_debug:
-                        logger.info(f"🔧 RULE 7 DEBUG: {case_applied}")
-                        logger.info(f"🔧 This wallet ({wallet_addr}) is the TO address → should be BUY")
+                        logger.info(f"[FIX] RULE 7 DEBUG: {case_applied}")
+                        logger.info(f"[FIX] This wallet ({wallet_addr}) is the TO address → should be BUY")
                         
                 else:
                     # This shouldn't happen - wallet_addr should be either from or to
                     if is_debug:
-                        logger.info(f"🔧 RULE 7 DEBUG: Case 3: ERROR - wallet_addr ({wallet_addr}) is neither from ({from_addr}) nor to ({to_addr})")
+                        logger.info(f"[FIX] RULE 7 DEBUG: Case 3: ERROR - wallet_addr ({wallet_addr}) is neither from ({from_addr}) nor to ({to_addr})")
                     continue
                 
                 if is_debug:
-                    logger.info(f"🔧 EXPECTED: side={expected_side}, qty={expected_qty}")
-                    logger.info(f"🔧 CURRENT:  side={current_side}, qty={current_qty}")
+                    logger.info(f"[FIX] EXPECTED: side={expected_side}, qty={expected_qty}")
+                    logger.info(f"[FIX] CURRENT:  side={current_side}, qty={current_qty}")
             
             else:
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: No case matched - no correction needed")
+                    logger.info(f"[FIX] RULE 7 DEBUG: No case matched - no correction needed")
                 continue
             
             # ONLY apply correction if current classification is WRONG
@@ -686,8 +686,8 @@ class TransactionRuleEngine:
             if expected_side and expected_side != current_side:
                 needs_correction = True
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: SIDE MISMATCH - Correction needed!")
-                    logger.info(f"🔧 Will change: {current_side} → {expected_side}")
+                    logger.info(f"[FIX] RULE 7 DEBUG: SIDE MISMATCH - Correction needed!")
+                    logger.info(f"[FIX] Will change: {current_side} → {expected_side}")
             
             # Also check if quantity has wrong sign
             elif expected_side == current_side:
@@ -695,11 +695,11 @@ class TransactionRuleEngine:
                 if (expected_side == 'buy' and current_qty < 0) or (expected_side == 'sell' and current_qty > 0):
                     needs_correction = True
                     if is_debug:
-                        logger.info(f"🔧 RULE 7 DEBUG: QTY SIGN WRONG - Correction needed!")
-                        logger.info(f"🔧 Will change qty: {current_qty} → {expected_qty}")
+                        logger.info(f"[FIX] RULE 7 DEBUG: QTY SIGN WRONG - Correction needed!")
+                        logger.info(f"[FIX] Will change qty: {current_qty} → {expected_qty}")
                 else:
                     if is_debug:
-                        logger.info(f"🔧 RULE 7 DEBUG: Classification already CORRECT - no change needed")
+                        logger.info(f"[FIX] RULE 7 DEBUG: Classification already CORRECT - no change needed")
             
             # Apply correction ONLY if actually needed
             if needs_correction:
@@ -708,18 +708,18 @@ class TransactionRuleEngine:
                 correction_count += 1
                 
                 if is_debug:
-                    logger.info(f"🔧🔧🔧 RULE 7 DEBUG: CORRECTION APPLIED! 🔧🔧🔧")
-                    logger.info(f"🔧 AFTER:  side={expected_side}, qty={expected_qty}")
+                    logger.info(f"[FIX][FIX][FIX] RULE 7 DEBUG: CORRECTION APPLIED! [FIX][FIX][FIX]")
+                    logger.info(f"[FIX] AFTER:  side={expected_side}, qty={expected_qty}")
                 
                 logger.info(f"Rule 7: Corrected tx {tx_hash[:10]}... from {current_side} to {expected_side} ({case_applied})")
             else:
                 if is_debug:
-                    logger.info(f"🔧 RULE 7 DEBUG: No correction applied - classification already correct")
+                    logger.info(f"[FIX] RULE 7 DEBUG: No correction applied - classification already correct")
         
         self.rule_stats['rule_7_applied'] = correction_count
         
         # Final summary
-        logger.info(f"[RULE]RULE 7 COMPLETE: Applied {correction_count} corrections to {len(df)} transactions 🚀🚀🚀")
+        logger.info(f"[RULE]RULE 7 COMPLETE: Applied {correction_count} corrections to {len(df)} transactions [START][START][START]")
         
         # Show final state of any intercompany transfers
         final_intercompany = []

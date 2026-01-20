@@ -514,6 +514,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
         - Generates deterministic row keys for deduplication
         - Skips entries already in GL
         - Uses optimistic status update with rollback on failure
+        - Generates daily interest accruals for loan repayments
         """
         registry = decoder_registry_value.get()
         if not registry:
@@ -528,9 +529,49 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
 
         # Collect entries and mark as POSTING (optimistic update)
         all_entries = []
+        accrual_entries = []  # Separate list for interest accruals
         original_statuses = {}  # For rollback on failure
 
         from ...services.decoders import PostingStatus
+        from ...services.decoders.base import generate_daily_interest_accruals
+        from decimal import Decimal
+
+        # Load wallet mapping for fund_id lookup
+        try:
+            from ...s3_utils import load_WALLET_file, load_COA_file
+            wallet_df = load_WALLET_file()
+            wallet_to_fund_map = {}
+            if wallet_df is not None and not wallet_df.empty:
+                for _, row in wallet_df.iterrows():
+                    addr = str(row.get('wallet_address', '')).strip().lower()
+                    fund = str(row.get('fund_id', '')).strip()
+                    if addr and fund:
+                        wallet_to_fund_map[addr] = fund
+            logger.info(f"Loaded {len(wallet_to_fund_map)} wallet-to-fund mappings")
+        except Exception as e:
+            logger.warning(f"Could not load wallet mappings: {e}")
+            wallet_to_fund_map = {}
+
+        # Load COA for GL account number lookup
+        try:
+            coa_df = load_COA_file()
+            coa_map = {}
+            if coa_df is not None and not coa_df.empty:
+                for _, row in coa_df.iterrows():
+                    try:
+                        acct_num = int(row.get('GL_Acct_Number', 0))
+                        acct_name = str(row.get('GL_Acct_Name', '')).strip()
+                        if acct_num and acct_name:
+                            # Map by GL_Acct_Name for lookup
+                            coa_map[acct_name] = (acct_num, acct_name)
+                            # Also map by lowercase for flexible matching
+                            coa_map[acct_name.lower()] = (acct_num, acct_name)
+                    except:
+                        continue
+            logger.info(f"Loaded {len(coa_map)} COA account mappings")
+        except Exception as e:
+            logger.warning(f"Could not load COA: {e}")
+            coa_map = {}
 
         for tx in auto_ready:
             for entry in tx.journal_entries:
@@ -538,11 +579,95 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                 original_statuses[entry.entry_id] = entry.posting_status
                 # Optimistic update - mark as POSTED before save
                 entry.posting_status = PostingStatus.POSTED
-                all_entries.extend(entry.to_gl_records())
+                # Pass wallet and COA mappings for proper fund_id and GL account lookup
+                all_entries.extend(entry.to_gl_records(
+                    wallet_to_fund_map=wallet_to_fund_map,
+                    coa_map=coa_map
+                ))
 
-        if not all_entries:
+            # Generate interest accruals for loan repayments
+            if tx.category.value == 'LOAN_REPAYMENT' and tx.positions:
+                for lien_id, position in tx.positions.items():
+                    try:
+                        # Extract loan details from position
+                        principal = Decimal(str(position.principal)) if hasattr(position, 'principal') else Decimal(0)
+                        rate_bips = int(position.rate) if hasattr(position, 'rate') else 0
+                        start_time = position.start_time if hasattr(position, 'start_time') else None
+
+                        if principal > 0 and rate_bips > 0 and start_time:
+                            # Get timestamps
+                            start_timestamp = int(start_time.timestamp()) if hasattr(start_time, 'timestamp') else int(start_time)
+                            end_timestamp = int(tx.timestamp.timestamp()) if hasattr(tx.timestamp, 'timestamp') else int(tx.timestamp)
+
+                            # Determine if fund is lender or borrower
+                            is_lender = False
+                            fund_wallets = getattr(registry, 'fund_wallets', []) or []
+                            fund_wallets_lower = [w.lower() for w in fund_wallets]
+
+                            # Check wallet roles
+                            for addr, role in tx.wallet_roles.items():
+                                if addr.lower() in fund_wallets_lower and role == 'lender':
+                                    is_lender = True
+                                    break
+
+                            # Fallback: check position lender/borrower
+                            if not is_lender and hasattr(position, 'lender') and fund_wallets_lower:
+                                is_lender = position.lender.lower() in fund_wallets_lower
+
+                            # Get platform string for account selection
+                            platform_str = tx.platform.value if hasattr(tx.platform, 'value') else str(tx.platform)
+
+                            # Get wallet address and look up fund_id from mapping
+                            wallet_addr = tx.journal_entries[0].wallet_address if tx.journal_entries else ''
+                            accrual_fund_id = tx.journal_entries[0].fund_id if tx.journal_entries else ''
+                            # If no fund_id set, look up from wallet mapping
+                            if not accrual_fund_id and wallet_addr and wallet_to_fund_map:
+                                accrual_fund_id = wallet_to_fund_map.get(wallet_addr.lower(), '')
+
+                            # Common metadata for accruals - matches parquet schema
+                            common_metadata = {
+                                'tx_hash': tx.tx_hash,
+                                'fund_id': accrual_fund_id,
+                                'wallet_id': wallet_addr,
+                                'cryptocurrency': 'ETH',
+                                'eth_usd_price': float(tx.eth_price),
+                                # Loan details
+                                'loan_id': str(lien_id) if lien_id else None,
+                                'lender': getattr(position, 'lender', None),
+                                'borrower': getattr(position, 'borrower', None),
+                                'principal_crypto': float(principal),
+                                'principal_USD': float(principal * tx.eth_price),
+                                'annual_interest_rate': float(Decimal(rate_bips) / Decimal(10000)),
+                                'contract_address': getattr(position, 'collection', None),
+                                'token_id': getattr(position, 'token_id', None),
+                            }
+
+                            # Generate daily accruals
+                            accruals = generate_daily_interest_accruals(
+                                start_timestamp=start_timestamp,
+                                end_timestamp=end_timestamp,
+                                principal=principal,
+                                rate_bips=rate_bips,
+                                is_lender=is_lender,
+                                common_metadata=common_metadata,
+                                platform=platform_str,
+                            )
+
+                            if accruals:
+                                accrual_entries.extend(accruals)
+                                logger.info(f"Generated {len(accruals)} interest accrual entries for loan {lien_id}")
+
+                    except Exception as accrual_err:
+                        logger.warning(f"Could not generate accruals for loan {lien_id}: {accrual_err}")
+                        # Don't fail the whole posting for accrual errors
+
+        if not all_entries and not accrual_entries:
             ui.notification_show("No journal entries to post", type="warning")
             return
+
+        # Combine regular entries with accrual entries
+        combined_entries = all_entries + accrual_entries
+        accrual_count = len(accrual_entries)
 
         try:
             from ...s3_utils import (
@@ -551,9 +676,12 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             )
 
             # Create DataFrame with dedup keys
-            df_new = pd.DataFrame(all_entries)
+            df_new = pd.DataFrame(combined_entries)
+            # Use existing row_key if present (from interest accruals), otherwise generate one
             df_new['_row_key'] = df_new.apply(
-                lambda row: _generate_gl_row_key(row.to_dict()), axis=1
+                lambda row: row.get('row_key') if pd.notna(row.get('row_key')) and row.get('row_key')
+                           else _generate_gl_row_key(row.to_dict()),
+                axis=1
             )
 
             # Get fresh GL data
@@ -589,6 +717,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             try:
                 from datetime import datetime, timezone
                 import re
+                from ...s3_utils import load_COA_file
 
                 def extract_account_number(account_name_str):
                     """Extract account number from account name like '100.30 - ETH Wallet'"""
@@ -600,11 +729,54 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                         return match.group(1)
                     return ''
 
+                # Load COA for account name to number mapping
+                coa_df = load_COA_file()
+                account_name_to_number = {}
+                account_number_to_name = {}
+                if not coa_df.empty:
+                    for _, coa_row in coa_df.iterrows():
+                        try:
+                            acct_num = str(int(coa_row['GL_Acct_Number']))
+                            acct_name = str(coa_row['GL_Acct_Name']).strip()
+                            # Map both ways
+                            account_name_to_number[acct_name.lower()] = acct_num
+                            account_number_to_name[acct_num] = acct_name
+                            # Also map partial names
+                            words = acct_name.lower().split()
+                            if len(words) >= 2:
+                                account_name_to_number[' '.join(words[:2])] = acct_num
+                        except:
+                            continue
+
+                def lookup_account_number(account_name):
+                    """Look up account number from COA by name"""
+                    if not account_name:
+                        return ''
+                    # First try exact match
+                    name_lower = str(account_name).strip().lower()
+                    if name_lower in account_name_to_number:
+                        return account_name_to_number[name_lower]
+                    # Try partial match
+                    for coa_name, acct_num in account_name_to_number.items():
+                        if coa_name in name_lower or name_lower in coa_name:
+                            return acct_num
+                    # Fallback: try to extract from name
+                    return extract_account_number(account_name)
+
                 # Prepare GL2 format records
                 gl2_records = []
                 for _, row in df_to_add.iterrows():
                     account_name = row.get('account_name', '')
+                    # Try to extract number first, then lookup
                     account_number = extract_account_number(account_name)
+                    if not account_number:
+                        account_number = lookup_account_number(account_name)
+
+                    # Format account name properly if we found a number
+                    if account_number and account_number in account_number_to_name:
+                        formatted_name = f"{account_number} - {account_number_to_name[account_number]}"
+                    else:
+                        formatted_name = account_name
 
                     # Get entry type from transaction_type field
                     entry_type = row.get('transaction_type', '')
@@ -617,7 +789,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                         'tx_hash': row.get('hash', ''),
                         'entry_type': line_type,
                         'account_number': account_number,
-                        'account_name': account_name,
+                        'account_name': formatted_name,
                         'debit_crypto': debit_val,
                         'credit_crypto': credit_val,
                         'debit_USD': float(row.get('debit_USD', 0)) if pd.notna(row.get('debit_USD')) else 0.0,
@@ -625,7 +797,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                         'asset': row.get('cryptocurrency', row.get('asset', 'ETH')),
                         'description': row.get('note', row.get('description', '')),
                         'category': entry_type,  # Use transaction_type as category
-                        'platform': row.get('platform', ''),
+                        'platform': row.get('platform', 'unknown'),
                         'timestamp': row.get('date', datetime.now(timezone.utc)),
                         'posted_date': datetime.now(timezone.utc),
                         'row_key': _generate_gl_row_key(row.to_dict())
@@ -655,13 +827,15 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             # Force registry update to reflect new status
             decoder_registry_value.set(registry)
 
-            # Success message with duplicate info
+            # Success message with duplicate and accrual info
             msg = f"Posted {len(df_to_add)} new entries to GL"
+            if accrual_count > 0:
+                msg += f" (including {accrual_count} interest accruals)"
             if duplicates_count > 0:
                 msg += f" ({duplicates_count} duplicates skipped)"
             ui.notification_show(msg, type="success", duration=5)
 
-            logger.info(f"GL posting complete: {len(df_to_add)} new, {duplicates_count} skipped")
+            logger.info(f"GL posting complete: {len(df_to_add)} new, {duplicates_count} skipped, {accrual_count} accruals")
 
         except Exception as e:
             # Rollback posting status on failure

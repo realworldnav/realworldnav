@@ -459,9 +459,9 @@ def register_crypto_token_tracker_outputs(output, input, session):
     @render.ui
     def fetch_progress_inline():
         is_fetching = fetch_in_progress.get()
-        print(f"🔍 Inline progress check - is_fetching: {is_fetching}")
+        print(f"[DEBUG] Inline progress check - is_fetching: {is_fetching}")
         if is_fetching:
-            print("📊 Showing inline progress!")
+            print("[DATA] Showing inline progress!")
             return ui.div(
                 ui.HTML(f'<i class="bi bi-arrow-clockwise text-primary me-1"></i>{fetch_progress_message.get()}'),
                 ui.div(
@@ -482,24 +482,24 @@ def register_crypto_token_tracker_outputs(output, input, session):
     @reactive.effect
     @reactive.event(input.fetch_token_transactions)
     async def fetch_token_transactions():
-        print("🚀 FETCH TRANSACTIONS BUTTON CLICKED!")
+        print("[START] FETCH TRANSACTIONS BUTTON CLICKED!")
         logger.info("Fetch transactions button clicked")
         
         service = blockchain_service.get()
         if not service:
-            print("❌ Blockchain service not initialized")
+            print("[ERROR] Blockchain service not initialized")
             logger.error("Blockchain service not initialized")
             fetch_progress_message.set("Error: Blockchain service not initialized")
             return
         
-        print("✅ Blockchain service is ready")
+        print("[OK] Blockchain service is ready")
         
         # Start native Shiny progress
         with ui.Progress(min=0, max=100) as progress:
             try:
                 # Step 1: Initialize progress tracking
                 progress.set(5, message="Preparing to fetch transactions...", detail="Initializing blockchain service")
-                print("🟢 Started native Shiny progress tracking")
+                print(" Started native Shiny progress tracking")
                 fetch_in_progress.set(True)
                 
                 # Step 2: Parse parameters
@@ -515,8 +515,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 start_date = datetime.combine(date_range[0], datetime.min.time()).replace(tzinfo=timezone.utc)
                 end_date = datetime.combine(date_range[1], datetime.max.time()).replace(tzinfo=timezone.utc)
                 
-                print(f"📅 Date range selected: {date_range[0]} to {date_range[1]}")
-                print(f"📅 Converted to datetime: {start_date} to {end_date}")
+                print(f" Date range selected: {date_range[0]} to {date_range[1]}")
+                print(f" Converted to datetime: {start_date} to {end_date}")
                 logger.info(f"Fetching transactions for fund: {fund_id}, wallets: {wallet_selection}, dates: {start_date} to {end_date}")
                 
                 # Step 3: Prepare wallet addresses
@@ -545,11 +545,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
                            detail="This may take a few moments depending on date range")
                 
                 try:
-                    print(f"🚀 Starting blockchain fetch with parameters:")
-                    print(f"   📅 Start date: {start_date}")
-                    print(f"   📅 End date: {end_date}")
-                    print(f"   💰 Fund: {fund_param}")
-                    print(f"   👛 Wallets: {len(wallet_addresses) if wallet_addresses else 'All'}")
+                    print(f"[START] Starting blockchain fetch with parameters:")
+                    print(f"    Start date: {start_date}")
+                    print(f"    End date: {end_date}")
+                    print(f"   [VALUE] Fund: {fund_param}")
+                    print(f"    Wallets: {len(wallet_addresses) if wallet_addresses else 'All'}")
                     
                     df = service.fetch_transactions_for_period(
                         start_date=start_date,
@@ -559,10 +559,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
                         progress_callback=update_progress
                     )
                     
-                    print(f"📊 Raw fetch result: {len(df)} transactions")
+                    print(f"[DATA] Raw fetch result: {len(df)} transactions")
                     if not df.empty:
-                        print(f"🔍 Raw columns: {list(df.columns)}")
-                        print(f"🔍 First transaction sample: {df.iloc[0].to_dict() if len(df) > 0 else 'None'}")
+                        print(f"[DEBUG] Raw columns: {list(df.columns)}")
+                        print(f"[DEBUG] First transaction sample: {df.iloc[0].to_dict() if len(df) > 0 else 'None'}")
                 except Exception as blockchain_error:
                     if "429" in str(blockchain_error) or "Too Many Requests" in str(blockchain_error):
                         fetch_progress_message.set("Rate limited by Infura. Please wait a few minutes and try again with a smaller date range.")
@@ -587,37 +587,37 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     
                     # Filter by date range to ensure we only get transactions in the selected range
                     if 'date' in processed_df.columns:
-                        print(f"📅 Before date filtering: {len(processed_df)} transactions")
+                        print(f" Before date filtering: {len(processed_df)} transactions")
                         processed_df['date'] = pd.to_datetime(processed_df['date'])
                         date_mask = (
                             (processed_df['date'] >= start_date) & 
                             (processed_df['date'] <= end_date)
                         )
                         processed_df = processed_df[date_mask].copy()
-                        print(f"📅 After date filtering: {len(processed_df)} transactions")
+                        print(f" After date filtering: {len(processed_df)} transactions")
                     
                     # Step 7: Field normalization
                     progress.set(90, message="Normalizing transaction fields...", detail="Formatting data for display")
                     
                     # Note: Amount signing is now handled in blockchain_service based on side/qty
                     # The blockchain service already provides properly signed quantities in 'qty' field
-                    print(f"🔍 Processing columns: {list(processed_df.columns)}")
+                    print(f"[DEBUG] Processing columns: {list(processed_df.columns)}")
                     
                     # Field normalization: Map qty → token_amount for display compatibility
                     if 'qty' in processed_df.columns:
                         processed_df['token_amount'] = processed_df['qty'].abs()  # Use absolute value for display
-                        print(f"📊 Mapped 'qty' to 'token_amount' (absolute values for display)")
+                        print(f"[DATA] Mapped 'qty' to 'token_amount' (absolute values for display)")
                     
                     # Note: ETH handling moved to post-processing to avoid Web3 hex string errors
                     
                     # Quantity validation: Ensure proper signs are preserved for FIFO processing
                     if 'side' in processed_df.columns:
-                        print(f"📊 Side distribution: {processed_df['side'].value_counts().to_dict()}")
+                        print(f"[DATA] Side distribution: {processed_df['side'].value_counts().to_dict()}")
                         if 'qty' in processed_df.columns:
                             buy_qty_check = processed_df[processed_df['side'] == 'buy']['qty']
                             sell_qty_check = processed_df[processed_df['side'] == 'sell']['qty']
-                            print(f"📊 Buy quantities (should be positive): {buy_qty_check.describe()}")
-                            print(f"📊 Sell quantities (should be negative): {sell_qty_check.describe()}")
+                            print(f"[DATA] Buy quantities (should be positive): {buy_qty_check.describe()}")
+                            print(f"[DATA] Sell quantities (should be negative): {sell_qty_check.describe()}")
                     
                     # Step 8: Complete processing
                     progress.set(100, message="Fetch completed successfully!", 
@@ -632,7 +632,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                         blank_count = blank_addresses.sum()
                         
                         if blank_count > 0:
-                            print(f"📊 Post-processing: Found {blank_count} transactions with blank token addresses (ETH native)")
+                            print(f"[DATA] Post-processing: Found {blank_count} transactions with blank token addresses (ETH native)")
                             # Now safe to assign "ETH" after all Web3 operations are complete
                             final_df.loc[blank_addresses, 'token_address'] = 'ETH'
                             
@@ -644,10 +644,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
                             if 'token_name' in final_df.columns:
                                 final_df.loc[blank_addresses, 'token_name'] = 'Ethereum'
                             
-                            print(f"📊 Post-processing: Assigned 'ETH' identifier to {blank_count} native ETH transactions")
+                            print(f"[DATA] Post-processing: Assigned 'ETH' identifier to {blank_count} native ETH transactions")
                     
                     fetched_transactions.set(final_df)
-                    fetch_progress_message.set(f"✅ Successfully fetched {len(final_df)} transactions!")
+                    fetch_progress_message.set(f"[OK] Successfully fetched {len(final_df)} transactions!")
                 
             except Exception as e:
                 logger.error(f"Error fetching transactions: {e}")
@@ -657,7 +657,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 raise e
             
             finally:
-                print("🔴 Setting fetch_in_progress to False")
+                print(" Setting fetch_in_progress to False")
                 fetch_in_progress.set(False)
                 # Progress bar will auto-close when the 'with' block exits
     
@@ -824,13 +824,13 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Determine status with enhanced icons using helper functions
             if is_verified_token(row.get('token_address', '')):
-                status = "✅ Verified"
+                status = "[OK] Verified"
                 status_class = "success"
             elif token_addr in approved_addresses:
-                status = "☑️ Approved"
+                status = "☑ Approved"
                 status_class = "info"
             else:
-                status = "⚠️ Needs Review"
+                status = "[WARN] Needs Review"
                 status_class = "warning"
             
             # Format wallet ID (shortened)
@@ -874,7 +874,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             return final_df
         
         # Sort by status (unverified first, then by date)
-        status_priority = {'⚠️ Needs Review': 0, '☑️ Approved': 1, '✅ Verified': 2}
+        status_priority = {'[WARN] Needs Review': 0, '☑ Approved': 1, '[OK] Verified': 2}
         final_df['_sort_priority'] = final_df['Status'].map(status_priority)
         final_df = final_df.sort_values(['_sort_priority', 'Date'], ascending=[True, False])
         
@@ -960,8 +960,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
         if approved_count > 0 or rejected_count > 0:
             approval_components.append(
                 ui.div(
-                    ui.span(f"✅ {approved_count} Approved", class_="badge bg-success me-2") if approved_count > 0 else "",
-                    ui.span(f"❌ {rejected_count} Rejected", class_="badge bg-danger") if rejected_count > 0 else "",
+                    ui.span(f"[OK] {approved_count} Approved", class_="badge bg-success me-2") if approved_count > 0 else "",
+                    ui.span(f"[ERROR] {rejected_count} Rejected", class_="badge bg-danger") if rejected_count > 0 else "",
                     class_="mb-2"
                 )
             )
@@ -1241,11 +1241,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Determine status using helper functions
             if is_verified_token(row.get('token_address', '')):
-                status = "✅ Verified"
+                status = "[OK] Verified"
             elif token_addr in approved_addresses:
-                status = "☑️ Approved"
+                status = "☑ Approved"
             else:
-                status = "❓ Unknown"  # Should not happen but safety check
+                status = " Unknown"  # Should not happen but safety check
             
             # Format wallet ID (shortened)
             wallet_id = str(row.get('wallet_id', ''))
@@ -1560,7 +1560,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Get token info for logging
             token_info = get_token_info_from_address(token_address)
-            logger.info(f"✅ Approved token: {token_info['name']} ({token_address})")
+            logger.info(f"[OK] Approved token: {token_info['name']} ({token_address})")
             
             # Trigger reactive updates for ALL tables
             approved_tokens_updated.set(approved_tokens_updated.get() + 1)
@@ -1587,7 +1587,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Save updated rejected tokens to S3
             if save_rejected_tokens_file(rejected_tokens):
-                logger.info(f"✅ Successfully saved {len(rejected_tokens)} rejected tokens to S3")
+                logger.info(f"[OK] Successfully saved {len(rejected_tokens)} rejected tokens to S3")
             else:
                 logger.error(f"Failed to save rejected tokens to S3")
             
@@ -1598,7 +1598,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Get token info for logging
             token_info = get_token_info_from_address(token_address)
-            logger.info(f"❌ Rejected token: {token_info['name']} ({token_address})")
+            logger.info(f"[ERROR] Rejected token: {token_info['name']} ({token_address})")
             
             # Trigger reactive update for UI refresh
             rejected_tokens_updated.set(rejected_tokens_updated.get() + 1)
@@ -1614,7 +1614,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             
             # Get token info for logging
             token_info = get_token_info_from_address(token_address)
-            logger.info(f"🔍 Opening Etherscan for {token_info['name']} ({token_address})")
+            logger.info(f"[DEBUG] Opening Etherscan for {token_info['name']} ({token_address})")
             
             # Open URL in new tab using JavaScript injection
             ui.insert_ui(
@@ -1633,10 +1633,10 @@ def register_crypto_token_tracker_outputs(output, input, session):
         try:
             approved_tokens = load_approved_tokens_file()
             if not approved_tokens:
-                logger.info("📋 No approved tokens to display")
+                logger.info("[LIST] No approved tokens to display")
                 return
             
-            logger.info(f"📋 Approved Tokens ({len(approved_tokens)}):")
+            logger.info(f"[LIST] Approved Tokens ({len(approved_tokens)}):")
             for i, token_addr in enumerate(approved_tokens, 1):
                 token_info = get_token_info_from_address(token_addr)
                 logger.info(f"  {i}. {token_info['name']} ({token_info['symbol']}) - {token_addr}")
@@ -1651,7 +1651,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
         try:
             approved_tokens = load_approved_tokens_file()
             if not approved_tokens:
-                logger.info("📤 No approved tokens to export")
+                logger.info("[INFO] No approved tokens to export")
                 return
             
             # Create export data
@@ -1670,7 +1670,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             export_df = pd.DataFrame(export_data)
             
             # In a real implementation, this would trigger a file download
-            logger.info(f"📤 Export data ready for {len(export_data)} approved tokens:")
+            logger.info(f"[INFO] Export data ready for {len(export_data)} approved tokens:")
             logger.info(f"Export preview:\n{export_df.to_string(index=False)}")
             
         except Exception as e:
@@ -2090,7 +2090,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             logger.info(f"Edited data shape: {edited_data.shape if hasattr(edited_data, 'shape') else 'N/A'}")
             
             if edited_data is None or len(edited_data) == 0:
-                save_status_msg.set("⚠️ No data to save - table appears empty")
+                save_status_msg.set("[WARN] No data to save - table appears empty")
                 logger.warning("No edited data in reactive store")
                 return
             
@@ -2107,7 +2107,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
             required_columns = ['Token Name', 'Symbol', 'Token Address', 'Approval Status']
             missing_columns = [col for col in required_columns if col not in edited_df.columns]
             if missing_columns:
-                save_status_msg.set(f"❌ Missing required columns: {missing_columns}")
+                save_status_msg.set(f"[ERROR] Missing required columns: {missing_columns}")
                 return
             
             # Extract approved token addresses from the edited data
@@ -2135,13 +2135,13 @@ def register_crypto_token_tracker_outputs(output, input, session):
             approved_tokens_updated.set(approved_tokens_updated.get() + 1)
             
             # Set success message
-            save_status_msg.set(f"✅ Successfully saved {len(approved_addresses)} approved tokens")
+            save_status_msg.set(f"[OK] Successfully saved {len(approved_addresses)} approved tokens")
             
             logger.info(f"Successfully saved {len(approved_addresses)} approved tokens to S3")
             
         except Exception as e:
             logger.error(f"Error saving table changes: {e}")
-            save_status_msg.set(f"❌ Error saving: {str(e)}")
+            save_status_msg.set(f"[ERROR] Error saving: {str(e)}")
     
     # Debug table data access
     @reactive.effect
@@ -2173,13 +2173,13 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     logger.warning(f"Error calling {attr}: {e}")
             
             # Set debug message
-            debug_msg = f"🐛 Debug Info:\n" + "\n".join(available_methods)
+            debug_msg = f" Debug Info:\n" + "\n".join(available_methods)
             save_status_msg.set(debug_msg)
             logger.info("=== END DEBUG ===")
             
         except Exception as e:
             logger.error(f"Error during debug: {e}")
-            save_status_msg.set(f"🐛 Debug error: {str(e)}")
+            save_status_msg.set(f" Debug error: {str(e)}")
     
     # Show transaction details card with inline Etherscan link
     @output
@@ -2257,11 +2257,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 
                 # Determine status using helper functions
                 if is_verified_token(row.get('token_address', '')):
-                    status = "✅ Verified"
+                    status = "[OK] Verified"
                 elif token_addr.lower() in approved_addresses:
-                    status = "☑️ Approved" 
+                    status = "☑ Approved" 
                 else:
-                    status = "⚠️ Needs Review"
+                    status = "[WARN] Needs Review"
                 
                 formatted_row = {
                     'tx_hash': row.get('tx_hash', ''),
@@ -2274,7 +2274,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     'from_address': row.get('from_address', ''),
                     'to_address': row.get('to_address', ''),
                     'status': status,
-                    '_sort_priority': 0 if status == "⚠️ Needs Review" else (1 if status == "☑️ Approved" else 2)
+                    '_sort_priority': 0 if status == "[WARN] Needs Review" else (1 if status == "☑ Approved" else 2)
                 }
                 formatted_data.append(formatted_row)
             
@@ -2460,11 +2460,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 
                 # Determine status using helper functions
                 if is_verified_token(row.get('token_address', '')):
-                    status = "✅ Verified"
+                    status = "[OK] Verified"
                 elif token_addr.lower() in approved_addresses:
-                    status = "☑️ Approved" 
+                    status = "☑ Approved" 
                 else:
-                    status = "⚠️ Needs Review"
+                    status = "[WARN] Needs Review"
                 
                 formatted_row = {
                     'tx_hash': row.get('tx_hash', ''),
@@ -2477,7 +2477,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     'from_address': row.get('from_address', ''),
                     'to_address': row.get('to_address', ''),
                     'status': status,
-                    '_sort_priority': 0 if status == "⚠️ Needs Review" else (1 if status == "☑️ Approved" else 2)
+                    '_sort_priority': 0 if status == "[WARN] Needs Review" else (1 if status == "☑ Approved" else 2)
                 }
                 formatted_data.append(formatted_row)
             
@@ -2710,8 +2710,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
             etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
             
             # Log the URL (in a real browser environment, this would open the URL)
-            logger.info(f"🔍 Opening Etherscan for transaction: {tx_hash}")
-            logger.info(f"📱 Etherscan URL: {etherscan_url}")
+            logger.info(f"[DEBUG] Opening Etherscan for transaction: {tx_hash}")
+            logger.info(f" Etherscan URL: {etherscan_url}")
             
             # In a web environment, you could use JavaScript to open in new tab:
             # session.send_custom_message("open_url", {"url": etherscan_url})
@@ -2724,7 +2724,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
     @reactive.event(input.push_to_fifo)
     async def push_transactions_to_fifo():
         """Push all fetched transactions to FIFO staging area"""
-        print("🚀 PUSH TO FIFO BUTTON CLICKED!")
+        print("[START] PUSH TO FIFO BUTTON CLICKED!")
         logger.info("Push to FIFO button clicked")
         
         # Start native Shiny progress
@@ -2733,11 +2733,11 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 # Step 1: Load and validate transactions
                 progress.set(10, message="Loading transactions...", detail="Validating fetched transaction data")
                 transactions_df = fetched_transactions.get()
-                print(f"📊 Fetched transactions: {len(transactions_df)} rows")
+                print(f"[DATA] Fetched transactions: {len(transactions_df)} rows")
                 
                 if transactions_df.empty:
                     progress.set(100, message="No transactions to process", detail="Please fetch transactions first")
-                    print("⚠️ No transactions available to push to FIFO")
+                    print("[WARN] No transactions available to push to FIFO")
                     logger.warning("No transactions available to push to FIFO")
                     return
                 
@@ -2746,8 +2746,8 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 fifo_df = transactions_df.copy()
                 
                 # Ensure all required fields exist for FIFO processing
-                print(f"🔧 Normalizing transaction data for FIFO processing...")
-                print(f"   📋 Original columns: {list(fifo_df.columns)}")
+                print(f"[FIX] Normalizing transaction data for FIFO processing...")
+                print(f"   [LIST] Original columns: {list(fifo_df.columns)}")
                 
                 # Step 3: Map essential fields
                 progress.set(40, message="Mapping essential fields...", detail="Converting blockchain data to FIFO format")
@@ -2755,17 +2755,17 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 # Preserve Fund column as fund_id for FIFO processing
                 if 'Fund' in fifo_df.columns:
                     fifo_df['fund_id'] = fifo_df['Fund']
-                    print(f"   🔄 Preserved 'Fund' → 'fund_id' for FIFO processing")
+                    print(f"   [SYNC] Preserved 'Fund' → 'fund_id' for FIFO processing")
                 
                 # Map asset → token_name if token_name is missing
                 if 'asset' in fifo_df.columns and 'token_name' not in fifo_df.columns:
                     fifo_df['token_name'] = fifo_df['asset']
-                    print(f"   🔄 Mapped 'asset' → 'token_name'")
+                    print(f"   [SYNC] Mapped 'asset' → 'token_name'")
                 
                 # Ensure token_amount exists (should already be mapped from qty)
                 if 'token_amount' not in fifo_df.columns and 'qty' in fifo_df.columns:
                     fifo_df['token_amount'] = fifo_df['qty'].abs()
-                    print(f"   🔄 Mapped 'qty' → 'token_amount' (absolute values)")
+                    print(f"   [SYNC] Mapped 'qty' → 'token_amount' (absolute values)")
                 
                 # Normalize wallet addresses to lowercase for consistent filtering
                 wallet_address_columns = [col for col in fifo_df.columns if 'wallet' in col.lower() or col in ['from_address', 'to_address']]
@@ -2773,7 +2773,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                     if col in fifo_df.columns:
                         original_count = fifo_df[col].count()
                         fifo_df[col] = fifo_df[col].astype(str).str.lower()
-                        print(f"   🔄 Normalized '{col}' to lowercase ({original_count} addresses)")
+                        print(f"   [SYNC] Normalized '{col}' to lowercase ({original_count} addresses)")
                     
                 # Step 4: Format dates and add missing fields
                 progress.set(60, message="Formatting dates and fields...", detail="Ensuring all required fields are present")
@@ -2781,7 +2781,7 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 # Ensure proper date format
                 if 'date' in fifo_df.columns:
                     fifo_df['date'] = pd.to_datetime(fifo_df['date'])
-                    print(f"   🔄 Normalized date format")
+                    print(f"   [SYNC] Normalized date format")
                 
                 # Add any missing required fields with defaults
                 required_fields = ['wallet_id', 'side', 'token_name', 'token_amount', 'token_value_eth', 'token_value_usd', 'intercompany']
@@ -2793,25 +2793,25 @@ def register_crypto_token_tracker_outputs(output, input, session):
                             fifo_df[field] = 0.0
                         else:
                             fifo_df[field] = '-'
-                        print(f"   ⚠️  Added missing field '{field}' with default value")
+                        print(f"   [WARN]  Added missing field '{field}' with default value")
                 
-                print(f"   ✅ Final columns: {list(fifo_df.columns)}")
-                print(f"   📊 Sample transaction: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
+                print(f"   [OK] Final columns: {list(fifo_df.columns)}")
+                print(f"   [DATA] Sample transaction: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
                 
                 # Step 5: Store transactions locally
                 progress.set(80, message="Staging transactions locally...", detail=f"Preparing {len(fifo_df)} transactions")
                 staged_transactions.set(fifo_df.copy())
-                print(f"✅ Staged transactions locally: {len(fifo_df)} rows")
+                print(f"[OK] Staged transactions locally: {len(fifo_df)} rows")
                 
                 # Step 6: Store globally and complete
                 progress.set(90, message="Updating global state...", detail="Making transactions available to FIFO tracker")
                 set_staged_transactions_global(fifo_df)
-                print(f"🌐 Staged transactions globally: {len(fifo_df)} rows")
+                print(f" Staged transactions globally: {len(fifo_df)} rows")
                 
                 # Force multiple reactive updates to ensure all components see the changes
                 current_trigger = staged_transactions_trigger.get()
                 staged_transactions_trigger.set(current_trigger + 1)
-                print(f"🔄 Triggered reactive update for staged transactions (trigger: {current_trigger + 1})")
+                print(f"[SYNC] Triggered reactive update for staged transactions (trigger: {current_trigger + 1})")
                 
                 # Additional reactive invalidation to force UI updates
                 import asyncio
@@ -2819,27 +2819,27 @@ def register_crypto_token_tracker_outputs(output, input, session):
                 
                 # Trigger additional update to ensure all reactive components are notified
                 staged_transactions_trigger.set(current_trigger + 2)
-                print(f"🔄 Additional reactive trigger sent (trigger: {current_trigger + 2})")
+                print(f"[SYNC] Additional reactive trigger sent (trigger: {current_trigger + 2})")
                 
                 # Log final global state for debugging
                 final_check = get_staged_transactions_global()
-                print(f"🔍 Final global state check: {len(final_check)} rows")
-                print(f"🔍 Final global state columns: {list(final_check.columns) if not final_check.empty else 'Empty'}")
+                print(f"[DEBUG] Final global state check: {len(final_check)} rows")
+                print(f"[DEBUG] Final global state columns: {list(final_check.columns) if not final_check.empty else 'Empty'}")
                 
                 # Complete progress
                 progress.set(100, message="Push to FIFO completed!", 
                            detail=f"Successfully staged {len(fifo_df)} transactions")
                 
                 logger.info(f"Successfully staged {len(fifo_df)} transactions for FIFO processing")
-                print("🎉 Push to FIFO completed successfully!")
+                print("[DONE] Push to FIFO completed successfully!")
                 
                 # Update status
-                push_status.set(f"✅ Successfully staged {len(fifo_df)} transactions for FIFO processing")
+                push_status.set(f"[OK] Successfully staged {len(fifo_df)} transactions for FIFO processing")
                 
             except Exception as e:
-                print(f"❌ Error pushing transactions to FIFO: {e}")
+                print(f"[ERROR] Error pushing transactions to FIFO: {e}")
                 logger.error(f"Error pushing transactions to FIFO: {e}")
-                push_status.set(f"❌ Error: {str(e)}")
+                push_status.set(f"[ERROR] Error: {str(e)}")
                 progress.set(0, message="Error occurred", detail=str(e))
                 raise e
     
@@ -2849,16 +2849,16 @@ def register_crypto_token_tracker_outputs(output, input, session):
     def push_status_display():
         status = push_status.get()
         if status:
-            if "✅" in status:
+            if "[OK]" in status:
                 return ui.div(
                     ui.HTML(f'<i class="bi bi-check-circle text-success"></i>'),
-                    ui.span(status.replace("✅", ""), class_="text-success ms-2"),
+                    ui.span(status.replace("[OK]", ""), class_="text-success ms-2"),
                     class_="d-flex align-items-center mb-3 alert alert-success"
                 )
-            elif "❌" in status:
+            elif "[ERROR]" in status:
                 return ui.div(
                     ui.HTML(f'<i class="bi bi-exclamation-circle text-danger"></i>'),
-                    ui.span(status.replace("❌", ""), class_="text-danger ms-2"),
+                    ui.span(status.replace("[ERROR]", ""), class_="text-danger ms-2"),
                     class_="d-flex align-items-center mb-3 alert alert-danger"
                 )
         return ui.div()

@@ -2,22 +2,114 @@ from shiny import reactive, render, ui
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 import asyncio
+import concurrent.futures
 import os
-from .blockchain_service import blockchain_service
-from .blur_auto_decoder import blur_auto_decoder  # Keep for backwards compatibility
+# LAZY IMPORT: blockchain_service is imported inside functions to avoid blocking app startup
+# from .blockchain_service import blockchain_service  # Moved to lazy import
 from .decoder_modal_ui import decoder_modal_ui, decoder_modal_styles
 from .decoder_modal_outputs import register_decoder_modal_outputs
 from .decoded_transactions_outputs import register_decoded_transactions_outputs
 import logging
 
-# Import the new DecoderRegistry
-try:
-    from ...services.decoders import DecoderRegistry
-    DECODER_REGISTRY_AVAILABLE = True
-except ImportError:
-    DECODER_REGISTRY_AVAILABLE = False
+# Import the new DecoderRegistry - also lazy
+DECODER_REGISTRY_AVAILABLE = False  # Will be set when needed
 
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded module references with background pre-initialization
+_blockchain_service = None
+_blur_auto_decoder = None
+_init_lock = None
+_init_started = False
+_init_complete = False
+
+
+def _background_init():
+    """Initialize blockchain service in background thread"""
+    global _blockchain_service, _init_complete
+    try:
+        logger.info("Background: Starting blockchain service initialization...")
+        from .blockchain_service import blockchain_service
+        _blockchain_service = blockchain_service
+        _init_complete = True
+        logger.info("Background: Blockchain service initialization complete!")
+    except Exception as e:
+        logger.error(f"Background: Failed to initialize blockchain service: {e}")
+        _init_complete = True  # Mark as complete even on error to avoid blocking
+
+
+def start_background_init():
+    """Start background initialization if not already started"""
+    global _init_started, _init_lock
+    import threading
+
+    if _init_lock is None:
+        _init_lock = threading.Lock()
+
+    with _init_lock:
+        if not _init_started:
+            _init_started = True
+            thread = threading.Thread(target=_background_init, daemon=True)
+            thread.start()
+            logger.info("Background initialization thread started")
+
+
+def get_blockchain_service():
+    """Get blockchain_service - waits for background init if needed"""
+    global _blockchain_service, _init_complete
+
+    # If already initialized, return immediately
+    if _blockchain_service is not None:
+        return _blockchain_service
+
+    # If background init hasn't started, start it and wait
+    if not _init_started:
+        start_background_init()
+
+    # Wait for background init to complete (with timeout)
+    import time
+    max_wait = 30  # Max 30 seconds
+    waited = 0
+    while not _init_complete and waited < max_wait:
+        time.sleep(0.1)
+        waited += 0.1
+
+    if _blockchain_service is None:
+        # Fallback: direct initialization
+        logger.warning("Background init incomplete, doing direct initialization")
+        from .blockchain_service import blockchain_service
+        _blockchain_service = blockchain_service
+
+    return _blockchain_service
+
+
+def get_blur_auto_decoder():
+    """Lazy load blur_auto_decoder"""
+    global _blur_auto_decoder
+    if _blur_auto_decoder is None:
+        from .blur_auto_decoder import blur_auto_decoder
+        _blur_auto_decoder = blur_auto_decoder
+    return _blur_auto_decoder
+
+
+def get_decoder_registry():
+    """Lazy load DecoderRegistry"""
+    global DECODER_REGISTRY_AVAILABLE
+    try:
+        from ...services.decoders import DecoderRegistry
+        DECODER_REGISTRY_AVAILABLE = True
+        return DecoderRegistry
+    except ImportError:
+        DECODER_REGISTRY_AVAILABLE = False
+        return None
+
+
+# Start background initialization immediately when module is imported
+# This runs in background so doesn't block app startup
+start_background_init()
+
+# Thread pool for background operations
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 
 def register_blockchain_listener_outputs(input, output, session, selected_fund):
@@ -132,10 +224,22 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         except:
             return []
 
-    # Initialize blockchain service on module load
+    # Background task for fetching transactions (non-blocking)
+    @reactive.extended_task
+    async def fetch_transactions_task(wallet_address: str, limit: int = 100):
+        """Fetch transactions in background thread to avoid blocking UI"""
+        loop = asyncio.get_event_loop()
+        # Run the blocking call in a thread pool
+        def _fetch():
+            get_blockchain_service().wallet_address = wallet_address
+            return get_blockchain_service().fetch_historical_transactions(limit=limit)
+
+        return await loop.run_in_executor(_executor, _fetch)
+
+    # Initialize blockchain service on module load (non-blocking)
     @reactive.effect
     def initialize_listener():
-        """Initialize the blockchain listener on startup"""
+        """Initialize the blockchain listener on startup - triggers background fetch"""
         try:
             # Get wallets to monitor
             wallets = get_monitored_wallets()
@@ -157,17 +261,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             # For now, monitor the first wallet (TODO: support multiple)
             primary_wallet = wallets[0] if wallets else None
             if primary_wallet:
-                blockchain_service.wallet_address = primary_wallet
-
-                # Fetch initial data
-                initial_data = blockchain_service.fetch_historical_transactions(limit=100)
-                if not initial_data.empty:
-                    transaction_data.set(initial_data)
-                    initialization_status.set("active")
-                    logger.info(f"Loaded {len(initial_data)} historical transactions")
-                else:
-                    initialization_status.set("no_data")
-                    logger.warning("No historical transactions found")
+                # Set status to loading and trigger background fetch
+                initialization_status.set("loading")
+                logger.info(f"Starting background fetch for wallet {primary_wallet[:10]}...")
+                fetch_transactions_task(primary_wallet, 100)
 
             last_refresh.set(datetime.now(timezone.utc))
 
@@ -177,6 +274,37 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             traceback.print_exc()
             initialization_status.set("error")
             error_message.set(f"Initialization error: {str(e)}")
+
+    # Handle completion of background fetch task
+    @reactive.effect
+    def handle_fetch_completion():
+        """Handle when background fetch completes"""
+        # Check task status before accessing result
+        status = fetch_transactions_task.status()
+
+        if status == "initial":
+            # Task hasn't been started yet
+            return
+        elif status == "running":
+            # Task is still running - do nothing, will be called again when complete
+            return
+        elif status == "error":
+            # Task failed
+            error = fetch_transactions_task.error()
+            logger.error(f"Background fetch failed: {error}")
+            initialization_status.set("error")
+            error_message.set(f"Failed to fetch transactions: {str(error)}")
+            return
+        elif status == "success":
+            # Task completed successfully - get result
+            result = fetch_transactions_task.result()
+            if result is not None and not result.empty:
+                transaction_data.set(result)
+                initialization_status.set("active")
+                logger.info(f"Background fetch complete: {len(result)} transactions loaded")
+            else:
+                initialization_status.set("no_data")
+                logger.warning("Background fetch complete: No transactions found")
 
     # Filter controls panel
     @output
@@ -252,9 +380,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         status = initialization_status.get()
 
         if status == "active":
-            if blockchain_service.is_connected():
+            if get_blockchain_service().is_connected():
                 return ui.tags.strong("Live Monitoring (WebSocket)", style="color: #28a745;")
-            elif blockchain_service.is_infura_connected():
+            elif get_blockchain_service().is_infura_connected():
                 return ui.tags.strong("Infura Connected", style="color: #28a745;")
             else:
                 return ui.tags.strong("Etherscan Only", style="color: #ffc107;")
@@ -262,6 +390,8 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             return ui.tags.strong("Limited Mode", style="color: #ffc107;")
         elif status == "initializing":
             return ui.tags.strong("Initializing...", style="color: #6c757d;")
+        elif status == "loading":
+            return ui.tags.strong("Loading transactions...", style="color: #17a2b8;")
         elif status == "error":
             return ui.tags.strong("Error", style="color: #dc3545;")
         else:
@@ -273,9 +403,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         status = initialization_status.get()
 
         if status == "active":
-            if blockchain_service.is_connected():
+            if get_blockchain_service().is_connected():
                 return ui.HTML('<i class="bi bi-circle-fill connection-active"></i> WebSocket + Infura')
-            elif blockchain_service.is_infura_connected():
+            elif get_blockchain_service().is_infura_connected():
                 return ui.HTML('<i class="bi bi-circle-fill" style="color: #28a745;"></i> Infura HTTP')
             else:
                 return ui.HTML('<i class="bi bi-circle-fill" style="color: #ffc107;"></i> Etherscan')
@@ -283,6 +413,8 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             return ui.HTML('<i class="bi bi-exclamation-triangle-fill" style="color: #ffc107;"></i> Limited')
         elif status == "initializing":
             return ui.HTML('<i class="bi bi-hourglass-split"></i> Starting...')
+        elif status == "loading":
+            return ui.HTML('<i class="bi bi-arrow-repeat spin-animation" style="color: #17a2b8;"></i> Loading...')
         else:
             return ui.HTML('<i class="bi bi-circle-fill connection-inactive"></i> Offline')
 
@@ -310,7 +442,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         # Regular wallet address
         if selection and len(selection) > 10:
             # Get friendly name from blockchain service
-            friendly_name = blockchain_service.get_friendly_name(selection)
+            friendly_name = get_blockchain_service().get_friendly_name(selection)
 
             # If we have a real friendly name (not shortened address)
             if not friendly_name.endswith("...") or len(friendly_name) > 15:
@@ -412,13 +544,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 </span>
             """)
         elif status == "active":
-            if blockchain_service.is_connected():
+            if get_blockchain_service().is_connected():
                 return ui.HTML("""
                     <span class="badge bg-success">
                         <i class="bi bi-arrow-repeat"></i> Live WebSocket
                     </span>
                 """)
-            elif blockchain_service.is_infura_connected():
+            elif get_blockchain_service().is_infura_connected():
                 return ui.HTML("""
                     <span class="badge bg-success">
                         <i class="bi bi-arrow-repeat"></i> Infura (15s)
@@ -433,7 +565,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         elif status == "initializing":
             return ui.HTML("""
                 <span class="badge bg-info">
-                    <i class="bi bi-hourglass-split"></i> Loading...
+                    <i class="bi bi-hourglass-split"></i> Initializing...
+                </span>
+            """)
+        elif status == "loading":
+            return ui.HTML("""
+                <span class="badge bg-info">
+                    <i class="bi bi-arrow-repeat spin-animation"></i> Loading transactions...
                 </span>
             """)
         else:
@@ -622,7 +760,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         Tries multiple Web3 sources and retries if connection fails.
         Resets retry counter on fund change or successful init.
         """
-        if not DECODER_REGISTRY_AVAILABLE:
+        # Try to get DecoderRegistry class (lazy load)
+        DecoderRegistryClass = get_decoder_registry()
+        if DecoderRegistryClass is None:
             logger.info("DecoderRegistry not available (import failed), using legacy blur_auto_decoder")
             return
 
@@ -646,23 +786,24 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 logger.warning("No wallet data available")
                 return
 
-            fund_wallets = wallet_df[wallet_df['fund_id'] == current_fund]
-            fund_wallet_addresses = fund_wallets['wallet_address'].str.strip().tolist()
+            # Load ALL wallets from mapper - decode any transaction involving our wallets
+            fund_wallet_addresses = wallet_df['wallet_address'].str.strip().tolist()
 
             if not fund_wallet_addresses:
-                logger.warning(f"No fund wallets found for {current_fund}")
+                logger.warning("No wallets found in wallet mapper")
                 return
 
             # Try multiple Web3 sources
             w3 = None
 
-            # Source 1: blockchain_service.infura.w3_http (primary)
+            # Source 1: get_blockchain_service().infura.w3_http (primary)
             try:
-                if (hasattr(blockchain_service, 'infura') and
-                    blockchain_service.infura is not None and
-                    hasattr(blockchain_service.infura, 'w3_http') and
-                    blockchain_service.infura.w3_http is not None):
-                    w3 = blockchain_service.infura.w3_http
+                svc = get_blockchain_service()
+                if (hasattr(svc, 'infura') and
+                    svc.infura is not None and
+                    hasattr(svc.infura, 'w3_http') and
+                    svc.infura.w3_http is not None):
+                    w3 = svc.infura.w3_http
                     logger.debug("Got Web3 from blockchain_service.infura.w3_http")
             except Exception as e:
                 logger.debug(f"Could not get Web3 from infura: {e}")
@@ -698,10 +839,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 return
 
             # Create registry with fund_id for GL posting
-            registry = DecoderRegistry(w3, fund_wallet_addresses, fund_id=current_fund)
+            registry = DecoderRegistryClass(w3, fund_wallet_addresses, fund_id=current_fund)
             decoder_registry.set(registry)
             registry_init_attempts.set(0)  # Reset counter on success
-            logger.info(f"Initialized DecoderRegistry with {len(fund_wallet_addresses)} wallets for {current_fund}")
+            logger.info(f"Initialized DecoderRegistry with {len(fund_wallet_addresses)} wallets (all from mapper)")
 
         except Exception as e:
             logger.error(f"Failed to initialize DecoderRegistry: {e}")
@@ -724,8 +865,8 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             current_fund = selected_fund()
 
             if not wallet_df.empty:
-                fund_wallets = wallet_df[wallet_df['fund_id'] == current_fund]
-                fund_wallet_addresses = fund_wallets['wallet_address'].str.strip().tolist()
+                # Load ALL wallets - decode any transaction involving our wallets
+                fund_wallet_addresses = wallet_df['wallet_address'].str.strip().tolist()
             else:
                 fund_wallet_addresses = []
         except:
@@ -753,7 +894,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                     tx_type = result.get('category', 'UNKNOWN')
                 else:
                     # Fallback to legacy blur_auto_decoder
-                    result = blur_auto_decoder.decode_transaction(
+                    result = get_blur_auto_decoder().decode_transaction(
                         tx_hash,
                         fund_wallet_addresses,
                         wallet_metadata=None
@@ -961,15 +1102,15 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     def refresh_transactions():
         """Manually refresh transaction data"""
         try:
-            wallet = input.wallet_address() if hasattr(input, 'wallet_address') else blockchain_service.wallet_address
+            wallet = input.wallet_address() if hasattr(input, 'wallet_address') else get_blockchain_service().wallet_address
             limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
 
             # Re-initialize if wallet changed
-            if wallet != blockchain_service.wallet_address:
-                blockchain_service.wallet_address = wallet
+            if wallet != get_blockchain_service().wallet_address:
+                get_blockchain_service().wallet_address = wallet
 
             # Fetch fresh data
-            fresh_data = blockchain_service.fetch_historical_transactions(limit=limit)
+            fresh_data = get_blockchain_service().fetch_historical_transactions(limit=limit)
             if not fresh_data.empty:
                 transaction_data.set(fresh_data)
                 last_refresh.set(datetime.now(timezone.utc))
@@ -1006,7 +1147,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 logger.info(f"Monitoring all fund wallets: {len(wallets_to_monitor)} wallets")
                 if wallets_to_monitor:
                     # For now, fetch data from first wallet (TODO: aggregate all)
-                    blockchain_service.wallet_address = wallets_to_monitor[0]
+                    get_blockchain_service().wallet_address = wallets_to_monitor[0]
                 else:
                     logger.warning("No wallets found for fund")
                     transaction_data.set(pd.DataFrame())
@@ -1014,15 +1155,15 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             else:
                 # Single wallet selected
                 if new_selection and len(new_selection) == 42 and new_selection.startswith('0x'):
-                    blockchain_service.wallet_address = new_selection
+                    get_blockchain_service().wallet_address = new_selection
                     logger.info(f"Switched to wallet: {new_selection}")
                 else:
                     logger.warning(f"Invalid wallet address: {new_selection}")
                     return
 
             # Fetch fresh data for the new wallet
-            logger.info(f"Fetching transactions for: {blockchain_service.wallet_address}")
-            fresh_data = blockchain_service.fetch_historical_transactions(limit=int(input.transaction_limit() if hasattr(input, 'transaction_limit') else 100))
+            logger.info(f"Fetching transactions for: {get_blockchain_service().wallet_address}")
+            fresh_data = get_blockchain_service().fetch_historical_transactions(limit=int(input.transaction_limit() if hasattr(input, 'transaction_limit') else 100))
 
             if not fresh_data.empty:
                 transaction_data.set(fresh_data)
@@ -1046,20 +1187,20 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     def periodic_refresh():
         """Periodically refresh data - faster with Infura (15s) vs Etherscan (30s)"""
         # Use faster refresh interval when Infura is connected
-        refresh_interval = 15 if blockchain_service.is_infura_connected() else 30
+        refresh_interval = 15 if get_blockchain_service().is_infura_connected() else 30
         reactive.invalidate_later(refresh_interval)
 
-        if initialization_status.get() == "active" and not blockchain_service.is_connected():
+        if initialization_status.get() == "active" and not get_blockchain_service().is_connected():
             try:
                 # Get updated transactions using Infura primarily
-                updated_data = blockchain_service.get_all_transactions()
+                updated_data = get_blockchain_service().get_all_transactions()
                 if not updated_data.empty:
                     # Only update if there are changes
                     current = transaction_data.get()
                     if current.empty or len(updated_data) != len(current):
                         transaction_data.set(updated_data)
                         last_refresh.set(datetime.now(timezone.utc))
-                        source = "Infura" if blockchain_service.is_infura_connected() else "Etherscan"
+                        source = "Infura" if get_blockchain_service().is_infura_connected() else "Etherscan"
                         logger.info(f"Auto-refreshed via {source}: {len(updated_data)} transactions")
             except Exception as e:
                 logger.error(f"Error in periodic refresh: {e}")

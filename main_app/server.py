@@ -1299,4 +1299,72 @@ def server(input, output, session):
                 class_="error-state"
             )
 
+    # ==============================================
+    # Home Dashboard Quick Outputs (lightweight)
+    # ==============================================
+
+    @output
+    @render.ui
+    def dashboard_fund_status():
+        """Quick fund status - no blockchain dependency"""
+        try:
+            fund = selected_fund()
+            return ui.div(
+                ui.tags.strong(fund.replace('_', ' ').title(), class_="fs-5"),
+                ui.tags.small(" Active", class_="text-success")
+            )
+        except:
+            return "Loading..."
+
+    @output
+    @render.ui
+    def dashboard_gl_count():
+        """Count of GL2 entries - lightweight"""
+        try:
+            from .s3_utils import load_GL2_file
+            gl2_df = load_GL2_file()
+            count = len(gl2_df) if not gl2_df.empty else 0
+            return ui.tags.strong(f"{count:,}", class_="fs-4")
+        except:
+            return ui.tags.strong("0", class_="fs-4")
+
+    @output
+    @render.ui
+    def dashboard_pending_count():
+        """Count of pending review items"""
+        try:
+            from .s3_utils import load_GL2_file
+            import pandas as pd
+            gl2_df = load_GL2_file()
+
+            if gl2_df.empty or 'timestamp' not in gl2_df.columns:
+                return ui.tags.strong("0", class_="fs-4")
+
+            # Count entries from last 7 days as "pending review"
+            gl2_df['timestamp'] = pd.to_datetime(gl2_df['timestamp'], errors='coerce')
+            recent = gl2_df[gl2_df['timestamp'] >= pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=7)]
+            return ui.tags.strong(f"{len(recent):,}", class_="fs-4")
+        except:
+            return ui.tags.strong("0", class_="fs-4")
+
+    # Handle quick action button clicks to navigate to tabs
+    @reactive.effect
+    @reactive.event(input.go_to_listener)
+    def handle_go_to_listener():
+        """Navigate to Blockchain Listener tab"""
+        # Update the home_tabs navset to show Blockchain Listener
+        ui.update_navs("home_tabs", selected="Blockchain Listener")
+
+    @reactive.effect
+    @reactive.event(input.go_to_decoded)
+    def handle_go_to_decoded():
+        """Navigate to Decoded Transactions tab"""
+        ui.update_navs("home_tabs", selected="Decoded Transactions")
+
+    @reactive.effect
+    @reactive.event(input.go_to_gl2)
+    def handle_go_to_gl2():
+        """Navigate to General Ledger 2 section"""
+        current_section.set("general_ledger_v2")
+
     # Debug output removed - cleaner UI

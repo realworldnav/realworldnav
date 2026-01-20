@@ -13,7 +13,7 @@ DEFAULT_COLUMNS = [
 
 @reactive.calc
 def coa_choices():
-    print("🔃 Loading COA choices")
+    print(" Loading COA choices")
     df = load_COA_file()
     return ["All Accounts"] + sorted(df["GL_Acct_Name"].dropna().astype(str).unique())
 
@@ -24,7 +24,7 @@ def register_outputs(output, input, session, selected_fund):
 
     @reactive.calc
     def wallet_choices():
-        print("🔃 Loading wallet choices")
+        print(" Loading wallet choices")
         df = load_WALLET_file()
         fund_id = selected_fund()
         df = df[df["fund_id"] == fund_id].copy()
@@ -52,26 +52,26 @@ def register_outputs(output, input, session, selected_fund):
         df["wallet_id"] = df["friendly_name"].fillna(df["wallet_id"])
         df.drop(columns=["friendly_name"], inplace=True)
         if input.gl_account_filter() != "All Accounts":
-            print(f"🔍 Filtering by GL account: {input.gl_account_filter()}")
+            print(f"[DEBUG] Filtering by GL account: {input.gl_account_filter()}")
             matching = coa_df[coa_df["GL_Acct_Name"] == input.gl_account_filter()]["account_name"].dropna().unique()
             df = df[df["account_name"].isin(matching)] if len(matching) else df.iloc[0:0]
 
         if input.wallet_filter() != "All Wallets":
-            print(f"🔍 Filtering by wallet: {input.wallet_filter()}")
+            print(f"[DEBUG] Filtering by wallet: {input.wallet_filter()}")
             df = df[df["wallet_id"] == input.wallet_filter()]
 
-        print("✅ Final GL shape:", df.shape)
+        print("[OK] Final GL shape:", df.shape)
         return df
 
     @reactive.effect
     @reactive.event(df_gl)
     def cache_original():
-        print("📤 Caching original GL DataFrame")
+        print("[INFO] Caching original GL DataFrame")
         edited_df_store.set(df_gl().copy().head(100))
 
     @reactive.calc
     def selected_columns():
-        print("🔀 Resolving selected columns")
+        print("[INFO] Resolving selected columns")
         if input.reset_columns() > input.apply_columns():
             return DEFAULT_COLUMNS
         if input.apply_columns() == 0 and input.reset_columns() == 0:
@@ -81,7 +81,7 @@ def register_outputs(output, input, session, selected_fund):
     @output
     @render_plotly
     def gl_view_plotly():
-        print("📊 Rendering Plotly GL view")
+        print("[DATA] Rendering Plotly GL view")
         df = edited_df_store.get()
         if df is None or df.empty:
             df = df_gl().copy().head(100)
@@ -101,29 +101,29 @@ def register_outputs(output, input, session, selected_fund):
     @reactive.effect
     def capture_selected_row():
         selection = gl_view_editable.cell_selection()
-        print("📥 DataGrid selection:", selection)
+        print(" DataGrid selection:", selection)
 
         if not isinstance(selection, dict) or "rows" not in selection or not selection["rows"]:
             selected_row_store.set(None)
-            print("⚠️ No row selected")
+            print("[WARN] No row selected")
             return
 
         row_idx = selection["rows"][0]
         df = edited_df_store.get()
         if df is None or row_idx >= len(df):
             selected_row_store.set(None)
-            print("⚠️ Invalid row index")
+            print("[WARN] Invalid row index")
             return
 
         selected_row = df.iloc[row_idx].to_dict()
-        print("🧩 selected_row_data():", selected_row)
+        print(" selected_row_data():", selected_row)
         selected_row_store.set(selected_row)
 
 
     @output
     @render.data_frame
     def gl_view_editable():
-        print("🧾 Rendering DataGrid")
+        print(" Rendering DataGrid")
         df = edited_df_store.get()
         if df is None or df.empty:
             df = df_gl().copy().head(100)
@@ -134,7 +134,7 @@ def register_outputs(output, input, session, selected_fund):
     @render.ui
     def selected_transaction_editor():
         row = selected_row_store.get()
-        print("🧩 selected_row_data():", row)
+        print(" selected_row_data():", row)
         if not row:
             return ui.p("Select a transaction to edit.")
 
@@ -155,7 +155,7 @@ def register_outputs(output, input, session, selected_fund):
                 else:
                     elements.append(ui.input_text(input_id, col, val_str))
             except Exception as e:
-                print(f"❌ Failed rendering input for {col}:", e)
+                print(f"[ERROR] Failed rendering input for {col}:", e)
                 elements.append(ui.input_text(input_id, col, val_str))
 
         elements.append(ui.input_action_button("submit_edit", "Save Edit", class_="btn-success mt-3 me-2"))
@@ -165,29 +165,29 @@ def register_outputs(output, input, session, selected_fund):
     @reactive.effect
     @reactive.event(input.submit_edit)
     def on_save_edit():
-        print("💾 Save button clicked")
-        print("🔍 selected_row_store:", selected_row_store.get())   
+        print("[SAVE] Save button clicked")
+        print("[DEBUG] selected_row_store:", selected_row_store.get())   
         df = edited_df_store.get()
         selected = selected_row_store.get()
 
         if df is None or df.empty or not selected:
-            print("⚠️ Nothing to update.")
+            print("[WARN] Nothing to update.")
             return
 
         txn_id = selected.get("transaction_id")
         if not txn_id:
-            print("❌ No transaction_id found in selected row")
+            print("[ERROR] No transaction_id found in selected row")
             return
 
         match = df[df["transaction_id"] == txn_id]
         if match.empty:
-            print(f"❌ No match for transaction_id {txn_id} in edited_df_store")
+            print(f"[ERROR] No match for transaction_id {txn_id} in edited_df_store")
             return
 
         idx_match = df[df["transaction_id"] == txn_id]
 
         if idx_match.empty:
-            print(f"❌ No match for transaction_id {txn_id}")
+            print(f"[ERROR] No match for transaction_id {txn_id}")
             return
 
         idx = idx_match.index[0]
@@ -199,9 +199,9 @@ def register_outputs(output, input, session, selected_fund):
                 try:
                     new_val = getattr(input, shiny_id)()
                     df.at[idx, col] = new_val
-                    print(f"  🔧 {col} → {new_val}")
+                    print(f"  [FIX] {col} → {new_val}")
                 except Exception as e:
-                    print(f"❌ Failed updating {col}:", e)
+                    print(f"[ERROR] Failed updating {col}:", e)
 
         edited_df_store.set(df.copy())
         selected_row_store.set(None)
@@ -211,24 +211,24 @@ def register_outputs(output, input, session, selected_fund):
     @reactive.effect
     @reactive.event(input.save_gl_changes)
     def save_changes_to_s3():
-        print("☁️ Uploading GL to S3")
+        print("☁ Uploading GL to S3")
         try:
             df = edited_df_store.get()
             if df is not None and not df.empty:
                 save_GL_file(df)
                 ui.notification_show("GL saved to S3", duration=3000)
-                print("✅ Saved to S3")
+                print("[OK] Saved to S3")
             else:
-                print("⚠️ Nothing to save")
+                print("[WARN] Nothing to save")
                 ui.notification_show("Nothing to save", duration=3000)
         except Exception as e:
-            print("❌ Failed to save:", e)
+            print("[ERROR] Failed to save:", e)
             ui.notification_show(f"Failed to save: {e}", duration=5000)
 
     @output
     @render.ui
     def gl_view_router():
-        print("🔁 Routing GL view")
+        print(" Routing GL view")
         return ui.output_data_frame("gl_view_editable") if input.edit_mode() else output_widget("gl_view_plotly")
 
     @output
@@ -251,7 +251,7 @@ def register_outputs(output, input, session, selected_fund):
     @reactive.effect
     @reactive.event(input.undo_gl_changes)
     def undo_changes():
-        print("↩️ Undoing GL edits")
+        print("↩ Undoing GL edits")
         edited_df_store.set(df_gl().copy().head(100))
         ui.notification_show("Changes reverted", duration=3000)
 

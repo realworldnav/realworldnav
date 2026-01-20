@@ -33,6 +33,11 @@ from .base import (
     eth_to_wei,
     format_address,
     calculate_gas_fee,
+    # Interest accrual
+    compute_continuous_interest,
+    generate_daily_interest_accruals,
+    WAD,
+    SECONDS_PER_YEAR,
 )
 
 from .registry import DecoderRegistry
@@ -73,4 +78,9 @@ __all__ = [
     'eth_to_wei',
     'format_address',
     'calculate_gas_fee',
+    # Interest accrual
+    'compute_continuous_interest',
+    'generate_daily_interest_accruals',
+    'WAD',
+    'SECONDS_PER_YEAR',
 ]

@@ -1,11 +1,12 @@
 """
 General Ledger 2 Outputs Module
 
-Server-side render functions for the GL2 module:
-- Journal entries viewing and filtering
+Professional accounting interface with full functionality:
+- Journal entries viewing, filtering, editing, deleting
 - Account ledger with running balances
 - Trial balance generation
 - Manual journal entry creation
+- Integration with decoded transactions posting
 """
 
 from shiny import ui, reactive, render
@@ -23,11 +24,90 @@ def extract_account_number(account_name_str):
     """Extract account number from account name like '100.30 - ETH Wallet'"""
     if not account_name_str:
         return ''
-    # Match patterns like "100.30" or "10030" at the start
     match = re.match(r'^(\d+\.?\d*)', str(account_name_str))
     if match:
         return match.group(1)
     return ''
+
+
+def normalize_gl2_columns(df):
+    """
+    Normalize column names to handle both old and new schema.
+    New schema uses: date, hash, GL_Acct_Number, GL_Acct_Name, transaction_type
+    Old schema uses: timestamp, tx_hash, account_number, account_name, entry_type
+    """
+    if df.empty:
+        return df
+
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+
+    # Map old column names to new names for compatibility
+    column_mapping = {
+        'timestamp': 'date',
+        'tx_hash': 'hash',
+        'entry_type': 'transaction_type',
+        'category': 'transaction_type',
+        'asset': 'cryptocurrency',
+    }
+
+    # Rename columns if old names exist
+    for old_name, new_name in column_mapping.items():
+        if old_name in df.columns and new_name not in df.columns:
+            df = df.rename(columns={old_name: new_name})
+
+    # Handle account_number -> GL_Acct_Number (may contain "600.10 - Gas Expense" format)
+    if 'account_number' in df.columns and 'GL_Acct_Number' not in df.columns:
+        df = df.rename(columns={'account_number': 'GL_Acct_Number'})
+
+    # If GL_Acct_Name doesn't exist, try to extract from account_name or GL_Acct_Number
+    if 'GL_Acct_Name' not in df.columns:
+        if 'account_name' in df.columns:
+            # account_name might be "600.10 - Gas Expense" format
+            def extract_name(val):
+                if pd.isna(val):
+                    return ''
+                val = str(val)
+                if ' - ' in val:
+                    return val.split(' - ', 1)[1]
+                return val
+            df['GL_Acct_Name'] = df['account_name'].apply(extract_name)
+        elif 'GL_Acct_Number' in df.columns:
+            # GL_Acct_Number might contain "600.10 - Gas Expense" format
+            def extract_name_from_num(val):
+                if pd.isna(val):
+                    return ''
+                val = str(val)
+                if ' - ' in val:
+                    return val.split(' - ', 1)[1]
+                return ''
+            df['GL_Acct_Name'] = df['GL_Acct_Number'].apply(extract_name_from_num)
+        else:
+            df['GL_Acct_Name'] = ''
+
+    # Clean GL_Acct_Number to be just the number if it contains "600.10 - Gas Expense" format
+    # Also remove decimal points (100.30 -> 10030)
+    if 'GL_Acct_Number' in df.columns:
+        def extract_number(val):
+            if pd.isna(val):
+                return ''
+            val = str(val)
+            if ' - ' in val:
+                val = val.split(' - ', 1)[0].strip()
+            # Remove decimal point from account number (100.30 -> 10030)
+            val = val.replace('.', '')
+            return val
+        df['GL_Acct_Number'] = df['GL_Acct_Number'].apply(extract_number)
+
+    # Ensure GL_Acct_Name column exists even if empty
+    if 'GL_Acct_Name' not in df.columns:
+        df['GL_Acct_Name'] = ''
+
+    # Ensure GL_Acct_Number column exists
+    if 'GL_Acct_Number' not in df.columns:
+        df['GL_Acct_Number'] = ''
+
+    return df
 
 
 def register_gl2_outputs(input, output, session):
@@ -45,7 +125,7 @@ def register_gl2_outputs(input, output, session):
     # REACTIVE VALUES
     # =========================================================================
 
-    # Entry lines for new manual entry (list of dicts)
+    # Entry lines for new manual entry
     entry_lines = reactive.value([
         {"account": "", "debit": 0.0, "credit": 0.0},
         {"account": "", "debit": 0.0, "credit": 0.0}
@@ -54,6 +134,13 @@ def register_gl2_outputs(input, output, session):
     # GL2 data refresh trigger
     gl2_data_version = reactive.value(0)
 
+    # Selected rows from data grid
+    selected_row_keys = reactive.value([])
+
+    # Edit mode tracking
+    edit_mode_active = reactive.value(False)
+    editing_row_key = reactive.value(None)
+
     # =========================================================================
     # DATA LOADING
     # =========================================================================
@@ -61,103 +148,131 @@ def register_gl2_outputs(input, output, session):
     @reactive.calc
     def gl2_data():
         """Load GL2 data from S3."""
-        # Depend on version for refresh
         _ = gl2_data_version()
         try:
             df = load_GL2_file()
             logger.info(f"[GL2] Loaded {len(df)} rows from GL2")
 
             if not df.empty:
-                # Fix empty account_number by extracting from account_name
-                if 'account_number' in df.columns and 'account_name' in df.columns:
-                    empty_acct_mask = (df['account_number'].isna()) | (df['account_number'] == '')
-                    if empty_acct_mask.any():
-                        logger.info(f"[GL2] Fixing {empty_acct_mask.sum()} empty account numbers")
-                        df.loc[empty_acct_mask, 'account_number'] = df.loc[empty_acct_mask, 'account_name'].apply(extract_account_number)
+                # Normalize column names for compatibility with both old and new schema
+                df = normalize_gl2_columns(df)
 
-                # Fix empty categories - derive from entry_type if possible
-                if 'category' in df.columns:
-                    empty_cat_mask = (df['category'].isna()) | (df['category'] == '')
-                    if empty_cat_mask.any():
-                        logger.info(f"[GL2] {empty_cat_mask.sum()} entries have empty category")
-                        # Try to derive category from entry_type or set to "uncategorized"
-                        df.loc[empty_cat_mask, 'category'] = df.loc[empty_cat_mask, 'entry_type'].apply(
-                            lambda x: x if x and x not in ['DEBIT', 'CREDIT'] else 'uncategorized'
-                        )
-
-                # Log sample data
-                logger.info(f"[GL2] Columns: {list(df.columns)}")
-                logger.info(f"[GL2] Sample account_numbers: {df['account_number'].unique()[:5].tolist()}")
-                logger.info(f"[GL2] Sample categories: {df['category'].unique()[:5].tolist() if 'category' in df.columns else 'N/A'}")
+                # Fix empty GL_Acct_Number
+                if 'GL_Acct_Number' in df.columns and 'GL_Acct_Name' in df.columns:
+                    empty_mask = (df['GL_Acct_Number'].isna()) | (df['GL_Acct_Number'] == '')
+                    if empty_mask.any():
+                        df.loc[empty_mask, 'GL_Acct_Number'] = df.loc[empty_mask, 'GL_Acct_Name'].apply(extract_account_number)
 
             return df
         except Exception as e:
             logger.error(f"[GL2] Error loading GL2 data: {e}")
-            import traceback
-            traceback.print_exc()
             return pd.DataFrame(columns=get_gl2_schema_columns())
 
     @reactive.calc
     def coa_data():
-        """Load Chart of Accounts data."""
+        """Load Chart of Accounts."""
         try:
-            df = load_COA_file()
-            logger.info(f"[GL2] Loaded COA with {len(df)} accounts")
-            if not df.empty:
-                logger.info(f"[GL2] COA columns: {list(df.columns)}")
-            return df
+            return load_COA_file()
         except Exception as e:
             logger.error(f"[GL2] Error loading COA: {e}")
-            import traceback
-            traceback.print_exc()
             return pd.DataFrame()
 
     @reactive.calc
     def account_choices():
-        """Generate account choices from GL2 data and COA."""
+        """Generate account choices from GL2 and COA."""
         choices = {"": "All Accounts"}
 
-        # First, get unique accounts from GL2 data
+        # From GL2 data
         gl2_df = gl2_data()
-        if not gl2_df.empty and 'account_number' in gl2_df.columns and 'account_name' in gl2_df.columns:
-            gl2_accounts = gl2_df.groupby('account_number').agg({'account_name': 'first'}).reset_index()
-            for _, row in gl2_accounts.iterrows():
-                acct_num = str(row['account_number'])
-                acct_name = str(row['account_name'])
-                if acct_num and acct_num != '':
-                    # Use the full account name if available
-                    choices[acct_num] = acct_name if acct_name else acct_num
-            logger.info(f"[GL2] Added {len(gl2_accounts)} accounts from GL2 data")
+        if not gl2_df.empty and 'GL_Acct_Number' in gl2_df.columns:
+            # Get unique account numbers and their names
+            try:
+                if 'GL_Acct_Name' in gl2_df.columns:
+                    accounts = gl2_df.groupby('GL_Acct_Number').agg({'GL_Acct_Name': 'first'}).reset_index()
+                    for _, row in accounts.iterrows():
+                        acct_num = str(row['GL_Acct_Number'])
+                        acct_name = str(row.get('GL_Acct_Name', ''))
+                        if acct_num and acct_num != 'None' and acct_num != 'nan':
+                            choices[acct_num] = f"{acct_num} - {acct_name}" if acct_name and acct_name != 'nan' else acct_num
+                else:
+                    # Fall back to just account numbers
+                    for acct_num in gl2_df['GL_Acct_Number'].dropna().unique():
+                        acct_num = str(acct_num)
+                        if acct_num and acct_num != 'None' and acct_num != 'nan':
+                            choices[acct_num] = acct_num
+            except Exception as e:
+                logger.warning(f"[GL2] Error building account choices from GL2: {e}")
 
-        # Also add COA accounts
+        # From COA
         coa_df = coa_data()
         if not coa_df.empty:
             for _, row in coa_df.iterrows():
                 try:
                     acct_num = str(int(row['GL_Acct_Number']))
-                    acct_name = row['GL_Acct_Name']
                     if acct_num not in choices:
-                        choices[acct_num] = f"{acct_num} - {acct_name}"
-                except Exception as e:
+                        choices[acct_num] = f"{acct_num} - {row['GL_Acct_Name']}"
+                except:
                     continue
 
-        logger.info(f"[GL2] Generated {len(choices)} total account choices")
         return choices
 
     @reactive.calc
     def category_choices():
-        """Generate category choices from GL2 data."""
-        choices = {"": "All Categories"}
-
+        """Generate category/transaction_type choices from GL2 data."""
+        choices = {"": "All Types"}
         gl2_df = gl2_data()
-        if not gl2_df.empty and 'category' in gl2_df.columns:
-            categories = gl2_df['category'].dropna().unique()
-            for cat in sorted(categories):
+        if not gl2_df.empty and 'transaction_type' in gl2_df.columns:
+            for cat in sorted(gl2_df['transaction_type'].dropna().unique()):
                 if cat and str(cat).strip():
                     choices[str(cat)] = str(cat)
-            logger.info(f"[GL2] Generated {len(choices)} category choices: {list(choices.keys())[:10]}")
-
         return choices
+
+    # =========================================================================
+    # HEADER STATS (Always visible)
+    # =========================================================================
+
+    @output
+    @render.text
+    def gl2_header_entries():
+        df = gl2_data()
+        return f"{len(df):,}"
+
+    @output
+    @render.text
+    def gl2_header_accounts():
+        df = gl2_data()
+        if df.empty or 'GL_Acct_Number' not in df.columns:
+            return "0"
+        return str(df['GL_Acct_Number'].nunique())
+
+    @output
+    @render.text
+    def gl2_header_debits():
+        df = gl2_data()
+        if df.empty or 'debit_crypto' not in df.columns:
+            return "0.000000"
+        total = sum(float(x) if pd.notna(x) else 0 for x in df['debit_crypto'])
+        return f"{total:,.6f}"
+
+    @output
+    @render.text
+    def gl2_header_credits():
+        df = gl2_data()
+        if df.empty or 'credit_crypto' not in df.columns:
+            return "0.000000"
+        total = sum(float(x) if pd.notna(x) else 0 for x in df['credit_crypto'])
+        return f"{total:,.6f}"
+
+    @output
+    @render.text
+    def gl2_header_balance():
+        df = gl2_data()
+        if df.empty:
+            return "Balanced"
+        debits = sum(float(x) if pd.notna(x) else 0 for x in df.get('debit_crypto', []))
+        credits = sum(float(x) if pd.notna(x) else 0 for x in df.get('credit_crypto', []))
+        diff = abs(debits - credits)
+        return "Balanced" if diff < 0.000001 else f"Off: {diff:,.6f}"
 
     # =========================================================================
     # JOURNAL ENTRIES TAB
@@ -167,11 +282,26 @@ def register_gl2_outputs(input, output, session):
     def filtered_journal_entries():
         """Filter journal entries based on user selections."""
         df = gl2_data()
-        logger.info(f"[GL2] filtered_journal_entries: starting with {len(df)} rows")
-
         if df.empty:
-            logger.info("[GL2] filtered_journal_entries: DataFrame is empty")
             return df
+
+        # Quick search
+        try:
+            search = input.gl2_quick_search()
+            if search:
+                search_lower = search.lower()
+                mask = pd.Series([False] * len(df))
+                if 'hash' in df.columns:
+                    mask |= df['hash'].astype(str).str.lower().str.contains(search_lower, na=False)
+                if 'GL_Acct_Name' in df.columns:
+                    mask |= df['GL_Acct_Name'].astype(str).str.lower().str.contains(search_lower, na=False)
+                if 'GL_Acct_Number' in df.columns:
+                    mask |= df['GL_Acct_Number'].astype(str).str.contains(search_lower, na=False)
+                if 'account_name' in df.columns:
+                    mask |= df['account_name'].astype(str).str.lower().str.contains(search_lower, na=False)
+                df = df[mask]
+        except:
+            pass
 
         # Date filter
         try:
@@ -179,61 +309,33 @@ def register_gl2_outputs(input, output, session):
             if date_range and len(date_range) == 2:
                 start_date = pd.Timestamp(date_range[0], tz='UTC')
                 end_date = pd.Timestamp(date_range[1], tz='UTC') + pd.Timedelta(days=1)
-                logger.info(f"[GL2] Date filter: {start_date} to {end_date}")
-
-                if 'timestamp' in df.columns:
-                    before_count = len(df)
-                    df = df[(df['timestamp'] >= start_date) & (df['timestamp'] < end_date)]
-                    logger.info(f"[GL2] Date filter: {before_count} -> {len(df)} rows")
-        except Exception as e:
-            logger.warning(f"[GL2] Date filter error: {e}")
+                if 'date' in df.columns:
+                    df = df[(df['date'] >= start_date) & (df['date'] < end_date)]
+        except:
+            pass
 
         # Account filter
         try:
-            account_filter = input.gl2_account_filter()
-            if account_filter:
-                logger.info(f"[GL2] Account filter: '{account_filter}'")
-                before_count = len(df)
-                df = df[df['account_number'] == account_filter]
-                logger.info(f"[GL2] Account filter: {before_count} -> {len(df)} rows")
-        except Exception as e:
-            logger.warning(f"[GL2] Account filter error: {e}")
+            account = input.gl2_account_filter()
+            if account:
+                df = df[df['GL_Acct_Number'].astype(str) == str(account)]
+        except:
+            pass
 
-        # Category filter
+        # Category/Type filter
         try:
-            category_filter = input.gl2_category_filter()
-            if category_filter:
-                logger.info(f"[GL2] Category filter: '{category_filter}'")
-                before_count = len(df)
-                df = df[df['category'] == category_filter]
-                logger.info(f"[GL2] Category filter: {before_count} -> {len(df)} rows")
-        except Exception as e:
-            logger.warning(f"[GL2] Category filter error: {e}")
+            category = input.gl2_category_filter()
+            if category:
+                df = df[df['transaction_type'] == category]
+        except:
+            pass
 
-        # Search filter
-        try:
-            search = input.gl2_search()
-            if search:
-                logger.info(f"[GL2] Search filter: '{search}'")
-                search_lower = search.lower()
-                mask = (
-                    df['tx_hash'].astype(str).str.lower().str.contains(search_lower, na=False) |
-                    df['description'].astype(str).str.lower().str.contains(search_lower, na=False)
-                )
-                before_count = len(df)
-                df = df[mask]
-                logger.info(f"[GL2] Search filter: {before_count} -> {len(df)} rows")
-        except Exception as e:
-            logger.warning(f"[GL2] Search filter error: {e}")
-
-        logger.info(f"[GL2] filtered_journal_entries: returning {len(df)} rows")
         return df
 
     @output
     @render.text
     def gl2_total_entries():
-        df = filtered_journal_entries()
-        return f"{len(df):,}"
+        return f"{len(filtered_journal_entries()):,}"
 
     @output
     @render.text
@@ -259,14 +361,10 @@ def register_gl2_outputs(input, output, session):
         df = filtered_journal_entries()
         if df.empty:
             return "Balanced"
-
         debits = sum(float(x) if pd.notna(x) else 0 for x in df.get('debit_crypto', []))
         credits = sum(float(x) if pd.notna(x) else 0 for x in df.get('credit_crypto', []))
         diff = abs(debits - credits)
-
-        if diff < 0.000001:
-            return "Balanced"
-        return f"Off by {diff:,.6f}"
+        return "Balanced" if diff < 0.000001 else f"Off: {diff:,.6f}"
 
     @output
     @render.data_frame
@@ -278,15 +376,23 @@ def register_gl2_outputs(input, output, session):
                 width="100%"
             )
 
-        # Select and format display columns
-        display_cols = ['timestamp', 'tx_hash', 'account_number', 'account_name',
-                       'entry_type', 'debit_crypto', 'credit_crypto', 'description', 'category']
+        # Get rows per page setting
+        try:
+            rows_per_page = int(input.gl2_rows_per_page())
+        except:
+            rows_per_page = 100
+
+        # Select display columns using new schema names
+        display_cols = ['date', 'hash', 'GL_Acct_Number', 'GL_Acct_Name',
+                       'transaction_type', 'debit_crypto', 'credit_crypto',
+                       'cryptocurrency', 'fund_id', 'row_key']
 
         display_df = df[[c for c in display_cols if c in df.columns]].copy()
 
-        # Format timestamp
-        if 'timestamp' in display_df.columns:
-            display_df['timestamp'] = pd.to_datetime(display_df['timestamp']).dt.strftime('%Y-%m-%d %H:%M')
+        # Sort by date descending
+        if 'date' in display_df.columns:
+            display_df = display_df.sort_values('date', ascending=False)
+            display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M')
 
         # Format numeric columns
         for col in ['debit_crypto', 'credit_crypto']:
@@ -295,44 +401,337 @@ def register_gl2_outputs(input, output, session):
                     lambda x: f"{float(x):,.6f}" if pd.notna(x) and float(x) != 0 else ""
                 )
 
-        # Shorten tx_hash for display
-        if 'tx_hash' in display_df.columns:
-            display_df['tx_hash'] = display_df['tx_hash'].apply(
-                lambda x: f"{x[:10]}..." if pd.notna(x) and len(str(x)) > 10 else x
+        # Shorten hash
+        if 'hash' in display_df.columns:
+            display_df['hash'] = display_df['hash'].apply(
+                lambda x: f"{x[:12]}..." if pd.notna(x) and len(str(x)) > 12 else x
             )
 
+        # Rename columns for display
+        col_rename = {
+            'date': 'Date',
+            'hash': 'TX Hash',
+            'GL_Acct_Number': 'Acct #',
+            'GL_Acct_Name': 'Account Name',
+            'transaction_type': 'Type',
+            'debit_crypto': 'Debit',
+            'credit_crypto': 'Credit',
+            'cryptocurrency': 'Asset',
+            'fund_id': 'Fund',
+            'row_key': 'Row Key'
+        }
+        display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
+
+        # Calculate height based on rows_per_page (approximately 40px per row + 60px for header)
+        table_height = f"{min(rows_per_page * 40 + 60, 2000)}px"
+
+        # Use DataGrid with dynamic height
         return render.DataGrid(
             display_df,
             filters=True,
+            selection_mode="rows",
             width="100%",
-            height="500px"
+            height=table_height,
+            row_selection_mode="single"
         )
 
     @output
     @render.ui
-    def gl2_update_account_dropdown():
-        """Update account dropdown with data from GL2 and COA."""
+    def gl2_entry_detail_panel():
+        """Show details for selected entry with edit functionality."""
+        # Get selected rows from the data grid
+        selected = input.gl2_journal_entries_table_selected_rows()
+        if not selected:
+            return ui.div()
+
+        df = filtered_journal_entries()
+        if df.empty or len(selected) == 0:
+            return ui.div()
+
+        # Get first selected row
+        idx = selected[0]
+        if idx >= len(df):
+            return ui.div()
+
+        row = df.iloc[idx]
+        row_key = str(row.get('row_key', ''))
+
+        # Check if we're in edit mode for this row
+        is_editing = edit_mode_active() and editing_row_key() == row_key
+
+        if is_editing:
+            # EDIT MODE - Show editable form
+            coa = coa_data()
+            acct_choices = {}
+            if not coa.empty:
+                for _, coa_row in coa.iterrows():
+                    try:
+                        acct_num = str(int(coa_row['GL_Acct_Number']))
+                        acct_choices[acct_num] = f"{acct_num} - {coa_row['GL_Acct_Name']}"
+                    except:
+                        continue
+
+            return ui.card(
+                ui.card_header(
+                    ui.div(
+                        ui.HTML('<i class="bi bi-pencil-square"></i> '),
+                        ui.strong("Edit Entry"),
+                        ui.div(
+                            ui.input_action_button(
+                                "gl2_save_edit",
+                                ui.HTML('<i class="bi bi-check-lg"></i> Save'),
+                                class_="btn-success btn-sm me-2"
+                            ),
+                            ui.input_action_button(
+                                "gl2_cancel_edit",
+                                ui.HTML('<i class="bi bi-x-lg"></i> Cancel'),
+                                class_="btn-outline-secondary btn-sm"
+                            ),
+                            class_="d-flex"
+                        ),
+                        class_="d-flex justify-content-between align-items-center"
+                    )
+                ),
+                ui.card_body(
+                    # Hidden field for row_key
+                    ui.tags.input(type="hidden", id="gl2_edit_row_key", value=row_key),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("Date", class_="gl2-field-label"),
+                            ui.input_date("gl2_edit_date", None, value=str(row.get('date', ''))[:10]),
+                        ),
+                        ui.div(
+                            ui.tags.label("Transaction Type", class_="gl2-field-label"),
+                            ui.input_text("gl2_edit_transaction_type", None, value=str(row.get('transaction_type', ''))),
+                        ),
+                        ui.div(
+                            ui.tags.label("Fund ID", class_="gl2-field-label"),
+                            ui.input_text("gl2_edit_fund_id", None, value=str(row.get('fund_id', ''))),
+                        ),
+                        col_widths=[4, 4, 4]
+                    ),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("GL Account Number", class_="gl2-field-label"),
+                            ui.input_selectize("gl2_edit_gl_acct_number", None,
+                                choices=acct_choices,
+                                selected=str(row.get('GL_Acct_Number', '')),
+                                width="100%"
+                            ),
+                        ),
+                        ui.div(
+                            ui.tags.label("Cryptocurrency", class_="gl2-field-label"),
+                            ui.input_select("gl2_edit_cryptocurrency", None,
+                                choices={"ETH": "ETH", "WETH": "WETH", "USDC": "USDC", "USDT": "USDT"},
+                                selected=str(row.get('cryptocurrency', 'ETH'))
+                            ),
+                        ),
+                        col_widths=[8, 4]
+                    ),
+
+                    ui.hr(),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("Debit (Crypto)", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_debit_crypto", None,
+                                value=float(row.get('debit_crypto', 0) or 0),
+                                min=0, step=0.000001
+                            ),
+                        ),
+                        ui.div(
+                            ui.tags.label("Credit (Crypto)", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_credit_crypto", None,
+                                value=float(row.get('credit_crypto', 0) or 0),
+                                min=0, step=0.000001
+                            ),
+                        ),
+                        ui.div(
+                            ui.tags.label("ETH/USD Price", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_eth_usd_price", None,
+                                value=float(row.get('eth_usd_price', 0) or 0),
+                                min=0, step=0.01
+                            ),
+                        ),
+                        col_widths=[4, 4, 4]
+                    ),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("Debit (USD)", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_debit_usd", None,
+                                value=float(row.get('debit_USD', 0) or 0),
+                                min=0, step=0.01
+                            ),
+                        ),
+                        ui.div(
+                            ui.tags.label("Credit (USD)", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_credit_usd", None,
+                                value=float(row.get('credit_USD', 0) or 0),
+                                min=0, step=0.01
+                            ),
+                        ),
+                        col_widths=[6, 6]
+                    ),
+
+                    ui.hr(),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("Loan ID", class_="gl2-field-label"),
+                            ui.input_text("gl2_edit_loan_id", None, value=str(row.get('loan_id', '') or '')),
+                        ),
+                        ui.div(
+                            ui.tags.label("Contract Address", class_="gl2-field-label"),
+                            ui.input_text("gl2_edit_contract_address", None, value=str(row.get('contract_address', '') or '')),
+                        ),
+                        col_widths=[6, 6]
+                    ),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("Lender", class_="gl2-field-label"),
+                            ui.input_text("gl2_edit_lender", None, value=str(row.get('lender', '') or '')),
+                        ),
+                        ui.div(
+                            ui.tags.label("Borrower", class_="gl2-field-label"),
+                            ui.input_text("gl2_edit_borrower", None, value=str(row.get('borrower', '') or '')),
+                        ),
+                        col_widths=[6, 6]
+                    ),
+
+                    ui.layout_columns(
+                        ui.div(
+                            ui.tags.label("Principal (Crypto)", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_principal_crypto", None,
+                                value=float(row.get('principal_crypto', 0) or 0),
+                                min=0, step=0.000001
+                            ),
+                        ),
+                        ui.div(
+                            ui.tags.label("Annual Interest Rate", class_="gl2-field-label"),
+                            ui.input_numeric("gl2_edit_annual_interest_rate", None,
+                                value=float(row.get('annual_interest_rate', 0) or 0),
+                                min=0, step=0.0001
+                            ),
+                        ),
+                        col_widths=[6, 6]
+                    ),
+
+                    ui.tags.small(
+                        f"Row Key: {row_key}",
+                        class_="text-muted d-block mt-3"
+                    ),
+                ),
+                class_="mt-3 gl2-edit-form"
+            )
+        else:
+            # VIEW MODE - Show entry details with Edit button and Etherscan link
+            tx_hash = str(row.get('hash', ''))
+            # Build Etherscan URL if we have a valid transaction hash
+            etherscan_url = None
+            if tx_hash and tx_hash.startswith('0x') and len(tx_hash) >= 66:
+                etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
+
+            return ui.card(
+                ui.card_header(
+                    ui.div(
+                        ui.strong("Entry Details"),
+                        ui.div(
+                            ui.tags.a(
+                                ui.HTML('<i class="bi bi-box-arrow-up-right"></i> Etherscan'),
+                                href=etherscan_url if etherscan_url else "#",
+                                target="_blank",
+                                class_=f"btn btn-outline-info btn-sm me-2 {'disabled' if not etherscan_url else ''}"
+                            ) if etherscan_url else ui.span(),
+                            ui.input_action_button(
+                                "gl2_start_edit",
+                                ui.HTML('<i class="bi bi-pencil"></i> Edit Entry'),
+                                class_="btn-primary btn-sm"
+                            ),
+                            class_="d-flex"
+                        ),
+                        class_="d-flex justify-content-between align-items-center"
+                    )
+                ),
+                ui.card_body(
+                    ui.layout_columns(
+                        ui.div(
+                            ui.strong("TX Hash: "), str(row.get('hash', 'N/A')),
+                        ),
+                        ui.div(
+                            ui.strong("Date: "), str(row.get('date', 'N/A'))[:19],
+                        ),
+                        ui.div(
+                            ui.strong("Fund: "), str(row.get('fund_id', 'N/A')),
+                        ),
+                        col_widths=[6, 3, 3]
+                    ),
+                    ui.hr(),
+                    ui.layout_columns(
+                        ui.div(
+                            ui.strong("Account: "), f"{row.get('GL_Acct_Number', '')} - {row.get('GL_Acct_Name', '')}",
+                        ),
+                        ui.div(
+                            ui.strong("Type: "), str(row.get('transaction_type', 'N/A')),
+                        ),
+                        ui.div(
+                            ui.strong("Wallet: "), str(row.get('wallet_id', 'N/A'))[:12] + "..." if row.get('wallet_id') else 'N/A',
+                        ),
+                        col_widths=[6, 3, 3]
+                    ),
+                    ui.hr(),
+                    ui.layout_columns(
+                        ui.div(
+                            ui.strong("Debit: "), f"{float(row.get('debit_crypto', 0) or 0):,.6f}",
+                            class_="text-success"
+                        ),
+                        ui.div(
+                            ui.strong("Credit: "), f"{float(row.get('credit_crypto', 0) or 0):,.6f}",
+                            class_="text-danger"
+                        ),
+                        ui.div(
+                            ui.strong("Asset: "), str(row.get('cryptocurrency', 'N/A')),
+                        ),
+                        col_widths=[4, 4, 4]
+                    ),
+                    ui.hr(),
+                    ui.layout_columns(
+                        ui.div(
+                            ui.strong("Loan ID: "), str(row.get('loan_id', 'N/A') or 'N/A'),
+                        ),
+                        ui.div(
+                            ui.strong("ETH/USD: "), f"${float(row.get('eth_usd_price', 0) or 0):,.2f}",
+                        ),
+                        ui.div(
+                            ui.strong("Principal: "), f"{float(row.get('principal_crypto', 0) or 0):,.6f}" if row.get('principal_crypto') else 'N/A',
+                        ),
+                        col_widths=[4, 4, 4]
+                    ),
+                    ui.tags.small(
+                        f"Row Key: {row_key}",
+                        class_="text-muted d-block mt-3"
+                    ),
+                ),
+                class_="mt-3"
+            )
+
+    # Update dropdowns using reactive effects (not render.ui)
+    @reactive.effect
+    def _update_account_dropdown():
+        """Update account filter dropdown when data changes."""
         choices = account_choices()
-        logger.info(f"[GL2] Updating account dropdown with {len(choices)} choices")
-        return ui.update_selectize(
-            "gl2_account_filter",
-            choices=choices,
-            selected=""
-        )
+        ui.update_selectize("gl2_account_filter", choices=choices, selected="")
 
-    @output
-    @render.ui
-    def gl2_update_category_dropdown():
-        """Update category dropdown with actual categories from GL2 data."""
+    @reactive.effect
+    def _update_category_dropdown():
+        """Update category filter dropdown when data changes."""
         choices = category_choices()
-        logger.info(f"[GL2] Updating category dropdown with {len(choices)} choices")
-        return ui.update_selectize(
-            "gl2_category_filter",
-            choices=choices,
-            selected=""
-        )
+        ui.update_selectize("gl2_category_filter", choices=choices, selected="")
 
-    # Refresh button handler
+    # Refresh button
     @reactive.effect
     @reactive.event(input.gl2_refresh)
     def _refresh_gl2_data():
@@ -340,33 +739,283 @@ def register_gl2_outputs(input, output, session):
         gl2_data_version.set(gl2_data_version() + 1)
         ui.notification_show("GL2 data refreshed", type="message")
 
-    # Clear filters handler
+    # Clear filters
     @reactive.effect
     @reactive.event(input.gl2_clear_filters)
     def _clear_filters():
         ui.update_selectize("gl2_account_filter", selected="")
         ui.update_selectize("gl2_category_filter", selected="")
-        ui.update_text("gl2_search", value="")
+        ui.update_text("gl2_quick_search", value="")
+
+    # Start edit mode
+    @reactive.effect
+    @reactive.event(input.gl2_start_edit)
+    def _start_edit():
+        selected = input.gl2_journal_entries_table_selected_rows()
+        if not selected:
+            return
+
+        df = filtered_journal_entries()
+        if df.empty or len(selected) == 0:
+            return
+
+        idx = selected[0]
+        if idx >= len(df):
+            return
+
+        row = df.iloc[idx]
+        row_key = str(row.get('row_key', ''))
+
+        if row_key:
+            edit_mode_active.set(True)
+            editing_row_key.set(row_key)
+            logger.info(f"[GL2] Started editing entry: {row_key}")
+
+    # Cancel edit mode
+    @reactive.effect
+    @reactive.event(input.gl2_cancel_edit)
+    def _cancel_edit():
+        edit_mode_active.set(False)
+        editing_row_key.set(None)
+        logger.info("[GL2] Cancelled editing")
+
+    # Save edited entry to S3
+    @reactive.effect
+    @reactive.event(input.gl2_save_edit)
+    def _save_edit():
+        row_key = editing_row_key()
+        if not row_key:
+            ui.notification_show("No entry selected for editing", type="error")
+            return
+
+        # Get the full GL2 data
+        full_df = load_GL2_file()
+        if full_df.empty:
+            ui.notification_show("No GL2 data found", type="error")
+            return
+
+        # Normalize columns for lookup
+        full_df = normalize_gl2_columns(full_df)
+
+        # Find the row to update
+        if 'row_key' not in full_df.columns:
+            ui.notification_show("row_key column not found in GL2 data", type="error")
+            return
+
+        mask = full_df['row_key'] == row_key
+        if not mask.any():
+            ui.notification_show(f"Entry not found: {row_key}", type="error")
+            return
+
+        try:
+            # Get edited values from form inputs
+            edit_date = input.gl2_edit_date()
+            edit_transaction_type = input.gl2_edit_transaction_type()
+            edit_fund_id = input.gl2_edit_fund_id()
+            edit_gl_acct_number = input.gl2_edit_gl_acct_number()
+            edit_cryptocurrency = input.gl2_edit_cryptocurrency()
+            edit_debit_crypto = input.gl2_edit_debit_crypto() or 0
+            edit_credit_crypto = input.gl2_edit_credit_crypto() or 0
+            edit_eth_usd_price = input.gl2_edit_eth_usd_price() or 0
+            edit_debit_usd = input.gl2_edit_debit_usd() or 0
+            edit_credit_usd = input.gl2_edit_credit_usd() or 0
+            edit_loan_id = input.gl2_edit_loan_id()
+            edit_contract_address = input.gl2_edit_contract_address()
+            edit_lender = input.gl2_edit_lender()
+            edit_borrower = input.gl2_edit_borrower()
+            edit_principal_crypto = input.gl2_edit_principal_crypto() or 0
+            edit_annual_interest_rate = input.gl2_edit_annual_interest_rate() or 0
+
+            # Get GL_Acct_Name from COA
+            gl_acct_name = ""
+            coa = coa_data()
+            if not coa.empty and edit_gl_acct_number:
+                match = coa[coa['GL_Acct_Number'].astype(str) == str(edit_gl_acct_number)]
+                if not match.empty:
+                    gl_acct_name = match.iloc[0]['GL_Acct_Name']
+
+            # Update the row
+            row_idx = mask.idxmax()
+
+            # Update date - convert to timestamp
+            if edit_date:
+                full_df.loc[row_idx, 'date'] = pd.Timestamp(edit_date, tz='UTC')
+
+            # Update other fields
+            full_df.loc[row_idx, 'transaction_type'] = edit_transaction_type
+            full_df.loc[row_idx, 'fund_id'] = edit_fund_id
+            full_df.loc[row_idx, 'GL_Acct_Number'] = edit_gl_acct_number
+            full_df.loc[row_idx, 'GL_Acct_Name'] = gl_acct_name
+            full_df.loc[row_idx, 'cryptocurrency'] = edit_cryptocurrency
+            full_df.loc[row_idx, 'debit_crypto'] = float(edit_debit_crypto)
+            full_df.loc[row_idx, 'credit_crypto'] = float(edit_credit_crypto)
+            full_df.loc[row_idx, 'eth_usd_price'] = float(edit_eth_usd_price)
+            full_df.loc[row_idx, 'debit_USD'] = float(edit_debit_usd)
+            full_df.loc[row_idx, 'credit_USD'] = float(edit_credit_usd)
+            full_df.loc[row_idx, 'loan_id'] = edit_loan_id if edit_loan_id else None
+            full_df.loc[row_idx, 'contract_address'] = edit_contract_address if edit_contract_address else None
+            full_df.loc[row_idx, 'lender'] = edit_lender if edit_lender else None
+            full_df.loc[row_idx, 'borrower'] = edit_borrower if edit_borrower else None
+            full_df.loc[row_idx, 'principal_crypto'] = float(edit_principal_crypto) if edit_principal_crypto else None
+            full_df.loc[row_idx, 'annual_interest_rate'] = float(edit_annual_interest_rate) if edit_annual_interest_rate else None
+
+            # Save to S3
+            if save_GL2_file(full_df):
+                ui.notification_show("Entry updated successfully", type="message")
+                edit_mode_active.set(False)
+                editing_row_key.set(None)
+                clear_GL2_cache()
+                gl2_data_version.set(gl2_data_version() + 1)
+                logger.info(f"[GL2] Saved edited entry: {row_key}")
+            else:
+                ui.notification_show("Failed to save changes to S3", type="error")
+
+        except Exception as e:
+            logger.error(f"[GL2] Error saving edit: {e}")
+            ui.notification_show(f"Error saving: {str(e)}", type="error")
+
+    # Delete selected entries
+    @reactive.effect
+    @reactive.event(input.gl2_delete_selected)
+    def _delete_selected():
+        selected = input.gl2_journal_entries_table_selected_rows()
+        if not selected:
+            ui.notification_show("No entries selected", type="warning")
+            return
+
+        df = filtered_journal_entries()
+        full_df = gl2_data()
+
+        if df.empty:
+            return
+
+        # Get row_keys to delete
+        row_keys_to_delete = []
+        for idx in selected:
+            if idx < len(df) and 'row_key' in df.columns:
+                row_keys_to_delete.append(df.iloc[idx]['row_key'])
+
+        if not row_keys_to_delete:
+            ui.notification_show("Could not identify entries to delete", type="error")
+            return
+
+        # Remove from full dataset
+        updated_df = full_df[~full_df['row_key'].isin(row_keys_to_delete)]
+
+        # Save
+        try:
+            if save_GL2_file(updated_df):
+                ui.notification_show(f"Deleted {len(row_keys_to_delete)} entries", type="message")
+                clear_GL2_cache()
+                gl2_data_version.set(gl2_data_version() + 1)
+            else:
+                ui.notification_show("Failed to save changes", type="error")
+        except Exception as e:
+            ui.notification_show(f"Error: {str(e)}", type="error")
+
+    # Reverse selected entries
+    @reactive.effect
+    @reactive.event(input.gl2_reverse_selected)
+    def _reverse_selected():
+        selected = input.gl2_journal_entries_table_selected_rows()
+        if not selected:
+            ui.notification_show("No entries selected", type="warning")
+            return
+
+        df = filtered_journal_entries()
+        full_df = gl2_data()
+
+        if df.empty:
+            return
+
+        # Create reversing entries using new schema
+        reversal_records = []
+        timestamp = datetime.now(timezone.utc)
+
+        for idx in selected:
+            if idx >= len(df):
+                continue
+
+            row = df.iloc[idx]
+            row_key_val = row.get('row_key', '')
+            tx_hash = f"reversal_{hashlib.md5(f'{row_key_val}{timestamp}'.encode()).hexdigest()[:16]}"
+
+            # Swap debits and credits with new schema
+            reversal = {
+                # Core identifiers (1-4)
+                'date': timestamp,
+                'fund_id': row.get('fund_id', ''),
+                'limited_partner_ID': None,
+                'wallet_id': row.get('wallet_id', ''),
+                # Transaction info (5-7)
+                'transaction_type': 'reversal',
+                'cryptocurrency': row.get('cryptocurrency', 'ETH'),
+                'account_name': row.get('account_name', ''),
+                # GL Account info (8-9)
+                'GL_Acct_Number': row.get('GL_Acct_Number', ''),
+                'GL_Acct_Name': row.get('GL_Acct_Name', ''),
+                # Amounts - swapped (10-14)
+                'debit_crypto': float(row.get('credit_crypto', 0)),
+                'credit_crypto': float(row.get('debit_crypto', 0)),
+                'eth_usd_price': float(row.get('eth_usd_price', 0)),
+                'debit_USD': float(row.get('credit_USD', 0)),
+                'credit_USD': float(row.get('debit_USD', 0)),
+                # Event info (15-17)
+                'event': 'Reversal',
+                'function': None,
+                'hash': tx_hash,
+                # Loan details (18-31)
+                'loan_id': row.get('loan_id'),
+                'lender': row.get('lender'),
+                'borrower': row.get('borrower'),
+                'from': row.get('from'),
+                'to': row.get('to'),
+                'contract_address': row.get('contract_address'),
+                'collateral_address': row.get('collateral_address'),
+                'token_id': row.get('token_id'),
+                'principal_crypto': row.get('principal_crypto'),
+                'principal_USD': row.get('principal_USD'),
+                'annual_interest_rate': row.get('annual_interest_rate'),
+                'payoff_amount_crypto': row.get('payoff_amount_crypto'),
+                'payoff_amount_USD': row.get('payoff_amount_USD'),
+                'loan_due_date': row.get('loan_due_date'),
+                # End of day price (37)
+                'end_of_day_ETH_USD': row.get('end_of_day_ETH_USD'),
+                # Internal deduplication key
+                'row_key': f"{tx_hash}:{row.get('GL_Acct_Number', '')}:reversal"
+            }
+            reversal_records.append(reversal)
+
+        if not reversal_records:
+            ui.notification_show("No entries to reverse", type="warning")
+            return
+
+        # Add reversals to data
+        try:
+            reversal_df = pd.DataFrame(reversal_records)
+            combined = pd.concat([full_df, reversal_df], ignore_index=True)
+
+            if save_GL2_file(combined):
+                ui.notification_show(f"Created {len(reversal_records)} reversing entries", type="message")
+                clear_GL2_cache()
+                gl2_data_version.set(gl2_data_version() + 1)
+            else:
+                ui.notification_show("Failed to save reversals", type="error")
+        except Exception as e:
+            ui.notification_show(f"Error: {str(e)}", type="error")
 
     # =========================================================================
     # ACCOUNT LEDGER TAB
     # =========================================================================
 
-    @output
-    @render.ui
-    def gl2_update_ledger_account_dropdown():
-        """Update ledger account dropdown with COA data."""
+    @reactive.effect
+    def _update_ledger_account_dropdown():
+        """Update ledger account dropdown when data changes."""
         choices = account_choices()
-        # Remove "All Accounts" option for ledger view
         if "" in choices:
             del choices[""]
         choices = {"": "Select an account...", **choices}
-
-        return ui.update_selectize(
-            "gl2_ledger_account",
-            choices=choices,
-            selected=""
-        )
+        ui.update_selectize("gl2_ledger_account", choices=choices, selected="")
 
     @reactive.calc
     def account_ledger_data():
@@ -377,8 +1026,7 @@ def register_gl2_outputs(input, output, session):
         if df.empty or not account:
             return pd.DataFrame()
 
-        # Filter by account
-        df = df[df['account_number'] == account].copy()
+        df = df[df['GL_Acct_Number'].astype(str) == str(account)].copy()
 
         if df.empty:
             return df
@@ -389,18 +1037,15 @@ def register_gl2_outputs(input, output, session):
             if date_range and len(date_range) == 2:
                 start_date = pd.Timestamp(date_range[0], tz='UTC')
                 end_date = pd.Timestamp(date_range[1], tz='UTC') + pd.Timedelta(days=1)
-
-                if 'timestamp' in df.columns:
-                    df = df[(df['timestamp'] >= start_date) & (df['timestamp'] < end_date)]
+                if 'date' in df.columns:
+                    df = df[(df['date'] >= start_date) & (df['date'] < end_date)]
         except:
             pass
 
-        # Sort by timestamp
-        if 'timestamp' in df.columns:
-            df = df.sort_values('timestamp')
+        # Sort and calculate running balance
+        if 'date' in df.columns:
+            df = df.sort_values('date')
 
-        # Calculate running balance
-        df['running_balance'] = 0.0
         running = 0.0
         balances = []
         for _, row in df.iterrows():
@@ -410,7 +1055,6 @@ def register_gl2_outputs(input, output, session):
             balances.append(running)
 
         df['running_balance'] = balances
-
         return df
 
     @output
@@ -418,7 +1062,7 @@ def register_gl2_outputs(input, output, session):
     def gl2_ledger_account_name():
         account = input.gl2_ledger_account()
         if not account:
-            return "Account Ledger"
+            return "Select an Account"
 
         coa = coa_data()
         if not coa.empty:
@@ -434,32 +1078,28 @@ def register_gl2_outputs(input, output, session):
         df = account_ledger_data()
         if df.empty:
             return ui.div(
-                ui.p("Select an account to view its ledger.", class_="text-muted"),
-                class_="mb-3"
+                ui.p("Select an account to view ledger.", class_="text-muted text-center py-2"),
             )
 
         total_debits = sum(float(x) if pd.notna(x) else 0 for x in df['debit_crypto'])
         total_credits = sum(float(x) if pd.notna(x) else 0 for x in df['credit_crypto'])
         balance = total_debits - total_credits
+        entry_count = len(df)
 
-        return ui.layout_columns(
-            ui.value_box(
-                title="Total Debits",
-                value=f"{total_debits:,.6f}",
-                theme="success"
+        # Compact inline summary instead of large value boxes
+        return ui.div(
+            ui.div(
+                ui.span(f"Entries: ", class_="text-muted"),
+                ui.strong(f"{entry_count:,}", class_="me-4"),
+                ui.span(f"Debits: ", class_="text-muted"),
+                ui.strong(f"{total_debits:,.6f}", class_="text-success me-4"),
+                ui.span(f"Credits: ", class_="text-muted"),
+                ui.strong(f"{total_credits:,.6f}", class_="text-danger me-4"),
+                ui.span(f"Balance: ", class_="text-muted"),
+                ui.strong(f"{balance:,.6f}", class_="text-info"),
+                class_="py-2 px-3 bg-light rounded d-flex align-items-center flex-wrap gap-2"
             ),
-            ui.value_box(
-                title="Total Credits",
-                value=f"{total_credits:,.6f}",
-                theme="info"
-            ),
-            ui.value_box(
-                title="Balance",
-                value=f"{balance:,.6f}",
-                theme="primary"
-            ),
-            col_widths=[4, 4, 4],
-            class_="mb-3"
+            class_="mb-2 mt-2 px-3"
         )
 
     @output
@@ -468,17 +1108,34 @@ def register_gl2_outputs(input, output, session):
         df = account_ledger_data()
         if df.empty:
             return render.DataGrid(
-                pd.DataFrame({"Message": ["Select an account and click 'Load Ledger' to view entries."]}),
+                pd.DataFrame({"Message": ["Select an account to view entries."]}),
                 width="100%"
             )
 
-        # Select display columns
-        display_cols = ['timestamp', 'description', 'debit_crypto', 'credit_crypto', 'running_balance']
+        # Use same columns as Journal Entries table plus running_balance
+        display_cols = ['date', 'hash', 'GL_Acct_Number', 'GL_Acct_Name',
+                       'transaction_type', 'debit_crypto', 'credit_crypto',
+                       'running_balance', 'cryptocurrency', 'fund_id', 'row_key']
+
         display_df = df[[c for c in display_cols if c in df.columns]].copy()
 
-        # Format timestamp
-        if 'timestamp' in display_df.columns:
-            display_df['timestamp'] = pd.to_datetime(display_df['timestamp']).dt.strftime('%Y-%m-%d')
+        # Sort by date descending
+        if 'date' in display_df.columns:
+            display_df = display_df.sort_values('date', ascending=False)
+            display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M')
+
+        # Recalculate running balance after sort (in chronological order for balance)
+        if 'running_balance' in display_df.columns:
+            # We need to recalculate since we sorted
+            temp_df = df.sort_values('date', ascending=True)
+            running = 0.0
+            balances = {}
+            for idx, row in temp_df.iterrows():
+                debit = float(row['debit_crypto']) if pd.notna(row.get('debit_crypto')) else 0
+                credit = float(row['credit_crypto']) if pd.notna(row.get('credit_crypto')) else 0
+                running += debit - credit
+                balances[idx] = running
+            display_df['running_balance'] = display_df.index.map(balances)
 
         # Format numeric columns
         for col in ['debit_crypto', 'credit_crypto', 'running_balance']:
@@ -487,13 +1144,42 @@ def register_gl2_outputs(input, output, session):
                     lambda x: f"{float(x):,.6f}" if pd.notna(x) else ""
                 )
 
+        # Shorten hash
+        if 'hash' in display_df.columns:
+            display_df['hash'] = display_df['hash'].apply(
+                lambda x: f"{x[:12]}..." if pd.notna(x) and len(str(x)) > 12 else x
+            )
+
         # Rename columns for display
-        display_df.columns = ['Date', 'Description', 'Debit', 'Credit', 'Balance']
+        col_rename = {
+            'date': 'Date',
+            'hash': 'TX Hash',
+            'GL_Acct_Number': 'Acct #',
+            'GL_Acct_Name': 'Account Name',
+            'transaction_type': 'Type',
+            'debit_crypto': 'Debit',
+            'credit_crypto': 'Credit',
+            'running_balance': 'Balance',
+            'cryptocurrency': 'Asset',
+            'fund_id': 'Fund',
+            'row_key': 'Row Key'
+        }
+        display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
+
+        # Calculate height based on rows (same logic as journal entries)
+        try:
+            rows_per_page = int(input.gl2_rows_per_page())
+        except:
+            rows_per_page = 100
+        table_height = f"{min(rows_per_page * 40 + 60, 2000)}px"
 
         return render.DataGrid(
             display_df,
+            filters=True,
+            selection_mode="rows",
             width="100%",
-            height="400px"
+            height=table_height,
+            row_selection_mode="single"
         )
 
     # =========================================================================
@@ -504,12 +1190,8 @@ def register_gl2_outputs(input, output, session):
     def trial_balance_data():
         """Generate trial balance from GL2 data."""
         df = gl2_data()
-        coa = coa_data()
-
-        logger.info(f"[GL2] trial_balance_data: starting with {len(df)} rows")
 
         if df.empty:
-            logger.info("[GL2] trial_balance_data: DataFrame is empty")
             return pd.DataFrame()
 
         # Filter by as-of date
@@ -517,75 +1199,60 @@ def register_gl2_outputs(input, output, session):
             as_of_date = input.gl2_tb_as_of_date()
             if as_of_date:
                 end_date = pd.Timestamp(as_of_date, tz='UTC') + pd.Timedelta(days=1)
-                logger.info(f"[GL2] TB as-of date filter: < {end_date}")
-                if 'timestamp' in df.columns:
-                    before_count = len(df)
-                    df = df[df['timestamp'] < end_date]
-                    logger.info(f"[GL2] TB date filter: {before_count} -> {len(df)} rows")
-        except Exception as e:
-            logger.warning(f"[GL2] TB date filter error: {e}")
+                if 'date' in df.columns:
+                    df = df[df['date'] < end_date]
+        except:
+            pass
 
         if df.empty:
-            logger.info("[GL2] trial_balance_data: DataFrame empty after date filter")
             return pd.DataFrame()
 
-        logger.info(f"[GL2] Unique account_numbers in GL2: {df['account_number'].unique().tolist()[:10]}")
+        # Determine which currency to use
+        currency = "crypto"
+        try:
+            currency = input.gl2_tb_currency()
+        except:
+            pass
+
+        debit_col = 'debit_USD' if currency == 'usd' else 'debit_crypto'
+        credit_col = 'credit_USD' if currency == 'usd' else 'credit_crypto'
 
         # Group by account
-        try:
-            grouped = df.groupby('account_number').agg({
-                'account_name': 'first',
-                'debit_crypto': lambda x: sum(float(v) if pd.notna(v) else 0 for v in x),
-                'credit_crypto': lambda x: sum(float(v) if pd.notna(v) else 0 for v in x)
-            }).reset_index()
-            logger.info(f"[GL2] TB grouped to {len(grouped)} accounts")
-        except Exception as e:
-            logger.error(f"[GL2] TB groupby error: {e}")
-            import traceback
-            traceback.print_exc()
-            return pd.DataFrame()
+        grouped = df.groupby('GL_Acct_Number').agg({
+            'GL_Acct_Name': 'first',
+            debit_col: lambda x: sum(float(v) if pd.notna(v) else 0 for v in x),
+            credit_col: lambda x: sum(float(v) if pd.notna(v) else 0 for v in x)
+        }).reset_index()
+
+        grouped.columns = ['account_number', 'account_name', 'total_debits', 'total_credits']
 
         # Calculate net balance
-        grouped['net_balance'] = grouped['debit_crypto'] - grouped['credit_crypto']
+        grouped['net_balance'] = grouped['total_debits'] - grouped['total_credits']
+        grouped['debit_balance'] = grouped['net_balance'].apply(lambda x: x if x > 0 else 0)
+        grouped['credit_balance'] = grouped['net_balance'].apply(lambda x: abs(x) if x < 0 else 0)
 
-        # Determine debit/credit balances based on account type
-        # Assets and Expenses have debit balances, Liabilities/Equity/Income have credit balances
-        grouped['debit_balance'] = grouped.apply(
-            lambda row: row['net_balance'] if row['net_balance'] > 0 else 0, axis=1
-        )
-        grouped['credit_balance'] = grouped.apply(
-            lambda row: abs(row['net_balance']) if row['net_balance'] < 0 else 0, axis=1
-        )
-
-        # Add account category based on account number
+        # Add category based on first digit of account number
+        # Account scheme: 1xxxx = Assets, 2xxxx = Liabilities, 3xxxx = Equity,
+        # 4xxxx = Revenue, 5xxxx/6xxxx/8xxxx = Expenses, 9xxxx = Other Income
         def get_category(acct_num):
             try:
-                # Handle account numbers like "100.30" by extracting integer part
-                num_str = str(acct_num).split('.')[0]
-                num = int(num_str)
-                if num < 200:
-                    return "Assets"
-                elif num < 300:
-                    return "Liabilities"
-                elif num < 400:
-                    return "Capital/Equity"
-                elif num < 500:
-                    return "Other Income"
-                elif num < 900:
-                    return "Expenses"
-                else:
-                    return "Income"
-            except Exception as e:
-                logger.warning(f"[GL2] get_category error for '{acct_num}': {e}")
-                return "Other"
+                acct_str = str(acct_num).split('.')[0].strip()
+                if not acct_str:
+                    return "9. Other"
+                first_digit = acct_str[0]
+                if first_digit == '1': return "1. Assets"
+                elif first_digit == '2': return "2. Liabilities"
+                elif first_digit == '3': return "3. Equity"
+                elif first_digit == '4': return "4. Revenue"
+                elif first_digit in ('5', '6', '8'): return "5. Expenses"
+                elif first_digit == '9': return "6. Other Income"
+                else: return "9. Other"
+            except:
+                return "9. Other"
 
         grouped['category'] = grouped['account_number'].apply(get_category)
-        logger.info(f"[GL2] TB categories: {grouped['category'].value_counts().to_dict()}")
+        grouped = grouped.sort_values(['category', 'account_number'])
 
-        # Sort by account number
-        grouped = grouped.sort_values('account_number')
-
-        logger.info(f"[GL2] trial_balance_data: returning {len(grouped)} accounts")
         return grouped
 
     @output
@@ -611,50 +1278,201 @@ def register_gl2_outputs(input, output, session):
     def gl2_tb_difference():
         df = trial_balance_data()
         if df.empty:
-            return "0.000000"
+            return "Balanced"
         debits = df['debit_balance'].sum()
         credits = df['credit_balance'].sum()
         diff = debits - credits
-        if abs(diff) < 0.000001:
-            return "Balanced"
-        return f"{diff:,.6f}"
+        return "Balanced" if abs(diff) < 0.000001 else f"Off: {diff:,.6f}"
 
     @output
-    @render.data_frame
-    def gl2_trial_balance_table():
+    @render.text
+    def gl2_tb_date_display():
+        try:
+            as_of = input.gl2_tb_as_of_date()
+            return f"As of {as_of}" if as_of else ""
+        except:
+            return ""
+
+    @output
+    @render.ui
+    def gl2_tb_balance_status():
+        """Render balance status with styling."""
         df = trial_balance_data()
         if df.empty:
-            return render.DataGrid(
-                pd.DataFrame({"Message": ["No data for trial balance. Post some journal entries first."]}),
-                width="100%"
+            return ui.div("--", class_="tb-summary-value")
+
+        debits = df['debit_balance'].sum()
+        credits = df['credit_balance'].sum()
+        diff = abs(debits - credits)
+
+        if diff < 0.000001:
+            return ui.div(
+                ui.HTML('<i class="bi bi-check-circle-fill me-2"></i>'),
+                "Balanced",
+                class_="tb-summary-value balanced"
+            )
+        else:
+            return ui.div(
+                ui.HTML('<i class="bi bi-exclamation-triangle-fill me-2"></i>'),
+                f"{diff:,.6f}",
+                class_="tb-summary-value unbalanced"
             )
 
-        grouping = input.gl2_tb_grouping()
+    @output
+    @render.ui
+    def gl2_tb_balance_badge():
+        """Render balance badge in footer."""
+        df = trial_balance_data()
+        if df.empty:
+            return ui.span()
+
+        debits = df['debit_balance'].sum()
+        credits = df['credit_balance'].sum()
+        diff = abs(debits - credits)
+
+        if diff < 0.000001:
+            return ui.span(
+                ui.HTML('<i class="bi bi-check-circle-fill"></i>'),
+                " Trial Balance is in Balance",
+                class_="tb-balanced-badge balanced"
+            )
+        else:
+            return ui.span(
+                ui.HTML('<i class="bi bi-exclamation-triangle-fill"></i>'),
+                f" Out of Balance by {diff:,.6f}",
+                class_="tb-balanced-badge unbalanced"
+            )
+
+    @output
+    @render.ui
+    def gl2_trial_balance_display():
+        """Render beautiful trial balance as HTML table."""
+        df = trial_balance_data()
+        if df.empty:
+            return ui.div(
+                ui.div(
+                    ui.HTML('<i class="bi bi-inbox" style="font-size: 3rem; color: #cbd5e1;"></i>'),
+                    ui.p("No journal entries found", class_="mt-3 mb-1 fw-semibold"),
+                    ui.p("Post some journal entries to see your trial balance.", class_="text-muted small"),
+                    class_="text-center py-5"
+                )
+            )
+
+        grouping = "account"
+        try:
+            grouping = input.gl2_tb_grouping()
+        except:
+            pass
+
+        rows = []
 
         if grouping == "category":
-            # Group by category
+            # Group by category - summary view
             summary = df.groupby('category').agg({
                 'debit_balance': 'sum',
                 'credit_balance': 'sum'
             }).reset_index()
 
-            # Format numbers
-            summary['debit_balance'] = summary['debit_balance'].apply(lambda x: f"{x:,.6f}" if x > 0 else "")
-            summary['credit_balance'] = summary['credit_balance'].apply(lambda x: f"{x:,.6f}" if x > 0 else "")
+            for _, row in summary.iterrows():
+                dr = f"{row['debit_balance']:,.6f}" if row['debit_balance'] > 0.000001 else ""
+                cr = f"{row['credit_balance']:,.6f}" if row['credit_balance'] > 0.000001 else ""
+                dr_class = "text-right debit-value" if dr else "text-right tb-empty-cell"
+                cr_class = "text-right credit-value" if cr else "text-right tb-empty-cell"
 
-            summary.columns = ['Account Category', 'Debit Balance', 'Credit Balance']
+                rows.append(
+                    ui.tags.tr(
+                        ui.tags.td(row['category'], class_="acct-name", colspan="2"),
+                        ui.tags.td(dr or "-", class_=dr_class),
+                        ui.tags.td(cr or "-", class_=cr_class),
+                        class_="tb-account-row"
+                    )
+                )
         else:
-            # Individual accounts
-            summary = df[['account_number', 'account_name', 'debit_balance', 'credit_balance']].copy()
-            summary['debit_balance'] = summary['debit_balance'].apply(lambda x: f"{x:,.6f}" if x > 0 else "")
-            summary['credit_balance'] = summary['credit_balance'].apply(lambda x: f"{x:,.6f}" if x > 0 else "")
-            summary.columns = ['Account #', 'Account Name', 'Debit Balance', 'Credit Balance']
+            # Individual accounts with category headers
+            current_category = None
 
-        return render.DataGrid(
-            summary,
-            width="100%",
-            height="400px"
+            for _, row in df.iterrows():
+                # Category header row
+                if row['category'] != current_category:
+                    current_category = row['category']
+                    # Extract just the category name (remove number prefix)
+                    cat_name = current_category.split('. ', 1)[1] if '. ' in current_category else current_category
+                    rows.append(
+                        ui.tags.tr(
+                            ui.tags.td(
+                                ui.HTML(f'<i class="bi bi-folder2 me-2"></i>{cat_name}'),
+                                colspan="4"
+                            ),
+                            class_="tb-category-row"
+                        )
+                    )
+
+                # Account row
+                dr = f"{row['debit_balance']:,.6f}" if row['debit_balance'] > 0.000001 else ""
+                cr = f"{row['credit_balance']:,.6f}" if row['credit_balance'] > 0.000001 else ""
+                dr_class = "text-right debit-value" if dr else "text-right tb-empty-cell"
+                cr_class = "text-right credit-value" if cr else "text-right tb-empty-cell"
+
+                rows.append(
+                    ui.tags.tr(
+                        ui.tags.td(row['account_number'], class_="acct-num"),
+                        ui.tags.td(row['account_name'], class_="acct-name"),
+                        ui.tags.td(dr or "-", class_=dr_class),
+                        ui.tags.td(cr or "-", class_=cr_class),
+                        class_="tb-account-row"
+                    )
+                )
+
+        # Total row
+        total_dr = df['debit_balance'].sum()
+        total_cr = df['credit_balance'].sum()
+        rows.append(
+            ui.tags.tr(
+                ui.tags.td("TOTAL", colspan="2"),
+                ui.tags.td(f"{total_dr:,.6f}", class_="text-right"),
+                ui.tags.td(f"{total_cr:,.6f}", class_="text-right"),
+                class_="tb-total-row"
+            )
         )
+
+        # Build table header
+        if grouping == "category":
+            header_row = ui.tags.tr(
+                ui.tags.th("Category", colspan="2"),
+                ui.tags.th("Debit Balance", class_="text-right"),
+                ui.tags.th("Credit Balance", class_="text-right"),
+            )
+        else:
+            header_row = ui.tags.tr(
+                ui.tags.th("Account #"),
+                ui.tags.th("Account Name"),
+                ui.tags.th("Debit Balance", class_="text-right"),
+                ui.tags.th("Credit Balance", class_="text-right"),
+            )
+
+        return ui.tags.table(
+            ui.tags.thead(header_row),
+            ui.tags.tbody(*rows),
+            class_="tb-table"
+        )
+
+    @output
+    @render.data_frame
+    def gl2_trial_balance_table():
+        """Alternative DataGrid view of trial balance."""
+        df = trial_balance_data()
+        if df.empty:
+            return render.DataGrid(
+                pd.DataFrame({"Message": ["No data for trial balance."]}),
+                width="100%"
+            )
+
+        display_df = df[['account_number', 'account_name', 'debit_balance', 'credit_balance']].copy()
+        display_df['debit_balance'] = display_df['debit_balance'].apply(lambda x: f"{x:,.6f}" if x > 0 else "")
+        display_df['credit_balance'] = display_df['credit_balance'].apply(lambda x: f"{x:,.6f}" if x > 0 else "")
+        display_df.columns = ['Account #', 'Account Name', 'Debit Balance', 'Credit Balance']
+
+        return render.DataGrid(display_df, width="100%", height="400px")
 
     # =========================================================================
     # NEW ENTRY TAB
@@ -666,8 +1484,6 @@ def register_gl2_outputs(input, output, session):
         """Render entry line inputs."""
         lines = entry_lines()
         choices = account_choices()
-
-        # Remove "All Accounts" option
         if "" in choices:
             choices = {k: v for k, v in choices.items() if k}
         choices = {"": "Select account...", **choices}
@@ -677,35 +1493,46 @@ def register_gl2_outputs(input, output, session):
             line_ui = ui.layout_columns(
                 ui.input_selectize(
                     f"gl2_line_{i}_account",
-                    f"Account {i+1}",
+                    None,
                     choices=choices,
-                    selected=line.get('account', '')
+                    selected=line.get('account', ''),
+                    width="100%"
                 ),
                 ui.input_numeric(
                     f"gl2_line_{i}_debit",
-                    "Debit",
+                    None,
                     value=line.get('debit', 0.0),
                     min=0,
                     step=0.000001
                 ),
                 ui.input_numeric(
                     f"gl2_line_{i}_credit",
-                    "Credit",
+                    None,
                     value=line.get('credit', 0.0),
                     min=0,
                     step=0.000001
                 ),
                 ui.input_action_button(
                     f"gl2_remove_line_{i}",
-                    "Remove",
-                    class_="btn-outline-danger btn-sm mt-4"
+                    ui.HTML('<i class="bi bi-x"></i>'),
+                    class_="btn-outline-danger btn-sm"
                 ) if len(lines) > 2 else ui.div(),
-                col_widths=[5, 3, 3, 1],
-                class_="mb-2"
+                col_widths=[6, 2, 2, 2],
+                class_="mb-2 align-items-center"
             )
             line_elements.append(line_ui)
 
-        return ui.div(*line_elements)
+        # Add header row
+        header = ui.layout_columns(
+            ui.tags.small("Account", class_="text-muted"),
+            ui.tags.small("Debit", class_="text-muted"),
+            ui.tags.small("Credit", class_="text-muted"),
+            ui.tags.small("", class_="text-muted"),
+            col_widths=[6, 2, 2, 2],
+            class_="mb-1"
+        )
+
+        return ui.div(header, *line_elements)
 
     @output
     @render.text
@@ -728,9 +1555,7 @@ def register_gl2_outputs(input, output, session):
         debits = sum(line.get('debit', 0) or 0 for line in lines)
         credits = sum(line.get('credit', 0) or 0 for line in lines)
         diff = debits - credits
-        if abs(diff) < 0.000001:
-            return "Balanced"
-        return f"{diff:,.6f}"
+        return "Balanced" if abs(diff) < 0.000001 else f"{diff:,.6f}"
 
     @output
     @render.ui
@@ -739,31 +1564,28 @@ def register_gl2_outputs(input, output, session):
         debits = sum(line.get('debit', 0) or 0 for line in lines)
         credits = sum(line.get('credit', 0) or 0 for line in lines)
 
-        # Check if balanced
         if abs(debits - credits) > 0.000001:
             return ui.div(
-                ui.HTML('<i class="bi bi-exclamation-triangle text-warning"></i> '),
+                ui.HTML('<i class="bi bi-exclamation-triangle"></i> '),
                 "Entry is not balanced. Debits must equal credits.",
-                class_="text-warning mt-2"
+                class_="text-warning mt-3"
             )
 
-        # Check if any accounts selected
         accounts_selected = [line.get('account') for line in lines if line.get('account')]
         if len(accounts_selected) < 2:
             return ui.div(
-                ui.HTML('<i class="bi bi-info-circle text-info"></i> '),
+                ui.HTML('<i class="bi bi-info-circle"></i> '),
                 "Select at least two accounts.",
-                class_="text-info mt-2"
+                class_="text-info mt-3"
             )
 
-        # All good
         return ui.div(
-            ui.HTML('<i class="bi bi-check-circle text-success"></i> '),
+            ui.HTML('<i class="bi bi-check-circle"></i> '),
             "Entry is valid and ready to post.",
-            class_="text-success mt-2"
+            class_="text-success mt-3"
         )
 
-    # Add line button handler
+    # Add line
     @reactive.effect
     @reactive.event(input.gl2_add_entry_line)
     def _add_entry_line():
@@ -771,7 +1593,7 @@ def register_gl2_outputs(input, output, session):
         current.append({"account": "", "debit": 0.0, "credit": 0.0})
         entry_lines.set(current)
 
-    # Clear form handler
+    # Clear form
     @reactive.effect
     @reactive.event(input.gl2_clear_entry)
     def _clear_entry_form():
@@ -781,11 +1603,10 @@ def register_gl2_outputs(input, output, session):
         ])
         ui.update_text("gl2_new_entry_description", value="")
 
-    # Post entry handler
+    # Post entry
     @reactive.effect
     @reactive.event(input.gl2_post_entry)
     def _post_manual_entry():
-        # Collect entry data from inputs
         lines_data = []
         line_count = len(entry_lines())
 
@@ -813,83 +1634,96 @@ def register_gl2_outputs(input, output, session):
             return
 
         if len(lines_data) < 2:
-            ui.notification_show("Entry must have at least 2 lines with amounts", type="error")
+            ui.notification_show("Entry must have at least 2 lines", type="error")
             return
 
-        # Get entry metadata
+        # Get metadata
         entry_date = input.gl2_new_entry_date()
         description = input.gl2_new_entry_description() or "Manual Journal Entry"
         category = input.gl2_new_entry_category()
 
-        # Create timestamp
         timestamp = datetime.now(timezone.utc)
         if entry_date:
             timestamp = pd.Timestamp(entry_date, tz='UTC')
 
-        # Generate unique tx_hash for manual entry
         tx_hash = f"manual_{hashlib.md5(f'{timestamp}{description}'.encode()).hexdigest()[:16]}"
 
-        # Get COA for account names
         coa = coa_data()
 
-        # Create GL records
+        # Create records using new schema format
         records = []
         for line in lines_data:
-            # Get account name from COA
-            account_name = ""
+            gl_acct_name = ""
             if not coa.empty:
                 match = coa[coa['GL_Acct_Number'].astype(str) == line['account']]
                 if not match.empty:
-                    account_name = match.iloc[0]['GL_Acct_Name']
+                    gl_acct_name = match.iloc[0]['GL_Acct_Name']
 
-            # Create row key
-            row_key = f"{tx_hash}:{line['account']}:{'DEBIT' if line['debit'] > 0 else 'CREDIT'}:{line['debit']}:{line['credit']}"
+            row_key = f"{tx_hash}:{line['account']}:manual:{'DR' if line['debit'] > 0 else 'CR'}"
 
-            record = {
-                'tx_hash': tx_hash,
-                'entry_type': 'DEBIT' if line['debit'] > 0 else 'CREDIT',
-                'account_number': line['account'],
-                'account_name': account_name,
+            records.append({
+                # Core identifiers (1-4)
+                'date': timestamp,
+                'fund_id': '',
+                'limited_partner_ID': None,
+                'wallet_id': '',
+                # Transaction info (5-7)
+                'transaction_type': category or 'manual_entry',
+                'cryptocurrency': 'ETH',
+                'account_name': gl_acct_name.lower().replace(' ', '_').replace('-', '_') if gl_acct_name else '',
+                # GL Account info (8-9)
+                'GL_Acct_Number': line['account'],
+                'GL_Acct_Name': gl_acct_name or f"Account {line['account']}",
+                # Amounts (10-14)
                 'debit_crypto': line['debit'],
                 'credit_crypto': line['credit'],
+                'eth_usd_price': 0.0,
                 'debit_USD': 0.0,
                 'credit_USD': 0.0,
-                'asset': 'ETH',
-                'description': description,
-                'category': category,
-                'platform': 'manual',
-                'timestamp': timestamp,
-                'posted_date': datetime.now(timezone.utc),
-                'row_key': row_key
-            }
-            records.append(record)
+                # Event info (15-17)
+                'event': None,
+                'function': None,
+                'hash': tx_hash,
+                # Loan details (18-31)
+                'loan_id': None,
+                'lender': None,
+                'borrower': None,
+                'from': None,
+                'to': None,
+                'contract_address': None,
+                'collateral_address': None,
+                'token_id': None,
+                'principal_crypto': None,
+                'principal_USD': None,
+                'annual_interest_rate': None,
+                'payoff_amount_crypto': None,
+                'payoff_amount_USD': None,
+                'loan_due_date': None,
+                # End of day price (37)
+                'end_of_day_ETH_USD': None,
+                # Internal deduplication key
+                'row_key': row_key,
+            })
 
-        # Load existing data and append
+        # Save
         try:
             existing_df = load_GL2_file()
             new_df = pd.DataFrame(records)
             combined_df = pd.concat([existing_df, new_df], ignore_index=True)
 
-            # Save
             if save_GL2_file(combined_df):
-                ui.notification_show(f"Posted {len(records)} entries successfully!", type="message")
-
-                # Clear form
+                ui.notification_show(f"Posted {len(records)} entries", type="message")
                 entry_lines.set([
                     {"account": "", "debit": 0.0, "credit": 0.0},
                     {"account": "", "debit": 0.0, "credit": 0.0}
                 ])
                 ui.update_text("gl2_new_entry_description", value="")
-
-                # Refresh data
+                clear_GL2_cache()
                 gl2_data_version.set(gl2_data_version() + 1)
             else:
                 ui.notification_show("Failed to save entry", type="error")
-
         except Exception as e:
             ui.notification_show(f"Error: {str(e)}", type="error")
-            import traceback
-            traceback.print_exc()
 
     @output
     @render.data_frame
@@ -901,69 +1735,158 @@ def register_gl2_outputs(input, output, session):
                 width="100%"
             )
 
-        # Filter to manual entries only
-        manual_df = df[df['platform'] == 'manual'].copy()
-
+        # Filter for manual entries
+        manual_df = df[df['transaction_type'].astype(str).str.contains('manual', case=False, na=False)].copy()
         if manual_df.empty:
             return render.DataGrid(
                 pd.DataFrame({"Message": ["No manual entries yet."]}),
                 width="100%"
             )
 
-        # Get most recent 20 entries
-        if 'timestamp' in manual_df.columns:
-            manual_df = manual_df.sort_values('timestamp', ascending=False).head(20)
+        if 'date' in manual_df.columns:
+            manual_df = manual_df.sort_values('date', ascending=False).head(20)
 
-        # Select display columns
-        display_cols = ['timestamp', 'description', 'account_number', 'debit_crypto', 'credit_crypto']
+        display_cols = ['date', 'GL_Acct_Name', 'GL_Acct_Number', 'debit_crypto', 'credit_crypto']
         display_df = manual_df[[c for c in display_cols if c in manual_df.columns]].copy()
 
-        # Format timestamp
-        if 'timestamp' in display_df.columns:
-            display_df['timestamp'] = pd.to_datetime(display_df['timestamp']).dt.strftime('%Y-%m-%d')
+        if 'date' in display_df.columns:
+            display_df['date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d')
 
-        # Format numbers
         for col in ['debit_crypto', 'credit_crypto']:
             if col in display_df.columns:
                 display_df[col] = display_df[col].apply(
                     lambda x: f"{float(x):,.6f}" if pd.notna(x) and float(x) != 0 else ""
                 )
 
-        display_df.columns = ['Date', 'Description', 'Account', 'Debit', 'Credit']
-
-        return render.DataGrid(
-            display_df,
-            width="100%",
-            height="300px"
-        )
+        col_rename = {'date': 'Date', 'GL_Acct_Name': 'Account', 'GL_Acct_Number': 'Acct #',
+                      'debit_crypto': 'Debit', 'credit_crypto': 'Credit'}
+        display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
+        return render.DataGrid(display_df, width="100%", height="300px")
 
     # =========================================================================
-    # DOWNLOAD HANDLERS
+    # DOWNLOADS
     # =========================================================================
 
-    @render.download(filename="gl2_journal_entries.xlsx")
-    def gl2_download_je():
+    @render.download(filename=lambda: f"gl2_journal_entries_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    async def gl2_download_je():
+        """Export filtered journal entries to Excel."""
         df = filtered_journal_entries()
+        if df.empty:
+            df = pd.DataFrame({"Message": ["No data to export"]})
+
         from io import BytesIO
         buffer = BytesIO()
-        df.to_excel(buffer, index=False)
+
+        # Create Excel writer with formatting
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            # Prepare data for export
+            export_df = df.copy()
+
+            # Format date column if exists
+            if 'date' in export_df.columns:
+                export_df['date'] = pd.to_datetime(export_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            # Write to Excel
+            export_df.to_excel(writer, sheet_name='Journal Entries', index=False)
+
+            # Auto-adjust column widths
+            worksheet = writer.sheets['Journal Entries']
+            for idx, col in enumerate(export_df.columns):
+                max_length = max(
+                    export_df[col].astype(str).map(len).max(),
+                    len(str(col))
+                ) + 2
+                worksheet.column_dimensions[chr(65 + idx) if idx < 26 else f'A{chr(65 + idx - 26)}'].width = min(max_length, 50)
+
         buffer.seek(0)
         return buffer.getvalue()
 
-    @render.download(filename="gl2_account_ledger.xlsx")
-    def gl2_download_ledger():
+    @render.download(filename=lambda: f"gl2_account_ledger_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    async def gl2_download_ledger():
+        """Export account ledger to Excel."""
         df = account_ledger_data()
+        if df.empty:
+            df = pd.DataFrame({"Message": ["No data to export - select an account first"]})
+
         from io import BytesIO
         buffer = BytesIO()
-        df.to_excel(buffer, index=False)
+
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            export_df = df.copy()
+            if 'date' in export_df.columns:
+                export_df['date'] = pd.to_datetime(export_df['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            export_df.to_excel(writer, sheet_name='Account Ledger', index=False)
+
+            worksheet = writer.sheets['Account Ledger']
+            for idx, col in enumerate(export_df.columns):
+                max_length = max(
+                    export_df[col].astype(str).map(len).max(),
+                    len(str(col))
+                ) + 2
+                worksheet.column_dimensions[chr(65 + idx) if idx < 26 else f'A{chr(65 + idx - 26)}'].width = min(max_length, 50)
+
         buffer.seek(0)
         return buffer.getvalue()
 
-    @render.download(filename="gl2_trial_balance.xlsx")
-    def gl2_download_tb():
+    @render.download(filename=lambda: f"gl2_trial_balance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    async def gl2_download_tb():
+        """Export trial balance to Excel."""
         df = trial_balance_data()
+        if df.empty:
+            df = pd.DataFrame({"Message": ["No data to export"]})
+
         from io import BytesIO
         buffer = BytesIO()
-        df.to_excel(buffer, index=False)
+
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            export_df = df.copy()
+            export_df.to_excel(writer, sheet_name='Trial Balance', index=False)
+
+            worksheet = writer.sheets['Trial Balance']
+            for idx, col in enumerate(export_df.columns):
+                max_length = max(
+                    export_df[col].astype(str).map(len).max(),
+                    len(str(col))
+                ) + 2
+                worksheet.column_dimensions[chr(65 + idx) if idx < 26 else f'A{chr(65 + idx - 26)}'].width = min(max_length, 50)
+
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    @render.download(filename=lambda: f"gl2_full_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    async def gl2_download_full():
+        """Export all GL2 data to Excel with multiple sheets."""
+        from io import BytesIO
+        buffer = BytesIO()
+
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            # Sheet 1: All Journal Entries
+            je_df = gl2_data()
+            if not je_df.empty:
+                export_je = je_df.copy()
+                if 'date' in export_je.columns:
+                    export_je['date'] = pd.to_datetime(export_je['date']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                export_je.to_excel(writer, sheet_name='All Journal Entries', index=False)
+
+            # Sheet 2: Trial Balance
+            tb_df = trial_balance_data()
+            if not tb_df.empty:
+                tb_df.to_excel(writer, sheet_name='Trial Balance', index=False)
+
+            # Sheet 3: Summary
+            summary_data = {
+                'Metric': ['Total Entries', 'Unique Accounts', 'Total Debits', 'Total Credits', 'Balance Check'],
+                'Value': [
+                    len(je_df) if not je_df.empty else 0,
+                    je_df['GL_Acct_Number'].nunique() if not je_df.empty and 'GL_Acct_Number' in je_df.columns else 0,
+                    sum(float(x) if pd.notna(x) else 0 for x in je_df.get('debit_crypto', [])) if not je_df.empty else 0,
+                    sum(float(x) if pd.notna(x) else 0 for x in je_df.get('credit_crypto', [])) if not je_df.empty else 0,
+                    'Balanced' if abs(sum(float(x) if pd.notna(x) else 0 for x in je_df.get('debit_crypto', [])) -
+                                     sum(float(x) if pd.notna(x) else 0 for x in je_df.get('credit_crypto', []))) < 0.000001 else 'Not Balanced'
+                ]
+            }
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+
         buffer.seek(0)
         return buffer.getvalue()

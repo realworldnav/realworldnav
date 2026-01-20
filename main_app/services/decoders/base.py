@@ -20,6 +20,13 @@ getcontext().prec = 28
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# CONSTANTS FOR INTEREST CALCULATIONS
+# ============================================================================
+
+WAD = Decimal(10**18)  # Wei per ETH
+SECONDS_PER_YEAR = Decimal(365 * 24 * 3600)  # 31,536,000 seconds
+
 # Assets treated as equivalent for journal entry balance validation
 # WETH and ETH are economically equivalent (1:1 wrap/unwrap)
 ETH_EQUIVALENT_ASSETS = {'ETH', 'WETH'}
@@ -242,47 +249,96 @@ class JournalEntry:
                 return False
         return True
 
-    def to_gl_records(self) -> List[Dict[str, Any]]:
-        """Convert to GL-compatible records for save_GL_file()"""
+    def to_gl_records(self, wallet_to_fund_map: Dict[str, str] = None, coa_map: Dict[str, tuple] = None) -> List[Dict[str, Any]]:
+        """
+        Convert to GL-compatible records matching parquet schema exactly.
+
+        Args:
+            wallet_to_fund_map: Dict mapping wallet_address (lowercase) to fund_id
+            coa_map: Dict mapping account_name to (GL_Acct_Number, GL_Acct_Name)
+
+        Returns:
+            List of dicts matching the parquet schema columns
+        """
         records = []
+
+        # Determine fund_id from wallet mapping if available
+        fund_id = self.fund_id
+        if not fund_id and wallet_to_fund_map and self.wallet_address:
+            fund_id = wallet_to_fund_map.get(self.wallet_address.lower(), '')
+
         for entry in self.entries:
             amount = Decimal(str(entry["amount"]))
-            usd_amount = amount * self.eth_usd_price if entry["asset"] == "ETH" else amount
+            usd_amount = amount * self.eth_usd_price if entry["asset"] in ("ETH", "WETH") else amount
 
             debit_crypto = amount if entry["type"] == "DEBIT" else Decimal(0)
             credit_crypto = amount if entry["type"] == "CREDIT" else Decimal(0)
             debit_usd = float(usd_amount) if entry["type"] == "DEBIT" else 0.0
             credit_usd = float(usd_amount) if entry["type"] == "CREDIT" else 0.0
 
-            # Net = debit - credit
-            net_crypto = debit_crypto - credit_crypto
-            net_usd = debit_usd - credit_usd
+            # Look up GL account number and name from COA
+            account_name = entry.get("account", "")
+            gl_acct_number = None
+            gl_acct_name = account_name
+
+            if coa_map:
+                # Try exact match first
+                if account_name in coa_map:
+                    gl_acct_number, gl_acct_name = coa_map[account_name]
+                else:
+                    # Try lowercase match
+                    account_lower = account_name.lower()
+                    for coa_key, (num, name) in coa_map.items():
+                        if coa_key.lower() == account_lower or name.lower() == account_lower:
+                            gl_acct_number, gl_acct_name = num, name
+                            break
+
+            # Build record matching parquet schema exactly (columns 1-31 + 37, excluding 32-36)
+            # Generate row_key for deduplication
+            row_key = f"{self.tx_hash}:{gl_acct_number or account_name}:{self.category.value if hasattr(self.category, 'value') else self.category}:{'DR' if debit_crypto > 0 else 'CR'}"
 
             records.append({
-                'transaction_id': self.entry_id,
+                # Core identifiers (1-4)
                 'date': self.date,
-                'operating_date': self.date,  # Same as date for new entries
-                'transaction_type': self.category.value,
+                'fund_id': fund_id,
+                'limited_partner_ID': None,
                 'wallet_id': self.wallet_address,
-                'fund_id': self.fund_id,
+                # Transaction info (5-7)
+                'transaction_type': self.category.value if hasattr(self.category, 'value') else str(self.category),
                 'cryptocurrency': entry["asset"],
-                'account_name': entry["account"],
+                'account_name': account_name.lower().replace(' ', '_').replace('-', '_') if account_name else '',
+                # GL Account info (8-9)
+                'GL_Acct_Number': gl_acct_number,
+                'GL_Acct_Name': gl_acct_name,
+                # Amounts (10-14)
                 'debit_crypto': float(debit_crypto),
                 'credit_crypto': float(credit_crypto),
                 'eth_usd_price': float(self.eth_usd_price),
                 'debit_USD': debit_usd,
                 'credit_USD': credit_usd,
-                'net_debit_credit_crypto': float(net_crypto),
-                'net_debit_credit_USD': net_usd,
-                # Loan-specific fields (null for non-loan entries)
-                'principal_crypto': None,
-                'principal_USD': None,
-                'interest_rec_crypto': None,
-                'interest_rec_USD': None,
-                'payoff_amount_crypto': None,
-                'payoff_amount_USD': None,
-                'annual_interest_rate': None,
-                'hash': self.tx_hash
+                # Event info (15-17)
+                'event': entry.get('event', None),
+                'function': entry.get('function', None),
+                'hash': self.tx_hash,
+                # Loan details (18-31)
+                'loan_id': entry.get('loan_id', None),
+                'lender': entry.get('lender', None),
+                'borrower': entry.get('borrower', None),
+                'from': entry.get('from', None),
+                'to': entry.get('to', None),
+                'contract_address': entry.get('contract_address', None),
+                'collateral_address': entry.get('collateral_address', None),
+                'token_id': entry.get('token_id', None),
+                'principal_crypto': entry.get('principal_crypto', None),
+                'principal_USD': entry.get('principal_USD', None),
+                'annual_interest_rate': entry.get('annual_interest_rate', None),
+                'payoff_amount_crypto': entry.get('payoff_amount_crypto', None),
+                'payoff_amount_USD': entry.get('payoff_amount_USD', None),
+                'loan_due_date': entry.get('loan_due_date', None),
+                # End of day price (37)
+                'end_of_day_ETH_USD': float(self.eth_usd_price) if self.eth_usd_price > 0 else None,
+                # Internal deduplication key
+                'row_key': row_key,
             })
         return records
 
@@ -609,3 +665,298 @@ def calculate_gas_fee(receipt: Dict, tx: Dict) -> Decimal:
     # Try effectiveGasPrice first (EIP-1559), fallback to gasPrice
     gas_price = receipt.get('effectiveGasPrice', tx.get('gasPrice', 0))
     return wei_to_eth(gas_used * gas_price)
+
+
+# ============================================================================
+# INTEREST ACCRUAL GENERATION
+# ============================================================================
+
+def compute_continuous_interest(
+    principal: Decimal,
+    rate_bips: int,
+    start_timestamp: int,
+    end_timestamp: int
+) -> Decimal:
+    """
+    Compute total interest using continuous compounding.
+
+    Formula: interest = principal × (e^(rate × time_in_years) - 1)
+
+    Args:
+        principal: Principal amount in ETH
+        rate_bips: Annual interest rate in basis points (e.g., 1500 = 15%)
+        start_timestamp: Loan start Unix timestamp
+        end_timestamp: Calculation end Unix timestamp
+
+    Returns:
+        Total accrued interest in ETH
+    """
+    if end_timestamp <= start_timestamp or principal <= 0 or rate_bips <= 0:
+        return Decimal(0)
+
+    loan_time_seconds = Decimal(end_timestamp - start_timestamp)
+    time_in_years = loan_time_seconds / SECONDS_PER_YEAR
+    rate_decimal = Decimal(rate_bips) / Decimal(10000)
+
+    # Continuous compounding: e^(r * t)
+    exponent = float(rate_decimal * time_in_years)
+    compound_factor = Decimal(str(math.exp(exponent)))
+
+    # Interest = Principal × (compound_factor - 1)
+    interest = principal * (compound_factor - Decimal(1))
+    return interest
+
+
+def generate_daily_interest_accruals(
+    start_timestamp: int,
+    end_timestamp: int,
+    principal: Decimal,
+    rate_bips: int,
+    is_lender: bool,
+    common_metadata: Dict[str, Any],
+    platform: str = "blur",  # blur, weth, usdc - determines account suffix
+) -> List[Dict[str, Any]]:
+    """
+    Generate daily interest accrual journal entries from loan start to end.
+
+    Uses Wei-precise allocation to avoid rounding errors.
+    Accruals are backdated to each day of the loan.
+
+    Args:
+        start_timestamp: Loan start time (Unix timestamp)
+        end_timestamp: Repayment/refinance time (Unix timestamp)
+        principal: Principal amount in ETH (Decimal)
+        rate_bips: Annual rate in basis points (e.g., 1500 = 15%)
+        is_lender: True for income accruals, False for expense accruals
+        common_metadata: Common fields for all entries (tx_hash, platform, fund_id, etc.)
+        platform: Platform suffix for accounts (blur, weth, usdc)
+
+    Returns:
+        List of GL-compatible journal entry dicts matching parquet schema
+
+    Example output for a 3-day loan as lender:
+        Day 1: Dr Interest Receivable 0.001 / Cr Interest Income 0.001
+        Day 2: Dr Interest Receivable 0.001 / Cr Interest Income 0.001
+        Day 3: Dr Interest Receivable 0.001 / Cr Interest Income 0.001
+    """
+    from datetime import datetime, timezone, timedelta, time as dt_time
+
+    if start_timestamp >= end_timestamp or principal <= 0 or rate_bips <= 0:
+        return []
+
+    # Account mappings from COA - matches parquet format exactly
+    # Platform suffix determines which accounts to use
+    platform_lower = platform.lower() if platform else "blur"
+
+    if "blur" in platform_lower:
+        ACCOUNTS = {
+            'interest_receivable': (12500, 'Interest receivable - Cryptocurrency - Blur Pool'),
+            'interest_income': (90500, 'Interest income - Cryptocurrency - Blur Pool'),
+            'interest_expense': (80903, 'Interest expense - Cryptocurrency - Blur Pool'),
+            'interest_payable': (20903, 'Interest payable - Cryptocurrency - Blur Pool'),
+        }
+    elif "weth" in platform_lower:
+        ACCOUNTS = {
+            'interest_receivable': (12510, 'Interest receivable - Cryptocurrency - WETH'),
+            'interest_income': (90510, 'Interest income - Cryptocurrency - WETH'),
+            'interest_expense': (80902, 'Interest expense - Cryptocurrency - WETH'),
+            'interest_payable': (20902, 'Interest payable - Cryptocurrency - WETH'),
+        }
+    elif "usdc" in platform_lower:
+        ACCOUNTS = {
+            'interest_receivable': (12515, 'Interest receivable - Cryptocurrency - USDC'),
+            'interest_income': (90515, 'Interest income - Cryptocurrency - USDC'),
+            'interest_expense': (80900, 'Interest expense - Cryptocurrency - USDC'),
+            'interest_payable': (20900, 'Interest payable - Cryptocurrency - USDC'),
+        }
+    else:
+        # Default to Blur Pool
+        ACCOUNTS = {
+            'interest_receivable': (12500, 'Interest receivable - Cryptocurrency - Blur Pool'),
+            'interest_income': (90500, 'Interest income - Cryptocurrency - Blur Pool'),
+            'interest_expense': (80903, 'Interest expense - Cryptocurrency - Blur Pool'),
+            'interest_payable': (20903, 'Interest payable - Cryptocurrency - Blur Pool'),
+        }
+
+    entries = []
+
+    # Calculate total interest using continuous compounding
+    total_interest = compute_continuous_interest(
+        principal=principal,
+        rate_bips=rate_bips,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp
+    )
+
+    # Convert to Wei for precise allocation
+    total_interest_wei = int(total_interest * WAD)
+
+    if total_interest_wei <= 0:
+        return []
+
+    # Calculate total seconds
+    total_secs = end_timestamp - start_timestamp
+
+    # Generate daily slices with Wei precision
+    start_dt = datetime.fromtimestamp(start_timestamp, tz=timezone.utc)
+    end_dt = datetime.fromtimestamp(end_timestamp, tz=timezone.utc)
+
+    leftover = 0
+    assigned_so_far = 0
+    cursor = start_dt
+    day_count = 0
+
+    while cursor < end_dt:
+        # Calculate next midnight
+        tomorrow = cursor.date() + timedelta(days=1)
+        naive_midnight = datetime.combine(tomorrow, dt_time(0, 0, 0))
+        next_midnight = naive_midnight.replace(tzinfo=timezone.utc)
+
+        # Slice ends at midnight or loan end
+        segment_end = min(next_midnight, end_dt)
+        slice_secs = int((segment_end - cursor).total_seconds())
+
+        # Wei-precise interest allocation
+        numer = (total_interest_wei * slice_secs) + leftover
+        slice_interest_wei = numer // total_secs
+        leftover = numer % total_secs
+        assigned_so_far += slice_interest_wei
+
+        # Label timestamp (end of day at 23:59:59 or loan end)
+        if segment_end == next_midnight:
+            accrual_label = next_midnight - timedelta(seconds=1)
+        else:
+            accrual_label = end_dt
+
+        # Convert from wei to crypto
+        slice_interest = Decimal(slice_interest_wei) / WAD
+
+        if slice_interest > 0:
+            day_count += 1
+
+            # Get USD price if available in metadata
+            eth_usd_price = Decimal(str(common_metadata.get('eth_usd_price', 0)))
+            slice_usd = float(slice_interest * eth_usd_price) if eth_usd_price > 0 else 0.0
+
+            # Generate unique row key including date for deduplication
+            date_str = accrual_label.strftime('%Y-%m-%d') if hasattr(accrual_label, 'strftime') else str(accrual_label)[:10]
+            tx_hash = common_metadata.get('tx_hash', common_metadata.get('hash', ''))
+
+            # Base entry data matching parquet schema (columns 1-31 + 37, excluding 32-36)
+            base_entry = {
+                # Core identifiers (1-4)
+                'date': accrual_label,
+                'fund_id': common_metadata.get('fund_id', ''),
+                'limited_partner_ID': None,
+                'wallet_id': common_metadata.get('wallet_id', ''),
+                # Transaction info (5-7)
+                'transaction_type': 'income_interest_accruals' if is_lender else 'expense_interest_accruals',
+                'cryptocurrency': common_metadata.get('cryptocurrency', 'ETH'),
+                # Event info (15-17)
+                'event': 'InterestAccrual',
+                'function': None,
+                'hash': tx_hash,
+                # Loan details (18-31)
+                'loan_id': common_metadata.get('loan_id'),
+                'lender': common_metadata.get('lender'),
+                'borrower': common_metadata.get('borrower'),
+                'from': common_metadata.get('from'),
+                'to': common_metadata.get('to'),
+                'contract_address': common_metadata.get('contract_address'),
+                'collateral_address': common_metadata.get('collateral_address'),
+                'token_id': common_metadata.get('token_id'),
+                'principal_crypto': common_metadata.get('principal_crypto', 0.0),
+                'principal_USD': common_metadata.get('principal_USD', 0.0),
+                'annual_interest_rate': common_metadata.get('annual_interest_rate', 0.0),
+                'payoff_amount_crypto': None,
+                'payoff_amount_USD': None,
+                'loan_due_date': common_metadata.get('loan_due_date'),
+                # End of day price (37)
+                'end_of_day_ETH_USD': float(eth_usd_price) if eth_usd_price > 0 else None,
+                'eth_usd_price': float(eth_usd_price),
+            }
+
+            if is_lender:
+                recv_acct_num, recv_acct_name = ACCOUNTS['interest_receivable']
+                income_acct_num, income_acct_name = ACCOUNTS['interest_income']
+
+                # Dr Interest Receivable
+                entries.append({
+                    **base_entry,
+                    'account_name': recv_acct_name.lower().replace(' ', '_').replace('-', '_'),
+                    'GL_Acct_Number': recv_acct_num,
+                    'GL_Acct_Name': recv_acct_name,
+                    'debit_crypto': float(slice_interest),
+                    'credit_crypto': 0.0,
+                    'debit_USD': slice_usd,
+                    'credit_USD': 0.0,
+                    'row_key': f"{tx_hash}:{recv_acct_num}:income_interest_accruals:{date_str}:DR",
+                })
+
+                # Cr Interest Income
+                entries.append({
+                    **base_entry,
+                    'account_name': income_acct_name.lower().replace(' ', '_').replace('-', '_'),
+                    'GL_Acct_Number': income_acct_num,
+                    'GL_Acct_Name': income_acct_name,
+                    'debit_crypto': 0.0,
+                    'credit_crypto': float(slice_interest),
+                    'debit_USD': 0.0,
+                    'credit_USD': slice_usd,
+                    'row_key': f"{tx_hash}:{income_acct_num}:income_interest_accruals:{date_str}:CR",
+                })
+            else:
+                expense_acct_num, expense_acct_name = ACCOUNTS['interest_expense']
+                payable_acct_num, payable_acct_name = ACCOUNTS['interest_payable']
+
+                # Dr Interest Expense
+                entries.append({
+                    **base_entry,
+                    'account_name': expense_acct_name.lower().replace(' ', '_').replace('-', '_'),
+                    'GL_Acct_Number': expense_acct_num,
+                    'GL_Acct_Name': expense_acct_name,
+                    'debit_crypto': float(slice_interest),
+                    'credit_crypto': 0.0,
+                    'debit_USD': slice_usd,
+                    'credit_USD': 0.0,
+                    'row_key': f"{tx_hash}:{expense_acct_num}:expense_interest_accruals:{date_str}:DR",
+                })
+
+                # Cr Interest Payable
+                entries.append({
+                    **base_entry,
+                    'account_name': payable_acct_name.lower().replace(' ', '_').replace('-', '_'),
+                    'GL_Acct_Number': payable_acct_num,
+                    'GL_Acct_Name': payable_acct_name,
+                    'debit_crypto': 0.0,
+                    'credit_crypto': float(slice_interest),
+                    'debit_USD': 0.0,
+                    'credit_USD': slice_usd,
+                    'row_key': f"{tx_hash}:{payable_acct_num}:expense_interest_accruals:{date_str}:CR",
+                })
+
+        cursor = segment_end
+
+    # Final adjustment for any remaining wei
+    if assigned_so_far < total_interest_wei and entries:
+        shortfall_wei = total_interest_wei - assigned_so_far
+        shortfall = Decimal(shortfall_wei) / WAD
+        shortfall_usd = float(shortfall * Decimal(str(common_metadata.get('eth_usd_price', 0))))
+
+        # Add shortfall to last entries (debit and credit pair)
+        if len(entries) >= 2:
+            # Last two entries are debit then credit
+            last_debit = entries[-2]
+            last_credit = entries[-1]
+
+            if last_debit.get('debit_crypto', 0) > 0:
+                last_debit['debit_crypto'] = float(Decimal(str(last_debit['debit_crypto'])) + shortfall)
+                last_debit['debit_USD'] = float(Decimal(str(last_debit.get('debit_USD', 0))) + Decimal(str(shortfall_usd)))
+            if last_credit.get('credit_crypto', 0) > 0:
+                last_credit['credit_crypto'] = float(Decimal(str(last_credit['credit_crypto'])) + shortfall)
+                last_credit['credit_USD'] = float(Decimal(str(last_credit.get('credit_USD', 0))) + Decimal(str(shortfall_usd)))
+
+    logger.info(f"Generated {len(entries)} interest accrual entries for {day_count} days "
+                f"(total interest: {total_interest:.8f} ETH)")
+
+    return entries

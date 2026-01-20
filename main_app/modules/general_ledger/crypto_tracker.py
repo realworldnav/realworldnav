@@ -484,9 +484,9 @@ def register_crypto_tracker_outputs(output, input, session):
         current_reactive = staged_transactions_reactive_trigger.get()
         
         if global_trigger != current_reactive:
-            print(f"🔗 REACTIVE SYNC: Global trigger {global_trigger} differs from reactive {current_reactive} - syncing...")
+            print(f" REACTIVE SYNC: Global trigger {global_trigger} differs from reactive {current_reactive} - syncing...")
             staged_transactions_reactive_trigger.set(global_trigger)
-            print(f"✅ REACTIVE SYNC: Updated reactive trigger to {global_trigger}")
+            print(f"[OK] REACTIVE SYNC: Updated reactive trigger to {global_trigger}")
         
         return global_trigger
     
@@ -498,7 +498,7 @@ def register_crypto_tracker_outputs(output, input, session):
         try:
             _sync_global_staged_trigger()
         except Exception as e:
-            print(f"🔗 Periodic sync error: {e}")
+            print(f" Periodic sync error: {e}")
     
     # Overview Tab Outputs
     @output
@@ -1319,63 +1319,63 @@ def register_crypto_tracker_outputs(output, input, session):
             
             # Create reactive dependency on the trigger to ensure updates
             trigger_value = staged_transactions_reactive_trigger.get()
-            print(f"🔄 REACTIVE TABLE: transactions_ready_table triggered with reactive value: {trigger_value}")
+            print(f"[SYNC] REACTIVE TABLE: transactions_ready_table triggered with reactive value: {trigger_value}")
             
-            print(f"🔍 REACTIVE TABLE: Attempting to retrieve staged transactions...")
+            print(f"[DEBUG] REACTIVE TABLE: Attempting to retrieve staged transactions...")
             
             # Add more detailed debugging
             try:
                 staged_df = get_staged_transactions_global()
-                print(f"📊 Retrieved staged transactions: {len(staged_df)} rows")
-                print(f"🔍 DEBUG: Staged DataFrame shape: {staged_df.shape}")
-                print(f"🔍 DEBUG: Staged DataFrame empty check: {staged_df.empty}")
-                print(f"🔍 DEBUG: Staged DataFrame type: {type(staged_df)}")
+                print(f"[DATA] Retrieved staged transactions: {len(staged_df)} rows")
+                print(f"[DEBUG] DEBUG: Staged DataFrame shape: {staged_df.shape}")
+                print(f"[DEBUG] DEBUG: Staged DataFrame empty check: {staged_df.empty}")
+                print(f"[DEBUG] DEBUG: Staged DataFrame type: {type(staged_df)}")
                 
                 # Deep debugging of the DataFrame
                 if hasattr(staged_df, 'index'):
-                    print(f"🔍 DEBUG: DataFrame index: {staged_df.index}")
+                    print(f"[DEBUG] DEBUG: DataFrame index: {staged_df.index}")
                 if hasattr(staged_df, 'columns'):
-                    print(f"🔍 DEBUG: DataFrame columns: {list(staged_df.columns)}")
+                    print(f"[DEBUG] DEBUG: DataFrame columns: {list(staged_df.columns)}")
                 
             except Exception as get_error:
-                print(f"❌ ERROR getting staged transactions: {get_error}")
+                print(f"[ERROR] ERROR getting staged transactions: {get_error}")
                 import traceback
                 traceback.print_exc()
                 staged_df = pd.DataFrame()  # Fallback to empty
             
             if not staged_df.empty:
-                print(f"📋 Staged transaction columns: {list(staged_df.columns)}")
-                print(f"📋 Column data types: {staged_df.dtypes.to_dict()}")
-                print(f"📋 Sample staged transaction: {staged_df.iloc[0].to_dict() if len(staged_df) > 0 else 'None'}")
+                print(f"[LIST] Staged transaction columns: {list(staged_df.columns)}")
+                print(f"[LIST] Column data types: {staged_df.dtypes.to_dict()}")
+                print(f"[LIST] Sample staged transaction: {staged_df.iloc[0].to_dict() if len(staged_df) > 0 else 'None'}")
                 
                 # Check for Fund/fund_id column specifically
                 fund_columns = [col for col in staged_df.columns if 'fund' in col.lower()]
-                print(f"📋 Fund-related columns found: {fund_columns}")
+                print(f"[LIST] Fund-related columns found: {fund_columns}")
                 
                 # Check data quality
                 null_counts = staged_df.isnull().sum()
-                print(f"📋 Null value counts: {null_counts[null_counts > 0].to_dict()}")
+                print(f"[LIST] Null value counts: {null_counts[null_counts > 0].to_dict()}")
             else:
-                print(f"🔍 DEBUG: No staged transactions found - investigating...")
+                print(f"[DEBUG] DEBUG: No staged transactions found - investigating...")
                 # Try to get some debug info about the global state
                 try:
                     from .crypto_token_fetch import _global_staged_transactions
-                    print(f"🔍 DEBUG: Direct global access - shape: {_global_staged_transactions.shape}")
-                    print(f"🔍 DEBUG: Direct global access - empty: {_global_staged_transactions.empty}")
-                    print(f"🔍 DEBUG: Direct global access - type: {type(_global_staged_transactions)}")
-                    print(f"🔍 DEBUG: Direct global access - memory id: {id(_global_staged_transactions)}")
+                    print(f"[DEBUG] DEBUG: Direct global access - shape: {_global_staged_transactions.shape}")
+                    print(f"[DEBUG] DEBUG: Direct global access - empty: {_global_staged_transactions.empty}")
+                    print(f"[DEBUG] DEBUG: Direct global access - type: {type(_global_staged_transactions)}")
+                    print(f"[DEBUG] DEBUG: Direct global access - memory id: {id(_global_staged_transactions)}")
                 except Exception as debug_e:
-                    print(f"🔍 DEBUG: Could not access global state directly: {debug_e}")
+                    print(f"[DEBUG] DEBUG: Could not access global state directly: {debug_e}")
                     
                 # Check if the function calls are working
                 try:
-                    print(f"🔍 DEBUG: Testing function import...")
+                    print(f"[DEBUG] DEBUG: Testing function import...")
                     from .crypto_token_fetch import get_staged_transactions_global as test_func
-                    print(f"🔍 DEBUG: Function imported successfully: {test_func}")
+                    print(f"[DEBUG] DEBUG: Function imported successfully: {test_func}")
                     test_result = test_func()
-                    print(f"🔍 DEBUG: Test function call result shape: {test_result.shape}")
+                    print(f"[DEBUG] DEBUG: Test function call result shape: {test_result.shape}")
                 except Exception as func_error:
-                    print(f"❌ ERROR testing function: {func_error}")
+                    print(f"[ERROR] ERROR testing function: {func_error}")
                     import traceback
                     traceback.print_exc()
             
@@ -1393,16 +1393,16 @@ def register_crypto_tracker_outputs(output, input, session):
                     'USD Value': ['$0.00'],
                     'Hash': ['-']
                 })
-                print("📋 Displaying empty state for transactions ready table")
+                print("[LIST] Displaying empty state for transactions ready table")
                 return render.DataGrid(placeholder_df, selection_mode="row", height="300px")
             
             # Format staged transactions for display
             display_data = []
-            print(f"🔧 Processing {len(staged_df)} staged transactions for display...")
+            print(f"[FIX] Processing {len(staged_df)} staged transactions for display...")
             
             for idx, row in staged_df.iterrows():
                 try:
-                    print(f"🔧 Processing transaction {idx}: {row.to_dict()}")
+                    print(f"[FIX] Processing transaction {idx}: {row.to_dict()}")
                     
                     # Handle different possible column names from crypto_token_fetch
                     date_value = row.get('date', row.get('timestamp', ''))
@@ -1464,10 +1464,10 @@ def register_crypto_tracker_outputs(output, input, session):
                         'Hash': hash_display
                     }
                     display_data.append(display_row)
-                    print(f"✅ Successfully processed transaction {idx}")
+                    print(f"[OK] Successfully processed transaction {idx}")
                     
                 except Exception as row_error:
-                    print(f"❌ Error processing transaction {idx}: {row_error}")
+                    print(f"[ERROR] Error processing transaction {idx}: {row_error}")
                     logger.error(f"Error processing transaction row {idx}: {row_error}")
                     # Add placeholder row for failed transactions
                     display_data.append({
@@ -1484,7 +1484,7 @@ def register_crypto_tracker_outputs(output, input, session):
                     })
             
             if not display_data:
-                print("⚠️ No valid transactions could be processed for display")
+                print("[WARN] No valid transactions could be processed for display")
                 # Return empty state if all transactions failed to process
                 placeholder_df = pd.DataFrame({
                     'Status': ['No valid transactions'],
@@ -1501,8 +1501,8 @@ def register_crypto_tracker_outputs(output, input, session):
                 return render.DataGrid(placeholder_df, selection_mode="row", height="400px")
             
             display_df = pd.DataFrame(display_data)
-            print(f"📋 Displaying {len(display_df)} formatted transactions in ready table")
-            print(f"📋 Final display columns: {list(display_df.columns)}")
+            print(f"[LIST] Displaying {len(display_df)} formatted transactions in ready table")
+            print(f"[LIST] Final display columns: {list(display_df.columns)}")
             
             return render.DataGrid(
                 display_df,
@@ -1549,7 +1549,7 @@ def register_crypto_tracker_outputs(output, input, session):
             else:
                 current_time = datetime.now().strftime("%H:%M:%S")
                 return ui.div(
-                    ui.HTML(f'<small class="text-success">✓ {len(staged_df)} transactions ready for FIFO processing (Last updated: {current_time})</small>'),
+                    ui.HTML(f'<small class="text-success"> {len(staged_df)} transactions ready for FIFO processing (Last updated: {current_time})</small>'),
                     class_="mb-2"
                 )
         except Exception as e:
@@ -1569,7 +1569,7 @@ def register_crypto_tracker_outputs(output, input, session):
             # This will cause the transactions_ready_table to re-render
             global_trigger = get_staged_transactions_trigger_global()
             staged_transactions_reactive_trigger.set(global_trigger)
-            print(f"🔄 Manual refresh triggered - synced reactive trigger to global value: {global_trigger}")
+            print(f"[SYNC] Manual refresh triggered - synced reactive trigger to global value: {global_trigger}")
             
             # Note: In a more robust implementation, we might want to:
             # 1. Clear and reload from S3 storage
@@ -1795,9 +1795,9 @@ def register_crypto_tracker_outputs(output, input, session):
             )
         
         total_checks = len(verification_df)
-        matches = len(verification_df[verification_df['status'].str.contains('✅')])
-        mismatches = len(verification_df[verification_df['status'].str.contains('❌')])
-        minor_diffs = len(verification_df[verification_df['status'].str.contains('⚠️')])
+        matches = len(verification_df[verification_df['status'].str.contains('[OK]')])
+        mismatches = len(verification_df[verification_df['status'].str.contains('[ERROR]')])
+        minor_diffs = len(verification_df[verification_df['status'].str.contains('[WARN]')])
         
         if matches == total_checks:
             status_color = "success"
@@ -1920,28 +1920,28 @@ def register_crypto_tracker_outputs(output, input, session):
             from .crypto_token_fetch import get_staged_transactions_global, clear_staged_transactions_global
             transactions_df = get_staged_transactions_global()
             
-            print(f"🔍 FIFO CALC DEBUG: Retrieved {len(transactions_df)} staged transactions")
-            print(f"🔍 FIFO CALC DEBUG: DataFrame shape: {transactions_df.shape}")
-            print(f"🔍 FIFO CALC DEBUG: DataFrame empty: {transactions_df.empty}")
+            print(f"[DEBUG] FIFO CALC DEBUG: Retrieved {len(transactions_df)} staged transactions")
+            print(f"[DEBUG] FIFO CALC DEBUG: DataFrame shape: {transactions_df.shape}")
+            print(f"[DEBUG] FIFO CALC DEBUG: DataFrame empty: {transactions_df.empty}")
             
             if transactions_df.empty:
                 logger.warning("No staged transactions available for FIFO calculation. Please fetch and stage transactions first.")
-                print(f"❌ FIFO CALC DEBUG: No staged transactions found - cannot proceed")
+                print(f"[ERROR] FIFO CALC DEBUG: No staged transactions found - cannot proceed")
                 return
                 
-            print(f"✅ FIFO CALC DEBUG: Found staged transactions, proceeding with filters...")
+            print(f"[OK] FIFO CALC DEBUG: Found staged transactions, proceeding with filters...")
             
             # Apply fund filter
             fund_filter = input.fifo_fund_filter() if hasattr(input, 'fifo_fund_filter') else "all"
-            print(f"🔍 FIFO CALC DEBUG: Fund filter = '{fund_filter}'")
+            print(f"[DEBUG] FIFO CALC DEBUG: Fund filter = '{fund_filter}'")
             if fund_filter and fund_filter != "all":
                 fund_columns = [col for col in transactions_df.columns if 'fund' in col.lower()]
-                print(f"🔍 FIFO CALC DEBUG: Fund columns found: {fund_columns}")
+                print(f"[DEBUG] FIFO CALC DEBUG: Fund columns found: {fund_columns}")
                 if fund_columns:
                     fund_col = fund_columns[0]
                     before_count = len(transactions_df)
                     transactions_df = transactions_df[transactions_df[fund_col] == fund_filter]
-                    print(f"🔍 FIFO CALC DEBUG: Fund filter '{fund_filter}' reduced from {before_count} to {len(transactions_df)} transactions")
+                    print(f"[DEBUG] FIFO CALC DEBUG: Fund filter '{fund_filter}' reduced from {before_count} to {len(transactions_df)} transactions")
                     logger.info(f"Filtered to fund '{fund_filter}': {len(transactions_df)} transactions")
             
             # Apply wallet filter
@@ -1956,7 +1956,7 @@ def register_crypto_tracker_outputs(output, input, session):
                     transactions_df = transactions_df[
                         transactions_df[wallet_col].astype(str).str.lower() == wallet_filter.lower()
                     ]
-                    print(f"🔍 FIFO CALC DEBUG: Wallet filter '{wallet_filter}' reduced from {before_count} to {len(transactions_df)} transactions")
+                    print(f"[DEBUG] FIFO CALC DEBUG: Wallet filter '{wallet_filter}' reduced from {before_count} to {len(transactions_df)} transactions")
                     logger.info(f"Filtered to wallet '{wallet_filter}': {len(transactions_df)} transactions")
             
             # Filter by date range
@@ -1998,21 +1998,21 @@ def register_crypto_tracker_outputs(output, input, session):
             
             # Convert to FIFO format
             logger.info(f"Converting {len(transactions_df)} transactions to FIFO format")
-            print(f"🔄 Input transaction columns: {list(transactions_df.columns)}")
-            print(f"🔄 Sample input row: {transactions_df.iloc[0].to_dict() if len(transactions_df) > 0 else 'None'}")
+            print(f"[SYNC] Input transaction columns: {list(transactions_df.columns)}")
+            print(f"[SYNC] Sample input row: {transactions_df.iloc[0].to_dict() if len(transactions_df) > 0 else 'None'}")
             
             fifo_input_df = convert_crypto_fetch_to_fifo_format(transactions_df)
             logger.info(f"FIFO input format: {len(fifo_input_df)} rows, columns: {list(fifo_input_df.columns)}")
-            print(f"🔄 FIFO input columns: {list(fifo_input_df.columns)}")
-            print(f"🔄 Sample FIFO input row: {fifo_input_df.iloc[0].to_dict() if len(fifo_input_df) > 0 else 'None'}")
+            print(f"[SYNC] FIFO input columns: {list(fifo_input_df.columns)}")
+            print(f"[SYNC] Sample FIFO input row: {fifo_input_df.iloc[0].to_dict() if len(fifo_input_df) > 0 else 'None'}")
             
             # Process through FIFO with new ETH-based approach
             logger.info("Processing transactions through FIFO with ETH-based cost basis...")
             fifo_df = build_fifo_ledger(fifo_input_df)
             logger.info(f"FIFO processing complete: {len(fifo_df)} result rows")
             logger.info(f"FIFO output columns: {list(fifo_df.columns)}")
-            print(f"✅ FIFO output columns: {list(fifo_df.columns)}")
-            print(f"✅ Sample FIFO output row: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
+            print(f"[OK] FIFO output columns: {list(fifo_df.columns)}")
+            print(f"[OK] Sample FIFO output row: {fifo_df.iloc[0].to_dict() if len(fifo_df) > 0 else 'None'}")
             fifo_results.set(fifo_df)
             fifo_data_source.set("calculated")  # Track that data was freshly calculated
             
@@ -2054,7 +2054,7 @@ def register_crypto_tracker_outputs(output, input, session):
             logger.error(f"Error in FIFO calculation: {e}")
             import traceback
             traceback.print_exc()
-            print(f"❌ FIFO calculation failed: {str(e)}")
+            print(f"[ERROR] FIFO calculation failed: {str(e)}")
             # Set empty results on error
             fifo_results.set(pd.DataFrame())
             fifo_positions.set(pd.DataFrame())
@@ -2625,7 +2625,7 @@ def register_crypto_tracker_outputs(output, input, session):
                 ui.HTML('''
                 <div class="row">
                     <div class="col-md-6">
-                        <h6 class="text-primary mb-3">📋 Processing Rules</h6>
+                        <h6 class="text-primary mb-3">[LIST] Processing Rules</h6>
                         
                         <div class="mb-3">
                             <strong class="text-success">Rule 0: Wallet Filtering</strong>
@@ -2653,7 +2653,7 @@ def register_crypto_tracker_outputs(output, input, session):
                     </div>
                     
                     <div class="col-md-6">
-                        <h6 class="text-primary mb-3">🛡️ Security & Processing</h6>
+                        <h6 class="text-primary mb-3"> Security & Processing</h6>
                         
                         <div class="mb-3">
                             <strong class="text-danger">Rule 4: Phishing Filtering</strong>
@@ -2854,7 +2854,7 @@ def register_crypto_tracker_outputs(output, input, session):
                 if user_selection in choices:
                     current_selection = user_selection
             
-            print(f"🔄 Updating wallet filter for fund '{selected_fund}': {len(choices)} wallet options")
+            print(f"[SYNC] Updating wallet filter for fund '{selected_fund}': {len(choices)} wallet options")
             
             return ui.input_select(
                 "fifo_wallet_filter",

@@ -174,7 +174,10 @@ class GenericDecoder(BaseDecoder):
         try:
             timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
             gas_fee = calculate_gas_fee(receipt, tx)
-            tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+            tx_hash = tx.get('hash', b'')
+            if isinstance(tx_hash, bytes):
+                tx_hash = tx_hash.hex()
+            tx_hash = tx_hash if tx_hash.startswith('0x') else f'0x{tx_hash}'
             to_address = (tx.get('to') or '').lower()
 
             # Get input data
@@ -248,10 +251,11 @@ class GenericDecoder(BaseDecoder):
 
         except Exception as e:
             logger.error(f"Error in generic decode: {e}")
-            return self._create_error_result(
-                tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', '')),
-                str(e)
-            )
+            error_hash = tx.get('hash', b'')
+            if isinstance(error_hash, bytes):
+                error_hash = error_hash.hex()
+            error_hash = error_hash if error_hash.startswith('0x') else f'0x{error_hash}'
+            return self._create_error_result(error_hash, str(e))
 
     def _decode_weth(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal,
                      timestamp: datetime, gas_fee: Decimal, tx_hash: str, input_data: str) -> DecodedTransaction:
@@ -656,59 +660,110 @@ class GenericDecoder(BaseDecoder):
 
         wallet_roles = {}
 
-        # Check both tx-level and event-level addresses as fund wallets
-        # This is crucial for Safe transactions where the Safe is the actual token sender
+        # Check tx-level addresses
         is_from_fund = self.is_fund_wallet(from_address)
         is_to_fund = self.is_fund_wallet(to_address)
-
-        # Also check event-level from/to addresses
-        event_from_fund = None
-        event_to_fund = None
-        for evt in events:
-            if evt.name == "Transfer":
-                evt_from = evt.args.get('from', '').lower()
-                evt_to = evt.args.get('to', '').lower()
-                if self.is_fund_wallet(evt_from):
-                    event_from_fund = evt_from
-                    wallet_roles[evt_from] = "sender"
-                if self.is_fund_wallet(evt_to):
-                    event_to_fund = evt_to
-                    wallet_roles[evt_to] = "recipient"
 
         if is_from_fund:
             wallet_roles[from_address] = "sender"
         if is_to_fund:
             wallet_roles[to_address] = "recipient"
 
-        # Use event-level addresses if tx-level aren't fund wallets
-        actual_from_fund = event_from_fund or (from_address if is_from_fund else None)
-        actual_to_fund = event_to_fund or (to_address if is_to_fund else None)
+        # Track ALL fund wallet transfers per token (handle multiple transfers in one tx)
+        # Key: (token_address, token_symbol), Value: {"in": amount, "out": amount, "wallet": address}
+        fund_flows = {}
 
-        # Create journal entry
-        if value > 0 and (actual_from_fund or actual_to_fund):
-            entry = JournalEntry(
-                entry_id=f"erc20_{tx_hash[:8]}",
-                date=timestamp,
-                description=f"{token_symbol} transfer: {value:.2f}",
-                tx_hash=tx_hash,
-                category=TransactionCategory.ERC20_TRANSFER,
-                platform=Platform.GENERIC,
-                wallet_address=actual_from_fund or actual_to_fund,
-                wallet_role="sender" if actual_from_fund else "recipient",
-                eth_usd_price=eth_price,
-                posting_status=PostingStatus.AUTO_POST
-            )
+        for evt in events:
+            if evt.name == "Transfer":
+                evt_from = evt.args.get('from', '').lower()
+                evt_to = evt.args.get('to', '').lower()
+                evt_value = Decimal(evt.args.get('value', '0'))
+                evt_token_addr = evt.contract_address.lower() if evt.contract_address else ''
 
-            token_account = self.ACCOUNTS.get(f"{token_symbol.lower()}_wallet", f"100.40 - {token_symbol} Wallet")
+                # Determine token info
+                if evt_token_addr == USDC_ADDRESS:
+                    evt_symbol = "USDC"
+                    evt_decimals = 6
+                elif evt_token_addr == USDT_ADDRESS:
+                    evt_symbol = "USDT"
+                    evt_decimals = 6
+                elif evt_token_addr == WETH_ADDRESS:
+                    evt_symbol = "WETH"
+                    evt_decimals = 18
+                else:
+                    evt_symbol = "TOKEN"
+                    evt_decimals = 18
 
-            if actual_from_fund:
-                entry.add_debit("200.10 - Accounts Receivable", value, token_symbol)
-                entry.add_credit(token_account, value, token_symbol)
-            else:
-                entry.add_debit(token_account, value, token_symbol)
-                entry.add_credit("300.10 - Revenue", value, token_symbol)
+                evt_amount = evt_value / Decimal(10**evt_decimals)
+                flow_key = (evt_token_addr, evt_symbol)
 
-            journal_entries.append(entry)
+                if flow_key not in fund_flows:
+                    fund_flows[flow_key] = {"in": Decimal(0), "out": Decimal(0), "wallet": None}
+
+                # Fund wallet received tokens
+                if self.is_fund_wallet(evt_to):
+                    fund_flows[flow_key]["in"] += evt_amount
+                    fund_flows[flow_key]["wallet"] = evt_to
+                    wallet_roles[evt_to] = "recipient"
+
+                # Fund wallet sent tokens
+                if self.is_fund_wallet(evt_from):
+                    fund_flows[flow_key]["out"] += evt_amount
+                    fund_flows[flow_key]["wallet"] = evt_from
+                    wallet_roles[evt_from] = "sender"
+
+        # Create journal entries for net flows
+        for (token_addr, token_sym), flow in fund_flows.items():
+            net_in = flow["in"]
+            net_out = flow["out"]
+            fund_wallet = flow["wallet"]
+
+            if fund_wallet is None:
+                continue
+
+            token_account = self.ACCOUNTS.get(f"{token_sym.lower()}_wallet", f"100.40 - {token_sym} Wallet")
+
+            # Net inflow (received more than sent)
+            if net_in > net_out:
+                net_amount = net_in - net_out
+                entry = JournalEntry(
+                    entry_id=f"erc20_in_{tx_hash[:8]}_{token_sym}",
+                    date=timestamp,
+                    description=f"{token_sym} received: {net_amount:.6f}",
+                    tx_hash=tx_hash,
+                    category=TransactionCategory.ERC20_TRANSFER,
+                    platform=Platform.GENERIC,
+                    wallet_address=fund_wallet,
+                    wallet_role="recipient",
+                    eth_usd_price=eth_price,
+                    posting_status=PostingStatus.AUTO_POST
+                )
+                entry.add_debit(token_account, net_amount, token_sym)
+                entry.add_credit("400.10 - Other Income", net_amount, token_sym)
+                journal_entries.append(entry)
+                value = net_amount
+                token_symbol = token_sym
+
+            # Net outflow (sent more than received)
+            elif net_out > net_in:
+                net_amount = net_out - net_in
+                entry = JournalEntry(
+                    entry_id=f"erc20_out_{tx_hash[:8]}_{token_sym}",
+                    date=timestamp,
+                    description=f"{token_sym} sent: {net_amount:.6f}",
+                    tx_hash=tx_hash,
+                    category=TransactionCategory.ERC20_TRANSFER,
+                    platform=Platform.GENERIC,
+                    wallet_address=fund_wallet,
+                    wallet_role="sender",
+                    eth_usd_price=eth_price,
+                    posting_status=PostingStatus.AUTO_POST
+                )
+                entry.add_debit("600.30 - Other Expense", net_amount, token_sym)
+                entry.add_credit(token_account, net_amount, token_sym)
+                journal_entries.append(entry)
+                value = net_amount
+                token_symbol = token_sym
 
         # Gas entry
         if gas_fee > 0 and is_from_fund:

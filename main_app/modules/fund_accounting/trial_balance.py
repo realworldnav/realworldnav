@@ -475,7 +475,7 @@ def register_outputs(output, input, selected_fund):
             df['day'] = df['date'].dt.normalize()
             
             # Check for specific accounts before pivot (like GP incentive)
-            print(f"\n🔍 CHECK BEFORE PIVOT:")
+            print(f"\n[DEBUG] CHECK BEFORE PIVOT:")
             incentive_before = df[df['account_name'].str.contains('Incentive', case=False, na=False)]
             if not incentive_before.empty:
                 print(f"Incentive records before pivot: {len(incentive_before)}")
@@ -515,7 +515,7 @@ def register_outputs(output, input, selected_fund):
             min_txn_day = df['day'].min()
             max_txn_day = df['day'].max()
             
-            print(f"\n📅 Date range: {min_txn_day} to {max_txn_day}")
+            print(f"\n Date range: {min_txn_day} to {max_txn_day}")
             
             # "floor" min_txn_day to the 1st day of that same month (keep UTC timezone)
             month_start = min_txn_day.replace(day=1)
@@ -523,7 +523,7 @@ def register_outputs(output, input, selected_fund):
             # "ceiling" max_txn_day to the last day of that same month
             month_end = max_txn_day.replace(day=1) + MonthEnd(0)
             
-            print(f"📅 Extended range: {month_start} to {month_end}")
+            print(f" Extended range: {month_start} to {month_end}")
             
             # Build a DatetimeIndex for every day between month_start and month_end (UTC)
             all_days = pd.date_range(start=month_start, end=month_end, freq='D', tz='UTC')
@@ -621,7 +621,7 @@ def register_outputs(output, input, selected_fund):
             ]
             
             if not final_check.empty:
-                print(f"✅ Incentive accounts successfully included in trial balance!")
+                print(f"[OK] Incentive accounts successfully included in trial balance!")
                 print("Incentive accounts:")
                 print(final_check[['GL_Acct_Number', 'account_name']])
             

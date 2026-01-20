@@ -2,8 +2,90 @@ from shiny import ui
 from datetime import datetime
 from .decoded_transactions_ui import decoded_transactions_ui
 
-def home_dashboard_ui():
-    """Home Dashboard with blockchain transaction monitoring"""
+
+def quick_dashboard_ui():
+    """Quick loading dashboard - no blockchain dependencies"""
+    return ui.page_fluid(
+        ui.h2("RealWorldNAV Dashboard"),
+        ui.p("Fund accounting and blockchain transaction management", class_="text-muted mb-3"),
+
+        # Quick Stats Row - uses output_ui for lazy loading
+        ui.layout_columns(
+            ui.value_box(
+                "Fund Status",
+                ui.output_ui("dashboard_fund_status"),
+                showcase=ui.HTML('<i class="bi bi-graph-up" style="font-size: 2rem;"></i>'),
+                theme="primary"
+            ),
+            ui.value_box(
+                "GL Entries",
+                ui.output_ui("dashboard_gl_count"),
+                showcase=ui.HTML('<i class="bi bi-journal-text" style="font-size: 2rem;"></i>'),
+                theme="success"
+            ),
+            ui.value_box(
+                "Pending Review",
+                ui.output_ui("dashboard_pending_count"),
+                showcase=ui.HTML('<i class="bi bi-hourglass-split" style="font-size: 2rem;"></i>'),
+                theme="warning"
+            ),
+            col_widths=[4, 4, 4]
+        ),
+
+        # Quick Actions
+        ui.card(
+            ui.card_header("Quick Actions"),
+            ui.div(
+                ui.layout_columns(
+                    ui.div(
+                        ui.input_action_button(
+                            "go_to_listener",
+                            ui.HTML('<i class="bi bi-broadcast me-2"></i>Blockchain Listener'),
+                            class_="btn btn-outline-primary w-100 mb-2"
+                        ),
+                        ui.p("Monitor live blockchain transactions", class_="text-muted small")
+                    ),
+                    ui.div(
+                        ui.input_action_button(
+                            "go_to_decoded",
+                            ui.HTML('<i class="bi bi-code-square me-2"></i>Decoded Transactions'),
+                            class_="btn btn-outline-success w-100 mb-2"
+                        ),
+                        ui.p("Review and post decoded transactions to GL", class_="text-muted small")
+                    ),
+                    ui.div(
+                        ui.input_action_button(
+                            "go_to_gl2",
+                            ui.HTML('<i class="bi bi-book me-2"></i>General Ledger'),
+                            class_="btn btn-outline-info w-100 mb-2"
+                        ),
+                        ui.p("View journal entries and trial balance", class_="text-muted small")
+                    ),
+                    col_widths=[4, 4, 4]
+                ),
+                class_="p-3"
+            )
+        ),
+
+        # Recent Activity - lightweight
+        ui.card(
+            ui.card_header("Recent Activity"),
+            ui.output_ui("dashboard_recent_activity"),
+            class_="mt-3"
+        ),
+
+        ui.tags.style("""
+            .value-box { min-height: 120px; }
+            .btn-outline-primary:hover, .btn-outline-success:hover, .btn-outline-info:hover {
+                transform: translateY(-2px);
+                transition: transform 0.2s;
+            }
+        """)
+    )
+
+
+def blockchain_listener_ui():
+    """Blockchain listener UI - heavy initialization deferred until tab clicked"""
     return ui.page_fluid(
         ui.h2("Blockchain Transaction Monitor"),
         ui.p("Live monitoring of wallet transactions on the blockchain", class_="text-muted mb-3"),
@@ -117,7 +199,7 @@ def home_dashboard_ui():
             class_="mt-4"
         ),
 
-        # Add custom CSS for the dashboard
+        # Add custom CSS for the listener
         ui.tags.style("""
             .transaction-table-container {
                 max-height: 600px;
@@ -143,6 +225,11 @@ def home_dashboard_ui():
 
             .decoding-pending {
                 animation: spin 2s linear infinite;
+            }
+
+            .spin-animation {
+                animation: spin 1s linear infinite;
+                display: inline-block;
             }
 
             .status-badge {
@@ -213,14 +300,19 @@ def home_dashboard_ui():
     )
 
 def enhanced_home_ui():
-    """Enhanced Home section with sub-navigation tabs"""
+    """Enhanced Home section with sub-navigation tabs - Dashboard loads instantly"""
     return ui.navset_tab(
-        ui.nav_panel("Dashboard", home_dashboard_ui()),
-        ui.nav_panel("Decoded Transactions", decoded_transactions_ui()),
-        ui.nav_panel("Settings", ui.div(
-            ui.h3("Listener Settings"),
-            ui.p("Coming soon: Configure blockchain endpoints, filters, and alerts"),
-            class_="p-4"
-        )),
+        ui.nav_panel(
+            ui.HTML('<i class="bi bi-speedometer2 me-1"></i> Dashboard'),
+            quick_dashboard_ui()
+        ),
+        ui.nav_panel(
+            ui.HTML('<i class="bi bi-broadcast me-1"></i> Blockchain Listener'),
+            blockchain_listener_ui()
+        ),
+        ui.nav_panel(
+            ui.HTML('<i class="bi bi-code-square me-1"></i> Decoded Transactions'),
+            decoded_transactions_ui()
+        ),
         id="home_tabs"
     )

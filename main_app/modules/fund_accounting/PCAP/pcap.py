@@ -72,10 +72,10 @@ class SimplifiedCapitalTiming:
 
         self.timezone = pytz.timezone(timezone)
 
-        print(f"📅 Capital Activity Cutoff (UTC): {self.bod_cutoff}")
+        print(f" Capital Activity Cutoff (UTC): {self.bod_cutoff}")
         print(f"   • Before {self.bod_cutoff}: BOD (affects current day P&L allocation)")
         print(f"   • After {self.bod_cutoff}: EOD (affects ending balance, no P&L allocation)")
-        print(f"   📚 PARTNER CAPITAL ACCOUNTING:")
+        print(f"    PARTNER CAPITAL ACCOUNTING:")
         print(f"   • Credits (-) = Increase partner capital")
         print(f"   • Debits (+) = Decrease partner capital")
 
@@ -99,9 +99,9 @@ def process_capital_with_partner_accounting(gl, grid, timing_classifier):
     Process capital flows with proper partner capital accounting conventions
     """
 
-    print(f"\n💰 PROCESSING PARTNER CAPITAL WITH TIMING")
+    print(f"\n PROCESSING PARTNER CAPITAL WITH TIMING")
     print(f"Using cutoff: {timing_classifier.bod_cutoff} UTC")
-    print("📚 Partner Capital Account Rules:")
+    print(" Partner Capital Account Rules:")
     print("• Contributions: Credits (-) increase partner capital")
     print("• Distributions: Debits (+) decrease partner capital")
     print("• BOD flows: Affect P&L allocation")
@@ -116,7 +116,7 @@ def process_capital_with_partner_accounting(gl, grid, timing_classifier):
 
     # Ensure we have transaction_datetime
     if 'transaction_datetime' not in capital_gl.columns:
-        print("⚠️ Warning: No transaction_datetime column found")
+        print("⚠ Warning: No transaction_datetime column found")
         if 'date' in capital_gl.columns:
             print("Using 'date' column as fallback for transaction timing")
             capital_gl['transaction_datetime'] = capital_gl['date']
@@ -171,24 +171,24 @@ def process_capital_with_partner_accounting(gl, grid, timing_classifier):
                 # Add to appropriate timing bucket (preserving partner capital signs)
                 grid.at[grid_idx[0], target_col] += amount
 
-                timing_emoji = "🌅" if timing == 'BOD' else "🌆"
+                timing_emoji = "" if timing == 'BOD' else ""
                 print(f"  {timing_emoji} {tx_datetime.strftime('%Y-%m-%d %H:%M:%S')}: {lp_id}")
                 print(f"     {tx_type.title()}: {abs(amount):,.8f} ({expected_sign}) → {timing}")
                 print(f"     Partner Capital Impact: {'Increases' if amount < 0 else 'Decreases'}")
 
             else:
-                print(f"  ⚠️ Warning: No grid match for {lp_id} on {normalized_date}")
+                print(f"  ⚠ Warning: No grid match for {lp_id} on {normalized_date}")
 
         except Exception as e:
-            print(f"  ❌ Error processing transaction {idx}: {e}")
+            print(f"   Error processing transaction {idx}: {e}")
             continue
 
     # Summary with partner capital context
-    print(f"\n📊 TIMING CLASSIFICATION SUMMARY:")
+    print(f"\n TIMING CLASSIFICATION SUMMARY:")
     print(f"BOD transactions (≤ {timing_classifier.bod_cutoff}): {timing_stats['BOD']}")
     print(f"EOD transactions (> {timing_classifier.bod_cutoff}): {timing_stats['EOD']}")
 
-    print(f"\n💰 PARTNER CAPITAL IMPACT BY TIMING:")
+    print(f"\n PARTNER CAPITAL IMPACT BY TIMING:")
     for timing in ['bod', 'eod']:
         contrib_total = grid[f'cap_contrib_{timing}'].sum()
         dist_total = grid[f'cap_dist_{timing}'].sum()
@@ -211,8 +211,8 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
     PCAP allocation respecting partner capital accounting conventions
     """
 
-    print("🚀 STARTING PARTNER CAPITAL PCAP ALLOCATION")
-    print("📚 PARTNER CAPITAL ACCOUNT CONVENTIONS:")
+    print(" STARTING PARTNER CAPITAL PCAP ALLOCATION")
+    print(" PARTNER CAPITAL ACCOUNT CONVENTIONS:")
     print("• Normal Balance: CREDIT (negative values)")
     print("• Contributions: Credits (-) increase capital")
     print("• Distributions: Debits (+) decrease capital")
@@ -237,7 +237,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
     all_days = sorted(grid['date'].unique())
     deferred = defaultdict(Decimal)
 
-    print(f"📅 Processing {len(all_days)} days with partner capital conventions")
+    print(f" Processing {len(all_days)} days with partner capital conventions")
 
     # Track daily allocation percentages for analysis
     daily_allocation_summary = []
@@ -249,7 +249,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
         if not len(day_idx):
             continue
 
-        print(f"\n📅 {d.strftime('%Y-%m-%d')}")
+        print(f"\n {d.strftime('%Y-%m-%d')}")
 
         # 1) Add today's fund P&L to deferred bucket
         todays_groups = fund_pnl_by_group[fund_pnl_by_group['date'] == d]
@@ -263,7 +263,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
 
         if daily_fund_pnl != 0:
             pnl_nature = "Income" if daily_fund_pnl < 0 else "Expense"
-            print(f"  📊 Fund P&L: {abs(daily_fund_pnl):,.8f} ({pnl_nature})")
+            print(f"   Fund P&L: {abs(daily_fund_pnl):,.8f} ({pnl_nature})")
 
         # 2) Calculate allocation base using COMPLETE PARTNER CAPITAL ACCOUNT BALANCE
         # The allocation should be based on each LP's TOTAL capital account balance,
@@ -303,7 +303,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
         total_eod_dist = grid.loc[day_idx, 'cap_dist_eod'].sum()
 
         if total_bod_contrib != 0 or total_bod_dist != 0:
-            print(f"  🌅 BOD flows (affect allocation):")
+            print(f"   BOD flows (affect allocation):")
             if total_bod_contrib != 0:
                 contrib_impact = "+" if total_bod_contrib < 0 else "-"
                 print(f"    Contributions: {abs(total_bod_contrib):,.8f} ({contrib_impact} to capital)")
@@ -312,7 +312,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
                 print(f"    Distributions: {abs(total_bod_dist):,.8f} ({dist_impact} to capital)")
 
         if total_eod_contrib != 0 or total_eod_dist != 0:
-            print(f"  🌆 EOD flows (ending balance only):")
+            print(f"   EOD flows (ending balance only):")
             if total_eod_contrib != 0:
                 contrib_impact = "+" if total_eod_contrib < 0 else "-"
                 print(f"    Contributions: {abs(total_eod_contrib):,.8f} ({contrib_impact} to capital)")
@@ -320,13 +320,13 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
                 dist_impact = "-" if total_eod_dist > 0 else "+"
                 print(f"    Distributions: {abs(total_eod_dist):,.8f} ({dist_impact} to capital)")
 
-        print(f"  🎯 Total partner capital for allocation: {total_absolute_capital:,.8f}")
+        print(f"   Total partner capital for allocation: {total_absolute_capital:,.8f}")
 
         if total_absolute_capital == 0:
             # 3) No partner capital - defer P&L
             grid.loc[day_idx, 'allocated_pnl'] = Decimal('0')
             grid.loc[day_idx, 'pnl_allocation_pct'] = Decimal('0')
-            print(f"  ⏸️ Zero partner capital - P&L deferred")
+            print(f"  ⏸ Zero partner capital - P&L deferred")
 
         else:
             # 4) Allocate P&L based on partner capital ownership percentages
@@ -345,7 +345,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
                     'has_pnl_to_allocate': daily_fund_pnl != 0
                 })
 
-            print(f"  📈 Capital-based allocation weights: {[f'{pct:.4%}' for pct in ownership_percentages]}")
+            print(f"   Capital-based allocation weights: {[f'{pct:.4%}' for pct in ownership_percentages]}")
 
             # Show complete capital balances for transparency
             for lp, balance, pct in zip(lps, allocation_bases, ownership_percentages):
@@ -380,7 +380,7 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
 
             if allocated_today != 0:
                 pnl_impact = "Favorable" if allocated_today < 0 else "Unfavorable"
-                print(f"  ✅ Total allocated: {abs(allocated_today):,.8f} ({pnl_impact} to capital)")
+                print(f"   Total allocated: {abs(allocated_today):,.8f} ({pnl_impact} to capital)")
 
         # 5) ENDING BALANCE: Partner capital equation
         # Ending = Beginning + Contributions(Cr-) + Distributions(Dr+) + Expenses(Dr+) + P&L(varies)
@@ -407,11 +407,11 @@ def run_partner_capital_pcap_allocation(grid, fund_pnl_by_group):
                 if len(j) == 1:
                     grid.at[j[0], 'beg_bal'] = grid.at[i, 'end_bal']
 
-    print(f"\n✅ PARTNER CAPITAL PCAP ALLOCATION COMPLETE")
-    print(f"📊 Final Summary:")
+    print(f"\n PARTNER CAPITAL PCAP ALLOCATION COMPLETE")
+    print(f" Final Summary:")
     print(f"  • Deferred P&L: {sum(deferred.values()):,.8f}")
     print(f"  • Allocation records: {len(alloc_rows):,}")
-    print(f"  📚 All partner capital accounting conventions maintained")
+    print(f"   All partner capital accounting conventions maintained")
 
     # Create daily allocation percentage summary
     allocation_summary_df = pd.DataFrame(daily_allocation_summary)
@@ -1006,28 +1006,28 @@ def create_complete_fund_pcap_with_gp(final_grid_enhanced, allocations_df_enhanc
     from decimal import Decimal
     from datetime import datetime, timedelta
 
-    print(f"🏦 CREATING COMPLETE FUND PCAP WITH GP INCENTIVE")
-    print(f"📅 Time Periods: Current Month | Current Quarter | Current Year | ITD")
+    print(f" CREATING COMPLETE FUND PCAP WITH GP INCENTIVE")
+    print(f" Time Periods: Current Month | Current Quarter | Current Year | ITD")
     print("=" * 80)
 
     # [Previous setup code remains the same...]
     if final_grid_enhanced.empty:
-        print("❌ No grid data provided")
+        print(" No grid data provided")
         return pd.DataFrame()
 
     # Handle timezone issues
     final_grid_enhanced = final_grid_enhanced.copy()
 
-    # ✅ Ensure date column is datetime and get dynamic start year
+    #  Ensure date column is datetime and get dynamic start year
     if not pd.api.types.is_datetime64_any_dtype(final_grid_enhanced["date"]):
         final_grid_enhanced["date"] = pd.to_datetime(final_grid_enhanced["date"], errors="coerce")
 
-    # ✅ Get earliest year from 'date'
+    #  Get earliest year from 'date'
     min_date = final_grid_enhanced["date"].min()
     if pd.isna(min_date):
         raise ValueError("No valid dates found in final_grid_enhanced['date']")
     start_year = min_date.year
-    print(f"📅 Start year automatically set to {start_year}")
+    print(f" Start year automatically set to {start_year}")
 
     if final_grid_enhanced['date'].dt.tz is not None:
         final_grid_enhanced['date'] = final_grid_enhanced['date'].dt.tz_localize(None)
@@ -1041,8 +1041,8 @@ def create_complete_fund_pcap_with_gp(final_grid_enhanced, allocations_df_enhanc
     fund_start = final_grid_enhanced['date'].min()
     fund_end = final_grid_enhanced['date'].max()
 
-    print(f"📊 Fund inception: {fund_start.strftime('%Y-%m-%d')}")
-    print(f"📊 Current date: {fund_end.strftime('%Y-%m-%d')}")
+    print(f" Fund inception: {fund_start.strftime('%Y-%m-%d')}")
+    print(f" Current date: {fund_end.strftime('%Y-%m-%d')}")
 
     # SCPC ranking setup - use the rank from COA data
     scpc_to_rank = {}
@@ -1101,12 +1101,12 @@ def create_complete_fund_pcap_with_gp(final_grid_enhanced, allocations_df_enhanc
     itd_end = fund_end
 
     unique_lps = final_grid_enhanced['limited_partner_ID'].unique()
-    print(f"👥 Processing {len(unique_lps)} LPs")
+    print(f" Processing {len(unique_lps)} LPs")
 
     all_results = []
 
     for lp_id in unique_lps:
-        print(f"\n👤 Processing {lp_id}")
+        print(f"\n Processing {lp_id}")
 
         lp_grid = final_grid_enhanced[final_grid_enhanced['limited_partner_ID'] == lp_id].copy()
         
@@ -1118,7 +1118,7 @@ def create_complete_fund_pcap_with_gp(final_grid_enhanced, allocations_df_enhanc
 
         def calculate_period_amounts(start_date, end_date, period_name):
             """Calculate amounts for a specific time period INCLUDING GP INCENTIVE"""
-            print(f"  📊 Calculating {period_name}...")
+            print(f"   Calculating {period_name}...")
 
             period_mask = (lp_grid['date'] >= start_date) & (lp_grid['date'] <= end_date)
             period_grid = lp_grid[period_mask]
@@ -1332,10 +1332,10 @@ def create_complete_fund_pcap_with_gp(final_grid_enhanced, allocations_df_enhanc
         for col in amount_columns:
             df[col] = df[col].round(6)
 
-        print(f"\n✅ Created complete PCAP with GP incentive: {len(df)} records")
+        print(f"\n Created complete PCAP with GP incentive: {len(df)} records")
         return df
     else:
-        print("❌ No data to process")
+        print(" No data to process")
         return pd.DataFrame()
 
 
@@ -1346,7 +1346,7 @@ def create_combined_pcap_excel(final_grid_enhanced, allocations_df_enhanced, df_
     Create one Excel file with separate sheets for each LP
     """
     unique_lps = final_grid_enhanced['limited_partner_ID'].unique()
-    print(f"📊 Creating combined Excel file for {len(unique_lps)} LPs...")
+    print(f" Creating combined Excel file for {len(unique_lps)} LPs...")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     full_filename = f"{path_for_GP_incentive}/{fund_id}/{current_period}_{fund_id}_PCAP_All_LPs.xlsx"
@@ -1359,11 +1359,11 @@ def create_combined_pcap_excel(final_grid_enhanced, allocations_df_enhanced, df_
         all_lp_pcap = create_complete_fund_pcap_with_gp(final_grid_enhanced, allocations_df_enhanced, df_coa)
         if not all_lp_pcap.empty:
             all_lp_pcap.to_excel(writer, sheet_name='All_LPs_Combined', index=False)
-            print(f"  ✅ Created combined sheet: All_LPs_Combined")
+            print(f"   Created combined sheet: All_LPs_Combined")
 
         # Individual LP sheets
         for i, lp_id in enumerate(unique_lps, 1):
-            print(f"  📄 [{i}/{len(unique_lps)}] Creating sheet for LP: {lp_id}")
+            print(f"   [{i}/{len(unique_lps)}] Creating sheet for LP: {lp_id}")
 
             try:
                 # Filter data for this LP
@@ -1371,7 +1371,7 @@ def create_combined_pcap_excel(final_grid_enhanced, allocations_df_enhanced, df_
                 lp_allocs = allocations_df_enhanced[allocations_df_enhanced['limited_partner_ID'] == lp_id].copy()
 
                 if lp_grid.empty:
-                    print(f"    ⚠️  No data found for LP: {lp_id}")
+                    print(f"    ⚠  No data found for LP: {lp_id}")
                     failed_sheets.append(f"{lp_id} - No data")
                     continue
 
@@ -1379,7 +1379,7 @@ def create_combined_pcap_excel(final_grid_enhanced, allocations_df_enhanced, df_
                 lp_pcap = create_complete_fund_pcap_with_gp(lp_grid, lp_allocs, df_coa)
 
                 if lp_pcap.empty:
-                    print(f"    ❌ Failed to create PCAP for LP: {lp_id}")
+                    print(f"     Failed to create PCAP for LP: {lp_id}")
                     failed_sheets.append(f"{lp_id} - PCAP creation failed")
                     continue
 
@@ -1390,19 +1390,19 @@ def create_combined_pcap_excel(final_grid_enhanced, allocations_df_enhanced, df_
                 display_cols = ['Line_Item', 'SCPC', 'Category', 'Current_Month', 'Current_Quarter', 'Current_Year', 'ITD']
                 lp_pcap[display_cols].to_excel(writer, sheet_name=safe_sheet_name, index=False)
 
-                print(f"    ✅ Created sheet: {safe_sheet_name}")
+                print(f"     Created sheet: {safe_sheet_name}")
                 successful_sheets.append(safe_sheet_name)
 
             except Exception as e:
-                print(f"    ❌ Error creating sheet for LP {lp_id}: {str(e)}")
+                print(f"     Error creating sheet for LP {lp_id}: {str(e)}")
                 failed_sheets.append(f"{lp_id} - Error: {str(e)}")
 
     print(f"\n" + "="*60)
-    print(f"📈 COMBINED EXCEL FILE SUMMARY")
+    print(f" COMBINED EXCEL FILE SUMMARY")
     print(f"="*60)
-    print(f"📁 File created: {full_filename}")
-    print(f"✅ Successfully created: {len(successful_sheets)} LP sheets")
-    print(f"❌ Failed: {len(failed_sheets)} LP sheets")
+    print(f" File created: {full_filename}")
+    print(f" Successfully created: {len(successful_sheets)} LP sheets")
+    print(f" Failed: {len(failed_sheets)} LP sheets")
 
     return {
         'filename': full_filename,
@@ -1677,7 +1677,7 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
     """
     Generate investor capital statement PDF from PCAP data
     """
-    print(f"🔍 Individual PDF Generation for LP {lp_id}:")
+    print(f" Individual PDF Generation for LP {lp_id}:")
     print(f"  - Fund: {fund_name}")
     print(f"  - Currency: {currency}")
     print(f"  - Date range: {from_date} to {to_date}")
@@ -1706,14 +1706,14 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
             print(f"  - JSON data created successfully")
             print(f"  - Data keys: {list(json_data.keys()) if isinstance(json_data, dict) else 'Not a dict'}")
         except Exception as json_error:
-            print(f"  ❌ JSON creation failed: {json_error}")
+            print(f"   JSON creation failed: {json_error}")
             print(f"  - Error type: {type(json_error).__name__}")
             import traceback
             print(f"  - Traceback: {traceback.format_exc()}")
             return None
         
         if json_data is None:
-            print(f"❌ No data available for LP {lp_id}")
+            print(f" No data available for LP {lp_id}")
             return None
             
         print(f"  - JSON created successfully")
@@ -1735,7 +1735,7 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
             template = env.get_template("report.html")
             print(f"  - Template loaded successfully")
         except Exception as template_error:
-            print(f"  ❌ Template loading failed: {template_error}")
+            print(f"   Template loading failed: {template_error}")
             print(f"  - Error type: {type(template_error).__name__}")
             return None
         
@@ -1762,7 +1762,7 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
             )
             print(f"  - HTML rendered successfully ({len(html_content)} characters)")
         except Exception as render_error:
-            print(f"  ❌ HTML rendering failed: {render_error}")
+            print(f"   HTML rendering failed: {render_error}")
             print(f"  - Error type: {type(render_error).__name__}")
             import traceback
             print(f"  - Traceback: {traceback.format_exc()}")
@@ -1798,7 +1798,7 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
         output_path = os.path.join(output_dir, filename)
         
         # Generate PDF with detailed debugging
-        print(f"🔧 Generating PDF...")
+        print(f" Generating PDF...")
         print(f"  - Output path: {output_path}")
         print(f"  - HTML content length: {len(html_content)} characters")
         
@@ -1807,27 +1807,27 @@ def generate_investor_statement_pdf(final_grid_enhanced, lp_id, fund_name,
         
         # Check if base directory exists
         if not os.path.exists(base_url):
-            print(f"  ⚠️ Warning: Base URL directory does not exist: {base_url}")
+            print(f"  ⚠ Warning: Base URL directory does not exist: {base_url}")
         
         # Generate PDF
         try:
             HTML(string=html_content, base_url=base_url).write_pdf(output_path)
-            print(f"  ✅ PDF generated successfully: {output_path}")
+            print(f"   PDF generated successfully: {output_path}")
             
             # Verify file was created and has content
             if os.path.exists(output_path):
                 file_size = os.path.getsize(output_path)
                 print(f"  - File size: {file_size} bytes")
                 if file_size == 0:
-                    print(f"  ⚠️ Warning: PDF file is empty")
+                    print(f"  ⚠ Warning: PDF file is empty")
                     return None
             else:
-                print(f"  ❌ Error: PDF file was not created at {output_path}")
+                print(f"   Error: PDF file was not created at {output_path}")
                 return None
                 
             return output_path
         except Exception as pdf_error:
-            print(f"  ❌ PDF generation failed: {pdf_error}")
+            print(f"   PDF generation failed: {pdf_error}")
             print(f"  - Error type: {type(pdf_error).__name__}")
             import traceback
             print(f"  - Traceback: {traceback.format_exc()}")
@@ -1847,7 +1847,7 @@ def generate_all_lp_statements_pdf(final_grid_enhanced, fund_name,
     """
     Generate investor statement PDFs for all LPs in the dataset
     """
-    print("🔍 PDF Generation: Starting...")
+    print(" PDF Generation: Starting...")
     print(f"  - Input data shape: {final_grid_enhanced.shape}")
     print(f"  - Fund name: {fund_name}")
     print(f"  - Currency: {currency}")
@@ -1857,13 +1857,13 @@ def generate_all_lp_statements_pdf(final_grid_enhanced, fund_name,
     print(f"  - Found LP IDs: {list(lp_ids)}")
     
     if len(lp_ids) == 0:
-        print("❌ No LP IDs found in the data")
+        print(" No LP IDs found in the data")
         return []
     
     generated_files = []
     
     for i, lp_id in enumerate(lp_ids):
-        print(f"🔍 Processing LP {i+1}/{len(lp_ids)}: {lp_id}")
+        print(f" Processing LP {i+1}/{len(lp_ids)}: {lp_id}")
         try:
             # Filter data for this LP to see what we're working with
             lp_data = final_grid_enhanced[final_grid_enhanced['limited_partner_ID'] == lp_id]
@@ -1895,13 +1895,13 @@ def generate_all_lp_statements_pdf(final_grid_enhanced, fund_name,
             )
             
             if pdf_path:
-                print(f"  ✅ Generated: {pdf_path}")
+                print(f"   Generated: {pdf_path}")
                 generated_files.append(pdf_path)
             else:
-                print(f"  ❌ Failed to generate PDF for {lp_id}")
+                print(f"   Failed to generate PDF for {lp_id}")
                 
         except Exception as e:
-            print(f"❌ Error generating PDF for LP {lp_id}: {e}")
+            print(f" Error generating PDF for LP {lp_id}: {e}")
             import traceback
             traceback.print_exc()
             continue
@@ -2070,7 +2070,7 @@ def create_json_from_pcap_report(pcap_report, lp_id, fund_name, currency='ETH'):
 
 def test_json_creation_from_pcap_data(pcap_data, fund_name='Test Fund', currency='ETH'):
     """Test function to verify JSON creation from PCAP data works correctly"""
-    print(f"🧪 Testing JSON creation from PCAP data...")
+    print(f" Testing JSON creation from PCAP data...")
     print(f"  - Data shape: {pcap_data.shape}")
     print(f"  - Columns: {pcap_data.columns.tolist()}")
     
@@ -2085,7 +2085,7 @@ def test_json_creation_from_pcap_data(pcap_data, fund_name='Test Fund', currency
             json_result = create_json_from_pcap_report(pcap_data, test_lp, fund_name, currency)
             
             if json_result:
-                print(f"  ✅ JSON creation successful!")
+                print(f"   JSON creation successful!")
                 print(f"  - Fund: {json_result.get('fund_name')}")
                 print(f"  - LP: {json_result.get('lp_id')}")
                 print(f"  - Date: {json_result.get('main_date')}")
@@ -2094,8 +2094,8 @@ def test_json_creation_from_pcap_data(pcap_data, fund_name='Test Fund', currency
                 print(f"  - Performance metrics keys: {list(json_result.get('performance_metrics', {}).keys())}")
                 return json_result
             else:
-                print(f"  ❌ JSON creation failed")
+                print(f"   JSON creation failed")
                 return None
     else:
-        print(f"  ❌ No 'limited_partner_ID' column found in data")
+        print(f"   No 'limited_partner_ID' column found in data")
         return None

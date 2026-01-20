@@ -155,7 +155,7 @@ BLACKLISTED_TOKENS = {
 
 # Suspicious Token Patterns
 SUSPICIOUS_PATTERNS = {
-    "emoji_symbols": ["🚀", "💎", "🔥", "⚡", "🌙", "💰", "🎯", "⭐"],
+    "emoji_symbols": ["", "", "", "⚡", "", "", "", "⭐"],
     "scam_keywords": [
         "AIRDROP", "FREE", "BONUS", "REWARD", "CLAIM", "GIFT", "WIN", "LOTTERY",
         "1000X", "MOON", "LAMBO", "DIAMOND", "ROCKET", "PUMP", "DOGE", "ELON"

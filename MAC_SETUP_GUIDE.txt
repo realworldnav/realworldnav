@@ -1,0 +1,157 @@
+================================================================================
+                    RealWorldNAV - Mac Setup Guide
+================================================================================
+
+Follow these steps to clone and run this project on a brand new Mac.
+
+--------------------------------------------------------------------------------
+STEP 1: Install Prerequisites
+--------------------------------------------------------------------------------
+
+1.1 Install Homebrew (if not already installed):
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+1.2 Install Python 3.11 or later:
+    brew install python@3.11
+
+1.3 Install Git (if not already installed):
+    brew install git
+
+--------------------------------------------------------------------------------
+STEP 2: Clone the Repository
+--------------------------------------------------------------------------------
+
+2.1 Open Terminal and navigate to where you want the project:
+    cd ~/Documents
+
+2.2 Clone the repository:
+    git clone https://github.com/charl/realworldnav.git
+
+    (Replace with actual repo URL if different)
+
+2.3 Navigate into the project:
+    cd realworldnav
+
+--------------------------------------------------------------------------------
+STEP 3: Set Up Python Virtual Environment
+--------------------------------------------------------------------------------
+
+3.1 Create a virtual environment:
+    python3.11 -m venv venv
+
+3.2 Activate the virtual environment:
+    source venv/bin/activate
+
+3.3 Upgrade pip:
+    pip install --upgrade pip
+
+--------------------------------------------------------------------------------
+STEP 4: Install Dependencies
+--------------------------------------------------------------------------------
+
+4.1 Install all required packages:
+    pip install -r requirements.txt
+
+Note: WeasyPrint may require additional system dependencies:
+    brew install cairo pango gdk-pixbuf libffi
+
+--------------------------------------------------------------------------------
+STEP 5: Configure Environment Variables
+--------------------------------------------------------------------------------
+
+5.1 Create a .env file in the project root:
+    touch .env
+
+5.2 Add the following environment variables to .env:
+
+# ===========================================
+# REQUIRED - AWS Credentials for S3 Access
+# ===========================================
+AWS_ACCESS_KEY_ID=your_aws_access_key
+AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+AWS_DEFAULT_REGION=us-east-2
+
+# S3 bucket (optional - has default)
+S3_BUCKET_NAME=realworldnav-beta-1
+
+# ===========================================
+# OPTIONAL - Application Configuration
+# ===========================================
+REALWORLDNAV_CLIENT=drip_capital
+REALWORLDNAV_FUND=fund_i_class_B_ETH
+
+# ===========================================
+# REQUIRED FOR BLOCKCHAIN FEATURES
+# ===========================================
+INFURA_API_KEY=your_infura_api_key
+ETHERSCAN_API_KEY=your_etherscan_api_key
+
+# Web3 RPC URLs (alternative to Infura)
+WEB3_HTTP_URL=https://mainnet.infura.io/v3/your_project_id
+WEB3_WEBSOCKET_URL=wss://mainnet.infura.io/ws/v3/your_project_id
+
+# ===========================================
+# OPTIONAL - Additional API Keys for NFT Features
+# ===========================================
+NFTSCAN_API_KEY=your_nftscan_key
+OPENSEA_API_KEY=your_opensea_key
+ALCHEMY_API_KEY=your_alchemy_key
+
+--------------------------------------------------------------------------------
+STEP 6: Run the Application
+--------------------------------------------------------------------------------
+
+6.1 Make sure your virtual environment is activated:
+    source venv/bin/activate
+
+6.2 Run the application:
+    python app.py
+
+    OR
+
+    shiny run app.py
+
+6.3 Open your browser and go to:
+    http://127.0.0.1:8001
+
+--------------------------------------------------------------------------------
+STEP 7: Running Tests (Optional)
+--------------------------------------------------------------------------------
+
+7.1 Run all tests:
+    python -m pytest tests/
+
+7.2 Run specific test file:
+    python -m pytest tests/test_calculations.py
+
+--------------------------------------------------------------------------------
+TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+Issue: WeasyPrint installation fails
+Fix:   brew install cairo pango gdk-pixbuf libffi
+       pip install weasyprint
+
+Issue: boto3 can't find credentials
+Fix:   Ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set in .env
+
+Issue: Web3 connection errors
+Fix:   Verify INFURA_API_KEY is set correctly in .env
+
+Issue: Module not found errors
+Fix:   Ensure virtual environment is activated (source venv/bin/activate)
+
+Issue: Port 8001 already in use
+Fix:   Kill existing process or change port in app.py line 28
+
+--------------------------------------------------------------------------------
+QUICK START COMMANDS (Copy-Paste Ready)
+--------------------------------------------------------------------------------
+
+# One-liner to set up after cloning:
+python3.11 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
+
+# Run the app:
+source venv/bin/activate && python app.py
+
+================================================================================

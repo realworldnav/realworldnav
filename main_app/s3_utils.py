@@ -276,12 +276,52 @@ def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
 # ============= General Ledger 2 Functions =============
 
 def get_gl2_schema_columns():
-    """Return the schema columns for GL2 parquet file."""
+    """
+    Return the schema columns for GL2 parquet file.
+    Matches production parquet schema - columns 1-31 + 37, excluding 32-36.
+    """
     return [
-        'tx_hash', 'entry_type', 'account_number', 'account_name',
-        'debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
-        'asset', 'description', 'category', 'platform',
-        'timestamp', 'posted_date', 'row_key'
+        # Core identifiers (1-4)
+        'date',
+        'fund_id',
+        'limited_partner_ID',
+        'wallet_id',
+        # Transaction info (5-7)
+        'transaction_type',
+        'cryptocurrency',
+        'account_name',
+        # GL Account info (8-9)
+        'GL_Acct_Number',
+        'GL_Acct_Name',
+        # Amounts (10-14)
+        'debit_crypto',
+        'credit_crypto',
+        'eth_usd_price',
+        'debit_USD',
+        'credit_USD',
+        # Event info (15-17)
+        'event',
+        'function',
+        'hash',
+        # Loan details (18-31)
+        'loan_id',
+        'lender',
+        'borrower',
+        'from',
+        'to',
+        'contract_address',
+        'collateral_address',
+        'token_id',
+        'principal_crypto',
+        'principal_USD',
+        'annual_interest_rate',
+        'payoff_amount_crypto',
+        'payoff_amount_USD',
+        'loan_due_date',
+        # End of day price (37)
+        'end_of_day_ETH_USD',
+        # Internal deduplication key
+        'row_key',
     ]
 
 def create_empty_GL2(key: str = GL2_KEY) -> bool:
@@ -293,20 +333,40 @@ def create_empty_GL2(key: str = GL2_KEY) -> bool:
         columns = get_gl2_schema_columns()
         df = pd.DataFrame(columns=columns)
 
-        # Set proper dtypes
+        # Set proper dtypes matching parquet schema
         df = df.astype({
-            'tx_hash': 'object',
-            'entry_type': 'object',
-            'account_number': 'object',
+            'date': 'object',
+            'fund_id': 'object',
+            'limited_partner_ID': 'object',
+            'wallet_id': 'object',
+            'transaction_type': 'object',
+            'cryptocurrency': 'object',
             'account_name': 'object',
+            'GL_Acct_Number': 'object',
+            'GL_Acct_Name': 'object',
             'debit_crypto': 'float64',
             'credit_crypto': 'float64',
+            'eth_usd_price': 'float64',
             'debit_USD': 'float64',
             'credit_USD': 'float64',
-            'asset': 'object',
-            'description': 'object',
-            'category': 'object',
-            'platform': 'object',
+            'event': 'object',
+            'function': 'object',
+            'hash': 'object',
+            'loan_id': 'object',
+            'lender': 'object',
+            'borrower': 'object',
+            'from': 'object',
+            'to': 'object',
+            'contract_address': 'object',
+            'collateral_address': 'object',
+            'token_id': 'object',
+            'principal_crypto': 'float64',
+            'principal_USD': 'float64',
+            'annual_interest_rate': 'float64',
+            'payoff_amount_crypto': 'float64',
+            'payoff_amount_USD': 'float64',
+            'loan_due_date': 'object',
+            'end_of_day_ETH_USD': 'float64',
             'row_key': 'object'
         })
 
@@ -339,13 +399,16 @@ def load_GL2_file(key: str = GL2_KEY) -> pd.DataFrame:
         df = table.to_pandas()
 
         # Fix datetime columns to be UTC-aware
-        if "timestamp" in df.columns:
-            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors='coerce')
-        if "posted_date" in df.columns:
-            df["posted_date"] = pd.to_datetime(df["posted_date"], utc=True, errors='coerce')
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], utc=True, errors='coerce')
+        if "loan_due_date" in df.columns:
+            df["loan_due_date"] = pd.to_datetime(df["loan_due_date"], utc=True, errors='coerce')
 
         # Cast financial columns to Decimal for precision
-        decimal_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD']
+        decimal_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
+                        'eth_usd_price', 'principal_crypto', 'principal_USD',
+                        'annual_interest_rate', 'payoff_amount_crypto', 'payoff_amount_USD',
+                        'end_of_day_ETH_USD']
         for col in decimal_cols:
             if col in df.columns:
                 df[col] = df[col].apply(safe_to_decimal)
@@ -369,7 +432,10 @@ def save_GL2_file(df: pd.DataFrame, key: str = GL2_KEY) -> bool:
         df = df.copy()
 
         # Normalize numeric columns to float64 for parquet compatibility
-        numeric_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD']
+        numeric_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
+                        'eth_usd_price', 'principal_crypto', 'principal_USD',
+                        'annual_interest_rate', 'payoff_amount_crypto', 'payoff_amount_USD',
+                        'end_of_day_ETH_USD']
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')

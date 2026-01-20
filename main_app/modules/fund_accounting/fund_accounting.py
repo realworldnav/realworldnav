@@ -954,7 +954,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
                 if not nav_rows.empty:
                     fund_nav = float(nav_rows['ITD'].sum())
             
-            print(f"🔍 Fund NAV Calculation Debug ({currency}):")
+            print(f"[DEBUG] Fund NAV Calculation Debug ({currency}):")
             print(f"  - PCAP Report Shape: {pcap_report.shape}")
             print(f"  - PCAP Report Columns: {list(pcap_report.columns)}")
             
@@ -1230,7 +1230,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
     @render.download(filename=lambda: f"PCAP_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
     async def export_pcap_pdf():
         """Generate PCAP PDF report using existing PDF creator"""
-        print("📄 Generating PCAP PDF report...")
+        print(" Generating PCAP PDF report...")
         try:
             data = pcap_data.get()
             summary = pcap_summary.get()
@@ -1325,7 +1325,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
             with open(json_path, 'w') as f:
                 json.dump(json_data, f, indent=2)
             
-            print(f"📄 JSON data saved to: {json_path}")
+            print(f" JSON data saved to: {json_path}")
             
             # Call the existing PDF generator
             try:
@@ -1344,7 +1344,7 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
                 os.chdir(original_cwd)
                 
                 if result.returncode == 0:
-                    print(f"✅ PDF generated successfully")
+                    print(f"[OK] PDF generated successfully")
                     print(f"PDF output: {result.stdout}")
                     
                     # Look for the generated PDF file
@@ -1359,35 +1359,35 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
                             with open(pdf_path, 'rb') as f:
                                 pdf_content = f.read()
                             
-                            print(f"📄 PDF ready for download: {latest_pdf}")
-                            print(f"📄 PDF content type: {type(pdf_content)}")
-                            print(f"📄 PDF content size: {len(pdf_content)} bytes")
+                            print(f" PDF ready for download: {latest_pdf}")
+                            print(f" PDF content type: {type(pdf_content)}")
+                            print(f" PDF content size: {len(pdf_content)} bytes")
                             
                             if isinstance(pdf_content, bytes):
                                 yield pdf_content
                             else:
-                                print(f"❌ Unexpected content type: {type(pdf_content)}")
+                                print(f"[ERROR] Unexpected content type: {type(pdf_content)}")
                                 yield b""
                                 
                         except Exception as read_error:
-                            print(f"❌ Error reading PDF file: {read_error}")
+                            print(f"[ERROR] Error reading PDF file: {read_error}")
                             yield b""
                     else:
-                        print("❌ No PDF file found after generation")
+                        print("[ERROR] No PDF file found after generation")
                         yield b""
                 else:
                     error_msg = f"PDF generation failed: {result.stderr}"
-                    print(f"❌ {error_msg}")
+                    print(f"[ERROR] {error_msg}")
                     yield b""
                     
             except Exception as pdf_error:
                 error_msg = f"Error calling PDF generator: {str(pdf_error)}"
-                print(f"❌ {error_msg}")
+                print(f"[ERROR] {error_msg}")
                 yield b""
                 
         except Exception as e:
             error_msg = f"Error generating PDF: {str(e)}"
-            print(f"❌ {error_msg}")
+            print(f"[ERROR] {error_msg}")
             import traceback
             traceback.print_exc()
             yield b""
@@ -1407,10 +1407,10 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
         
         if status.get('success'):
             icon_class = "text-success"
-            status_icon = "✅"
+            status_icon = "[OK]"
         else:
             icon_class = "text-danger"
-            status_icon = "❌"
+            status_icon = "[ERROR]"
         
         export_type = status.get('type', 'export').upper()
         message = status.get('message', 'Export completed')
@@ -1455,14 +1455,14 @@ def register_outputs(output, input, selected_fund=None, selected_report_date=Non
             
         if summary and summary.get('error'):
             return ui.div(
-                ui.h4("❌ PCAP Generation Failed", class_="text-danger"),
+                ui.h4("[ERROR] PCAP Generation Failed", class_="text-danger"),
                 class_="mt-4"
             )
             
         # Show summary info
         num_lps = summary.get('num_lps', 0) if summary else 0
         return ui.div(
-            ui.h4(f"✅ PCAP Report Generated", class_="text-success"),
+            ui.h4(f"[OK] PCAP Report Generated", class_="text-success"),
             ui.p(f"Generated data for {num_lps} Limited Partners", class_="text-muted"),
             class_="mt-4"
         )
