@@ -9,6 +9,7 @@ venv/
 ENV/
 .venv/
 .venv-*/
+.env
 
 # Temp files
 tmpclaude-*
