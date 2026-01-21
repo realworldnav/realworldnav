@@ -9,11 +9,25 @@ Simplified ETH-based approach without asset categorization.
 import pandas as pd
 from collections import deque
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_datetime(dt: datetime) -> datetime:
+    """Normalize datetime to UTC for consistent comparisons.
+
+    Converts naive datetimes to UTC and ensures all comparisons
+    work regardless of input timezone awareness.
+    """
+    if dt.tzinfo is None:
+        # Naive datetime - assume UTC
+        return dt.replace(tzinfo=timezone.utc)
+    else:
+        # Already aware - convert to UTC
+        return dt.astimezone(timezone.utc)
 
 # Decimal precision settings
 SCALE_CRYPTO = Decimal('0.000000000000000001')  # 18 decimals
@@ -432,5 +446,397 @@ def convert_crypto_fetch_to_fifo_format(df_transactions: pd.DataFrame) -> pd.Dat
             fifo_df[col] = fifo_df[col].fillna('').astype(str)
     
     logger.info(f"Conversion complete: {len(fifo_df)} transactions ready for FIFO")
-    
+
     return fifo_df
+
+
+# ============================================================================
+# ENHANCED COST BASIS TRACKER (from notebook Cell 216)
+# Supports FIFO/LIFO/HIFO, USD-based tracking, tax lot management
+# ============================================================================
+
+from enum import Enum
+from dataclasses import dataclass, field
+
+
+class CostBasisMethod(Enum):
+    """Cost basis calculation methods"""
+    FIFO = "FIFO"  # First In, First Out
+    LIFO = "LIFO"  # Last In, First Out
+    HIFO = "HIFO"  # Highest In, First Out
+
+
+class TaxTreatment(Enum):
+    """Tax treatment classifications"""
+    NON_TAXABLE = "NON_TAXABLE"
+    TAXABLE_SALE = "TAXABLE_SALE"
+    TAXABLE_INCOME = "TAXABLE_INCOME"
+    CAPITAL_GAIN_SHORT = "CAPITAL_GAIN_SHORT"
+    CAPITAL_GAIN_LONG = "CAPITAL_GAIN_LONG"
+    CAPITAL_LOSS_SHORT = "CAPITAL_LOSS_SHORT"
+    CAPITAL_LOSS_LONG = "CAPITAL_LOSS_LONG"
+
+
+@dataclass
+class TaxLot:
+    """Individual tax lot for cost basis tracking"""
+    lot_id: str
+    asset: str
+    amount: Decimal
+    cost_basis_usd: Decimal
+    cost_per_unit: Decimal
+    acquisition_date: datetime
+    acquisition_tx_hash: str
+    wallet_id: str
+    fund_id: str
+
+    def to_dict(self) -> Dict:
+        return {
+            'lot_id': self.lot_id,
+            'asset': self.asset,
+            'amount': float(self.amount),
+            'cost_basis_usd': float(self.cost_basis_usd),
+            'cost_per_unit': float(self.cost_per_unit),
+            'acquisition_date': self.acquisition_date.isoformat(),
+            'acquisition_tx_hash': self.acquisition_tx_hash,
+            'wallet_id': self.wallet_id,
+            'fund_id': self.fund_id
+        }
+
+
+@dataclass
+class DisposalEvent:
+    """Record of asset disposal with gain/loss"""
+    disposal_id: str
+    disposal_date: datetime
+    disposal_tx_hash: str
+    asset: str
+    amount_disposed: Decimal
+    proceeds_usd: Decimal
+    cost_basis_usd: Decimal
+    gain_loss_usd: Decimal
+    holding_days: int
+    is_long_term: bool
+    tax_treatment: str
+    lots_used: List[Dict]
+    wallet_id: str
+    fund_id: str
+    swap_pair_id: Optional[str] = None
+    is_internal_transfer: bool = False
+
+    def to_dict(self) -> Dict:
+        return {
+            'disposal_id': self.disposal_id,
+            'disposal_date': self.disposal_date.isoformat(),
+            'disposal_tx_hash': self.disposal_tx_hash,
+            'asset': self.asset,
+            'amount_disposed': float(self.amount_disposed),
+            'proceeds_usd': float(self.proceeds_usd),
+            'cost_basis_usd': float(self.cost_basis_usd),
+            'gain_loss_usd': float(self.gain_loss_usd),
+            'holding_days': self.holding_days,
+            'is_long_term': self.is_long_term,
+            'tax_treatment': self.tax_treatment,
+            'lots_used': self.lots_used,
+            'wallet_id': self.wallet_id,
+            'fund_id': self.fund_id,
+            'swap_pair_id': self.swap_pair_id,
+            'is_internal_transfer': self.is_internal_transfer
+        }
+
+
+class CostBasisTracker:
+    """
+    Enhanced cost basis tracker with USD-based tracking and FIFO/LIFO/HIFO support.
+
+    Use this for:
+    - Currency swaps (aWETH -> WETH, ETH -> USDC)
+    - Investment tracking with gain/loss calculation
+    - Tax lot management with holding period tracking
+
+    Example for Aave withdraw (aWETH -> WETH):
+        tracker = CostBasisTracker(method=CostBasisMethod.FIFO)
+        processor = SwapProcessor(tracker)
+
+        result = processor.process_swap(
+            from_asset="aWETH",
+            from_amount=Decimal("10"),
+            to_asset="WETH",
+            to_amount=Decimal("10"),
+            eth_price_usd=Decimal("3200"),
+            date=datetime.now(),
+            tx_hash="0x...",
+            wallet_id="0x..."
+        )
+        print(f"Gain/Loss: ${result['gain_loss_usd']}")
+    """
+
+    def __init__(self, method: CostBasisMethod = CostBasisMethod.FIFO, fund_id: str = ""):
+        self.method = method
+        self.fund_id = fund_id
+        self.lots: Dict[Tuple[str, str], deque] = {}  # (wallet_id, asset) -> deque[TaxLot]
+        self.disposal_counter = 0
+        self.lot_counter = 0
+
+    def add_acquisition(self,
+                       asset: str,
+                       amount: Decimal,
+                       cost_usd: Decimal,
+                       date: datetime,
+                       tx_hash: str,
+                       wallet_id: str,
+                       fund_id: Optional[str] = None) -> TaxLot:
+        """Add an acquisition (buy, receive, deposit)"""
+        if amount <= 0:
+            raise ValueError(f"Amount must be positive, got {amount}")
+
+        self.lot_counter += 1
+        fund = fund_id or self.fund_id
+        cost_per_unit = cost_usd / amount if amount > 0 else Decimal(0)
+
+        lot = TaxLot(
+            lot_id=f"LOT_{self.lot_counter:08d}",
+            asset=asset,
+            amount=amount,
+            cost_basis_usd=cost_usd,
+            cost_per_unit=cost_per_unit,
+            acquisition_date=_normalize_datetime(date),
+            acquisition_tx_hash=tx_hash,
+            wallet_id=wallet_id.lower(),
+            fund_id=fund
+        )
+
+        key = (wallet_id.lower(), asset)
+        if key not in self.lots:
+            self.lots[key] = deque()
+        self.lots[key].append(lot)
+
+        logger.debug(f"Added lot {lot.lot_id}: {amount} {asset} @ ${cost_per_unit}/unit")
+        return lot
+
+    def process_disposal(self,
+                        asset: str,
+                        amount: Decimal,
+                        proceeds_usd: Decimal,
+                        date: datetime,
+                        tx_hash: str,
+                        wallet_id: str,
+                        fund_id: Optional[str] = None,
+                        swap_pair_id: Optional[str] = None,
+                        is_internal_transfer: bool = False) -> DisposalEvent:
+        """Process a disposal (sell, swap out, withdraw)"""
+        if amount <= 0:
+            raise ValueError(f"Disposal amount must be positive, got {amount}")
+
+        fund = fund_id or self.fund_id
+        key = (wallet_id.lower(), asset)
+
+        if key not in self.lots or not self.lots[key]:
+            logger.warning(f"No lots found for {asset} in {wallet_id[:10]}...")
+            self.disposal_counter += 1
+            return DisposalEvent(
+                disposal_id=f"DISP_{self.disposal_counter:08d}",
+                disposal_date=date,
+                disposal_tx_hash=tx_hash,
+                asset=asset,
+                amount_disposed=amount,
+                proceeds_usd=proceeds_usd,
+                cost_basis_usd=Decimal(0),
+                gain_loss_usd=proceeds_usd,
+                holding_days=0,
+                is_long_term=False,
+                tax_treatment=TaxTreatment.TAXABLE_SALE.value,
+                lots_used=[],
+                wallet_id=wallet_id.lower(),
+                fund_id=fund,
+                swap_pair_id=swap_pair_id,
+                is_internal_transfer=is_internal_transfer
+            )
+
+        # Sort lots based on method
+        lots_list = list(self.lots[key])
+        if self.method == CostBasisMethod.LIFO:
+            lots_list.reverse()
+        elif self.method == CostBasisMethod.HIFO:
+            lots_list.sort(key=lambda x: x.cost_per_unit, reverse=True)
+
+        remaining = amount
+        total_cost = Decimal(0)
+        lots_used = []
+        lots_to_remove = []
+
+        for lot in lots_list:
+            if remaining <= 0:
+                break
+
+            amount_from_lot = min(lot.amount, remaining)
+            cost_from_lot = amount_from_lot * lot.cost_per_unit
+            normalized_date = _normalize_datetime(date)
+            holding_days = (normalized_date - lot.acquisition_date).days
+
+            lots_used.append({
+                'lot_id': lot.lot_id,
+                'amount': float(amount_from_lot),
+                'cost_basis': float(cost_from_lot),
+                'cost_per_unit': float(lot.cost_per_unit),
+                'acquisition_date': lot.acquisition_date.isoformat(),
+                'holding_days': holding_days,
+                'is_long_term': holding_days >= 365
+            })
+
+            total_cost += cost_from_lot
+            remaining -= amount_from_lot
+
+            if amount_from_lot >= lot.amount:
+                lots_to_remove.append(lot.lot_id)
+            else:
+                lot.amount -= amount_from_lot
+                lot.cost_basis_usd -= cost_from_lot
+
+        self.lots[key] = deque([lot for lot in self.lots[key] if lot.lot_id not in lots_to_remove])
+
+        gain_loss = proceeds_usd - total_cost
+
+        if is_internal_transfer:
+            tax_treatment = TaxTreatment.NON_TAXABLE.value
+            avg_holding_days = 0
+            is_long_term_result = False
+        else:
+            if lots_used:
+                total_days = sum(lot['holding_days'] * lot['amount'] for lot in lots_used)
+                disposed_amount = float(amount - remaining)
+                avg_holding_days = total_days / disposed_amount if disposed_amount > 0 else 0
+                is_long_term_result = avg_holding_days >= 365
+            else:
+                avg_holding_days = 0
+                is_long_term_result = False
+
+            if gain_loss >= 0:
+                tax_treatment = TaxTreatment.CAPITAL_GAIN_LONG.value if is_long_term_result else TaxTreatment.CAPITAL_GAIN_SHORT.value
+            else:
+                tax_treatment = TaxTreatment.CAPITAL_LOSS_LONG.value if is_long_term_result else TaxTreatment.CAPITAL_LOSS_SHORT.value
+
+        self.disposal_counter += 1
+
+        return DisposalEvent(
+            disposal_id=f"DISP_{self.disposal_counter:08d}",
+            disposal_date=date,
+            disposal_tx_hash=tx_hash,
+            asset=asset,
+            amount_disposed=amount - remaining,
+            proceeds_usd=proceeds_usd,
+            cost_basis_usd=total_cost,
+            gain_loss_usd=gain_loss,
+            holding_days=int(avg_holding_days) if lots_used else 0,
+            is_long_term=is_long_term_result,
+            tax_treatment=tax_treatment,
+            lots_used=lots_used,
+            wallet_id=wallet_id.lower(),
+            fund_id=fund,
+            swap_pair_id=swap_pair_id,
+            is_internal_transfer=is_internal_transfer
+        )
+
+    def get_position(self, wallet_id: str, asset: str) -> Optional[Dict]:
+        """Get current position for wallet/asset"""
+        key = (wallet_id.lower(), asset)
+        lots = self.lots.get(key)
+        if not lots:
+            return None
+
+        total_amount = sum(lot.amount for lot in lots)
+        total_cost = sum(lot.cost_basis_usd for lot in lots)
+        avg_cost = total_cost / total_amount if total_amount > 0 else Decimal(0)
+
+        return {
+            'wallet_id': wallet_id.lower(),
+            'asset': asset,
+            'amount': float(total_amount),
+            'cost_basis_usd': float(total_cost),
+            'average_cost': float(avg_cost),
+            'lot_count': len(lots)
+        }
+
+    def get_all_positions(self) -> pd.DataFrame:
+        """Get all positions as DataFrame"""
+        positions = []
+        for (wallet_id, asset), lots in self.lots.items():
+            if lots:
+                pos = self.get_position(wallet_id, asset)
+                if pos:
+                    positions.append(pos)
+        return pd.DataFrame(positions) if positions else pd.DataFrame()
+
+
+class SwapProcessor:
+    """
+    Process asset swaps/conversions for FIFO tracking.
+
+    A swap (WETH -> aWETH or aWETH -> WETH) is:
+    1. Disposal of from_asset (find cost basis, calc gain/loss)
+    2. Acquisition of to_asset (at fair market value)
+    """
+
+    # ETH-equivalent assets (use ETH price for valuation)
+    ETH_EQUIVALENTS = {'ETH', 'WETH', 'aWETH', 'stETH', 'wstETH', 'cbETH', 'rETH'}
+
+    def __init__(self, tracker: CostBasisTracker):
+        self.tracker = tracker
+
+    def process_swap(self,
+                    from_asset: str,
+                    from_amount: Decimal,
+                    to_asset: str,
+                    to_amount: Decimal,
+                    eth_price_usd: Decimal,
+                    date: datetime,
+                    tx_hash: str,
+                    wallet_id: str,
+                    fund_id: Optional[str] = None) -> Dict:
+        """
+        Process an asset swap/conversion.
+
+        Returns dict with disposal event, new lot, and gain/loss summary.
+        """
+        fund = fund_id or self.tracker.fund_id
+
+        # Calculate USD values
+        from_value_usd = from_amount * eth_price_usd if from_asset in self.ETH_EQUIVALENTS else from_amount * eth_price_usd
+        to_value_usd = to_amount * eth_price_usd if to_asset in self.ETH_EQUIVALENTS else to_amount * eth_price_usd
+
+        swap_pair_id = f"SWAP_{tx_hash[:16]}_{from_asset}_{to_asset}"
+
+        # 1. Dispose from_asset
+        disposal = self.tracker.process_disposal(
+            asset=from_asset,
+            amount=from_amount,
+            proceeds_usd=from_value_usd,
+            date=date,
+            tx_hash=tx_hash,
+            wallet_id=wallet_id,
+            fund_id=fund,
+            swap_pair_id=swap_pair_id
+        )
+
+        # 2. Acquire to_asset
+        new_lot = self.tracker.add_acquisition(
+            asset=to_asset,
+            amount=to_amount,
+            cost_usd=to_value_usd,
+            date=date,
+            tx_hash=tx_hash,
+            wallet_id=wallet_id,
+            fund_id=fund
+        )
+
+        return {
+            'swap_pair_id': swap_pair_id,
+            'disposal': disposal,
+            'acquisition': new_lot,
+            'from_asset': from_asset,
+            'from_amount': float(from_amount),
+            'to_asset': to_asset,
+            'to_amount': float(to_amount),
+            'gain_loss_usd': float(disposal.gain_loss_usd),
+            'tax_treatment': disposal.tax_treatment
+        }

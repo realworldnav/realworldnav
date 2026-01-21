@@ -63,6 +63,9 @@ class TransactionCategory(Enum):
     CONTRACT_CALL = "CONTRACT_CALL"
     UNKNOWN = "UNKNOWN"
 
+    # Spam/Phishing (filtered out, do not post)
+    SPAM = "SPAM"
+
 
 class PostingStatus(Enum):
     """Journal entry posting status for hybrid GL workflow"""
@@ -70,6 +73,7 @@ class PostingStatus(Enum):
     REVIEW_QUEUE = "review_queue" # Queue for manual review
     POSTED = "posted"             # Already posted to GL
     REJECTED = "rejected"         # Rejected by user
+    SPAM_FILTERED = "spam_filtered"  # Filtered as spam/phishing
 
 
 class TaxTreatment(Enum):
@@ -388,10 +392,16 @@ class DecodedTransaction:
     positions: Dict[int, LoanPosition] = field(default_factory=dict)
     raw_data: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    _posting_status_override: Optional[PostingStatus] = None  # For spam/special cases
 
     @property
     def is_success(self) -> bool:
         return self.status == "success"
+
+    @property
+    def is_spam(self) -> bool:
+        """Check if transaction was flagged as spam"""
+        return self.status == "spam" or self.category == TransactionCategory.SPAM
 
     @property
     def entries_balanced(self) -> bool:
@@ -400,6 +410,9 @@ class DecodedTransaction:
     @property
     def posting_status(self) -> PostingStatus:
         """Overall posting status based on all journal entries"""
+        # Check override first (for spam filtering, etc.)
+        if self._posting_status_override is not None:
+            return self._posting_status_override
         if not self.journal_entries:
             return PostingStatus.REVIEW_QUEUE
         statuses = {e.posting_status for e in self.journal_entries}

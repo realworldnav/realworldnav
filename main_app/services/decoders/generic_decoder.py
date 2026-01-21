@@ -37,6 +37,29 @@ logger = logging.getLogger(__name__)
 WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".lower()
 USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".lower()
 USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7".lower()
+DAI_ADDRESS = "0x6B175474E89094C44Da98b954EesD94ac3C7".lower()
+
+# Known tokens with decimals (for proper amount conversion)
+KNOWN_TOKENS = {
+    WETH_ADDRESS: {"symbol": "WETH", "decimals": 18},
+    USDC_ADDRESS: {"symbol": "USDC", "decimals": 6},
+    USDT_ADDRESS: {"symbol": "USDT", "decimals": 6},
+    "0x6b175474e89094c44da98b954eedeac495271d0f": {"symbol": "DAI", "decimals": 18},
+}
+
+# DeFi vault/protocol contracts - transfers to/from these are INVESTMENTS, not income/expense
+DEFI_VAULT_CONTRACTS = {
+    "0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5c": "Morpho USDC Vault",
+    "0x72e95b8931767c79ba4eee721354d6e99a61d004": "Morpho Vault Share Token",
+    "0x4e4bd0893d46c10f8fd2d7ac0f4c8b96c0e95f3a": "Morpho",
+    "0x8164cc65827dcfe994ab23944cbc90e0aa80bfcb": "Morpho Vault",
+    "0xbeeef33c0ec2a7a3a1f6cf88d4f2e7b3b8a8b6a8": "Aave aUSDC",
+    "0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8": "Aave aWETH",
+}
+
+# Minimum amount thresholds to filter dust
+MIN_AMOUNT_ETH = Decimal("0.00001")  # 10 gwei
+MIN_AMOUNT_USDC = Decimal("0.01")     # 1 cent
 
 # Function selectors
 WETH_SELECTORS = {
@@ -56,6 +79,7 @@ TOKEN_DECIMALS = {
     "ETH": 18,
     "USDC": 6,
     "USDT": 6,
+    "DAI": 18,
 }
 
 
@@ -543,6 +567,28 @@ class GenericDecoder(BaseDecoder):
         if is_to_fund:
             wallet_roles[to_address] = "recipient"
 
+        # Skip dust/zero-value ETH transfers
+        if value < MIN_AMOUNT_ETH:
+            logger.debug(f"Skipping dust ETH transfer: {value} ETH")
+            return DecodedTransaction(
+                status="success",
+                tx_hash=tx_hash,
+                platform=Platform.GENERIC,
+                category=TransactionCategory.ETH_TRANSFER,
+                block=tx.get('blockNumber', 0),
+                timestamp=timestamp,
+                eth_price=eth_price,
+                gas_used=receipt.get('gasUsed', 0),
+                gas_fee=gas_fee,
+                from_address=from_address,
+                to_address=to_address,
+                value=value,
+                function_name="transfer",
+                events=[],
+                journal_entries=[],  # No JEs for dust
+                wallet_roles=wallet_roles,
+            )
+
         # Create journal entry for the transfer
         if value > 0 and (is_from_fund or is_to_fund):
             entry = JournalEntry(
@@ -555,7 +601,7 @@ class GenericDecoder(BaseDecoder):
                 wallet_address=from_address if is_from_fund else to_address,
                 wallet_role="sender" if is_from_fund else "recipient",
                 eth_usd_price=eth_price,
-                posting_status=PostingStatus.AUTO_POST
+                posting_status=PostingStatus.REVIEW_QUEUE  # ETH transfers need review
             )
 
             if is_from_fund:
@@ -569,8 +615,8 @@ class GenericDecoder(BaseDecoder):
 
             journal_entries.append(entry)
 
-        # Gas entry
-        if gas_fee > 0 and is_from_fund:
+        # Gas entry - only if we had a meaningful transfer
+        if gas_fee > 0 and is_from_fund and journal_entries:
             gas_entry = JournalEntry(
                 entry_id=f"gas_{tx_hash[:8]}",
                 date=timestamp,
@@ -638,15 +684,16 @@ class GenericDecoder(BaseDecoder):
                         amount = int(log['data'].hex(), 16) if log.get('data') else 0
 
                         token_address = log.get('address', '').lower()
-                        if token_address == USDC_ADDRESS:
-                            token_symbol = "USDC"
-                            value = Decimal(amount) / Decimal(10**6)
-                        elif token_address == USDT_ADDRESS:
-                            token_symbol = "USDT"
-                            value = Decimal(amount) / Decimal(10**6)
+
+                        # Look up token info from KNOWN_TOKENS
+                        if token_address in KNOWN_TOKENS:
+                            token_info = KNOWN_TOKENS[token_address]
+                            token_symbol = token_info["symbol"]
+                            value = Decimal(amount) / Decimal(10**token_info["decimals"])
                         else:
-                            token_symbol = "TOKEN"
-                            value = Decimal(amount) / Decimal(10**18)
+                            # SKIP unknown tokens entirely - don't create events or JEs
+                            logger.debug(f"Skipping unknown token {token_address} - not in KNOWN_TOKENS")
+                            continue
 
                         events.append(DecodedEvent(
                             name="Transfer",
@@ -670,7 +717,7 @@ class GenericDecoder(BaseDecoder):
             wallet_roles[to_address] = "recipient"
 
         # Track ALL fund wallet transfers per token (handle multiple transfers in one tx)
-        # Key: (token_address, token_symbol), Value: {"in": amount, "out": amount, "wallet": address}
+        # Key: (token_address, token_symbol), Value: {"in": amount, "out": amount, "wallet": address, "counterparties": set}
         fund_flows = {}
 
         for evt in events:
@@ -680,36 +727,32 @@ class GenericDecoder(BaseDecoder):
                 evt_value = Decimal(evt.args.get('value', '0'))
                 evt_token_addr = evt.contract_address.lower() if evt.contract_address else ''
 
-                # Determine token info
-                if evt_token_addr == USDC_ADDRESS:
-                    evt_symbol = "USDC"
-                    evt_decimals = 6
-                elif evt_token_addr == USDT_ADDRESS:
-                    evt_symbol = "USDT"
-                    evt_decimals = 6
-                elif evt_token_addr == WETH_ADDRESS:
-                    evt_symbol = "WETH"
-                    evt_decimals = 18
-                else:
-                    evt_symbol = "TOKEN"
-                    evt_decimals = 18
+                # Skip if token not in KNOWN_TOKENS
+                if evt_token_addr not in KNOWN_TOKENS:
+                    continue
+
+                token_info = KNOWN_TOKENS[evt_token_addr]
+                evt_symbol = token_info["symbol"]
+                evt_decimals = token_info["decimals"]
 
                 evt_amount = evt_value / Decimal(10**evt_decimals)
                 flow_key = (evt_token_addr, evt_symbol)
 
                 if flow_key not in fund_flows:
-                    fund_flows[flow_key] = {"in": Decimal(0), "out": Decimal(0), "wallet": None}
+                    fund_flows[flow_key] = {"in": Decimal(0), "out": Decimal(0), "wallet": None, "counterparties": set()}
 
                 # Fund wallet received tokens
                 if self.is_fund_wallet(evt_to):
                     fund_flows[flow_key]["in"] += evt_amount
                     fund_flows[flow_key]["wallet"] = evt_to
+                    fund_flows[flow_key]["counterparties"].add(evt_from)
                     wallet_roles[evt_to] = "recipient"
 
                 # Fund wallet sent tokens
                 if self.is_fund_wallet(evt_from):
                     fund_flows[flow_key]["out"] += evt_amount
                     fund_flows[flow_key]["wallet"] = evt_from
+                    fund_flows[flow_key]["counterparties"].add(evt_to)
                     wallet_roles[evt_from] = "sender"
 
         # Create journal entries for net flows
@@ -717,29 +760,55 @@ class GenericDecoder(BaseDecoder):
             net_in = flow["in"]
             net_out = flow["out"]
             fund_wallet = flow["wallet"]
+            counterparties = flow["counterparties"]
 
             if fund_wallet is None:
                 continue
+
+            # Check if this is a DeFi vault interaction
+            is_vault_interaction = any(cp in DEFI_VAULT_CONTRACTS for cp in counterparties)
+
+            # Determine minimum threshold based on token
+            if token_sym in ["USDC", "USDT"]:
+                min_threshold = MIN_AMOUNT_USDC
+            else:
+                min_threshold = MIN_AMOUNT_ETH
 
             token_account = self.ACCOUNTS.get(f"{token_sym.lower()}_wallet", f"100.40 - {token_sym} Wallet")
 
             # Net inflow (received more than sent)
             if net_in > net_out:
                 net_amount = net_in - net_out
+
+                # Skip dust amounts
+                if net_amount < min_threshold:
+                    logger.debug(f"Skipping dust inflow: {net_amount} {token_sym}")
+                    continue
+
+                # Determine credit account based on source
+                if is_vault_interaction:
+                    # Vault withdrawal - reduction of investment, not income
+                    credit_account = "120.10 - DeFi Vault Investments"
+                    description = f"{token_sym} withdrawn from DeFi vault: {net_amount:.6f}"
+                else:
+                    # Unknown source - use suspense account for review
+                    credit_account = "400.10 - Other Income"
+                    description = f"{token_sym} received: {net_amount:.6f}"
+
                 entry = JournalEntry(
                     entry_id=f"erc20_in_{tx_hash[:8]}_{token_sym}",
                     date=timestamp,
-                    description=f"{token_sym} received: {net_amount:.6f}",
+                    description=description,
                     tx_hash=tx_hash,
                     category=TransactionCategory.ERC20_TRANSFER,
                     platform=Platform.GENERIC,
                     wallet_address=fund_wallet,
                     wallet_role="recipient",
                     eth_usd_price=eth_price,
-                    posting_status=PostingStatus.AUTO_POST
+                    posting_status=PostingStatus.REVIEW_QUEUE if not is_vault_interaction else PostingStatus.AUTO_POST
                 )
                 entry.add_debit(token_account, net_amount, token_sym)
-                entry.add_credit("400.10 - Other Income", net_amount, token_sym)
+                entry.add_credit(credit_account, net_amount, token_sym)
                 journal_entries.append(entry)
                 value = net_amount
                 token_symbol = token_sym
@@ -747,26 +816,42 @@ class GenericDecoder(BaseDecoder):
             # Net outflow (sent more than received)
             elif net_out > net_in:
                 net_amount = net_out - net_in
+
+                # Skip dust amounts
+                if net_amount < min_threshold:
+                    logger.debug(f"Skipping dust outflow: {net_amount} {token_sym}")
+                    continue
+
+                # Determine debit account based on destination
+                if is_vault_interaction:
+                    # Vault deposit - investment, not expense
+                    debit_account = "120.10 - DeFi Vault Investments"
+                    description = f"{token_sym} deposited to DeFi vault: {net_amount:.6f}"
+                else:
+                    # Unknown destination - use suspense account for review
+                    debit_account = "600.30 - Other Expense"
+                    description = f"{token_sym} sent: {net_amount:.6f}"
+
                 entry = JournalEntry(
                     entry_id=f"erc20_out_{tx_hash[:8]}_{token_sym}",
                     date=timestamp,
-                    description=f"{token_sym} sent: {net_amount:.6f}",
+                    description=description,
                     tx_hash=tx_hash,
                     category=TransactionCategory.ERC20_TRANSFER,
                     platform=Platform.GENERIC,
                     wallet_address=fund_wallet,
                     wallet_role="sender",
                     eth_usd_price=eth_price,
-                    posting_status=PostingStatus.AUTO_POST
+                    posting_status=PostingStatus.REVIEW_QUEUE if not is_vault_interaction else PostingStatus.AUTO_POST
                 )
-                entry.add_debit("600.30 - Other Expense", net_amount, token_sym)
+                entry.add_debit(debit_account, net_amount, token_sym)
                 entry.add_credit(token_account, net_amount, token_sym)
                 journal_entries.append(entry)
                 value = net_amount
                 token_symbol = token_sym
 
-        # Gas entry
-        if gas_fee > 0 and is_from_fund:
+        # Gas entry - only if we had meaningful transfers
+        if gas_fee > 0 and is_from_fund and journal_entries:
             gas_entry = JournalEntry(
                 entry_id=f"gas_{tx_hash[:8]}",
                 date=timestamp,
