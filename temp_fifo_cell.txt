@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "C:\Users\charl\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 16696-16697: character maps to <undefined>

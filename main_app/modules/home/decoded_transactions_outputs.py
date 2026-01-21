@@ -317,12 +317,20 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                 ui.card_header(
                     ui.div(
                         ui.span("Transaction Summary", class_="fw-semibold"),
-                        ui.a(
-                            ui.span(class_="bi bi-box-arrow-up-right me-1"),
-                            "View on Etherscan",
-                            href=etherscan_url,
-                            target="_blank",
-                            class_="btn btn-sm btn-outline-primary ms-auto"
+                        ui.div(
+                            ui.a(
+                                ui.span(class_="bi bi-box-arrow-up-right me-1"),
+                                "View on Etherscan",
+                                href=etherscan_url,
+                                target="_blank",
+                                class_="btn btn-sm btn-outline-primary"
+                            ),
+                            ui.input_action_button(
+                                "ask_claude_code_btn",
+                                ui.span(ui.HTML('<i class="bi bi-terminal"></i>'), " Ask Claude Code"),
+                                class_="btn btn-outline-info btn-sm ms-2"
+                            ),
+                            class_="ms-auto"
                         ),
                         class_="d-flex align-items-center w-100"
                     )
@@ -503,6 +511,57 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                     easy_close=True,
                 )
             )
+
+    @reactive.effect
+    @reactive.event(input.ask_claude_code_btn)
+    def handle_ask_claude_code():
+        """Launch Claude Code with transaction context for AI-assisted analysis"""
+        tx_hash = selected_tx_hash.get()
+        if not tx_hash:
+            ui.notification_show("No transaction selected", type="warning")
+            return
+
+        # Get transaction from registry
+        registry = decoder_registry_value.get()
+        tx_data = None
+
+        if registry and registry.decoded_cache:
+            for cached_tx in registry.decoded_cache.values():
+                if cached_tx.tx_hash == tx_hash:
+                    tx_data = cached_tx.to_dict()
+                    break
+
+        # Fallback to legacy cache
+        if not tx_data and decoded_tx_cache_value:
+            legacy_cache = decoded_tx_cache_value.get()
+            if legacy_cache and tx_hash in legacy_cache:
+                cached = legacy_cache[tx_hash]
+                tx_data = cached if isinstance(cached, dict) else cached.to_dict()
+
+        if not tx_data:
+            ui.notification_show("Transaction not found in cache", type="error")
+            return
+
+        # Launch Claude Code
+        try:
+            from ...services.claude_code_launcher import launch_claude_code_analysis
+
+            success = launch_claude_code_analysis(tx_data, tx_hash)
+
+            if success:
+                ui.notification_show(
+                    "Claude Code launched! Check your terminal window.",
+                    type="success",
+                    duration=5
+                )
+            else:
+                ui.notification_show(
+                    "Failed to launch Claude Code. Is it installed?",
+                    type="error"
+                )
+        except Exception as e:
+            logger.error(f"Error launching Claude Code: {e}")
+            ui.notification_show(f"Error: {str(e)}", type="error")
 
     @reactive.effect
     @reactive.event(input.post_all_auto)

@@ -1,0 +1,59 @@
+def instantiate_v2_contract(w3: Web3) -> Any:
+def safe_int(value: Any, default: int = 0) -> int:
+def safe_address(value: Any) -> str:
+def to_checksum(address: str) -> Optional[str]:
+def get_currency_info(principal_address: str) -> Dict[str, Any]:
+def get_account_suffix(cryptocurrency: str) -> str:
+def calculate_interest(
+def calculate_tranche_interest(
+def from_tuple(cls, data: tuple, is_v2: bool = False) -> 'Tranche':
+def from_dict(cls, data: dict) -> 'Tranche':
+def to_dict(self) -> Dict:
+def from_tuple(cls, data: tuple, is_v2: bool = False) -> 'Loan':
+def from_dict(cls, data, is_v2: bool = False) -> 'Loan':
+def to_dict(self) -> Dict:
+def due_date(self) -> datetime:
+def cryptocurrency(self) -> str:
+def decimals(self) -> int:
+def __init__(
+def _is_v2_contract(self, address: str) -> bool:
+def _get_block_timestamp(self, block_number: int) -> datetime:
+def _get_block_timestamp_int(self, block_number: int) -> int:
+def decode_transaction(self, tx_hash: str) -> List[DecodedGondiEvent]:
+def _unwrap_multicall_for_loan(
+def _extract_loans_from_input(
+def _decode_event(
+def _parse_loan_from_event(self, loan_data: Any, is_v2: bool = False) -> Loan:
+def _scan_transfer_events_for_proceeds(
+def decode_batch(
+def __init__(
+def _get_wallet_info(self, address: str) -> Dict:
+def _get_fund_id(self, address: str) -> str:
+def _build_common_metadata(
+def generate_loan_emitted_entries(
+def generate_loan_repaid_entries(
+def generate_loan_refinanced_entries(
+def generate_loan_foreclosed_entries(
+def generate_loan_liquidated_entries(
+def generate_interest_accruals(
+def _generate_tranche_interest_accruals(
+def _generate_borrower_interest_accruals(
+def detect_loan_terminations(
+def calculate_reversal_fraction(
+def generate_accrual_reversals(
+def _create_full_reversal_v160(
+def _create_partial_reversal_v160(
+def _create_partial_reversal(
+def _create_full_reversal(
+def validate_accrual_reversal_integrity(
+def validate_accrual_interest_integrity(
+def process_events(
+def __init__(
+def process_transactions(
+def get_decoded_events(
+def standardize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def convert_to_human_readable(df: pd.DataFrame, inplace: bool = False) -> pd.Dat
+def get_divisor(crypto: str) -> Decimal:
+def get_divisor(crypto: str) -> Decimal:
+def format_journal_entries(df: pd.DataFrame) -> pd.DataFrame:
+def print_journal_summary(results: Dict[str, pd.DataFrame]):

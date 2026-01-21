@@ -1,0 +1,278 @@
+=== Cell 715 ===
+# ============================================================
+# REAL WORLD NAV — GENERIC DECODING → ACCOUNTING PIPELINE
+# ============================================================
+# Raw CSV → DecodedTransaction → OnchainEvent → EconomicEvent
+#          → JournalEntryLine (journal_entries.csv)
+# ============================================================
+
+import os
+import json
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
+from decimal import Decimal, getcontext
+from datetime import datetime
+
+import pandas as pd
+from tqdm.auto import tqdm
+from web3 import Web3
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Set high precision for money
+getcontext().prec = 28
+
+# ------------------------------------------------------------
+# 0. USER CONFIG
+# ------------------------------------------------------------
+
+# Your historical CSV (update if your path is different)
+HISTORICAL_FILE = (
+    "/content/drive/MyDrive/Drip_Capital/accounting_records/cache_v1/historical_20240709_20250930_fully_linked_final_ETH_USD.csv"
+)
+
+# Where to store per-tx decoded JSON
+DECODED_CACHE_DIR = (
+    "/content/drive/MyDrive/Drip_Capital/accounting_records/20240709_20250930/decoded_cache"
+)
+os.makedirs(DECODED_CACHE_DIR, exist_ok=True)
+
+# Where to write final journal entries
+JOURNAL_ENTRIES_OUT = (
+    "/content/drive/MyDrive/Drip_Capital/accounting_records/20240709_20250930/"
+    "journal_entries_template.csv"
+)
+
+# RPC endpoints (put your real keys)
+#INFURA_API_KEY = "YOUR_INFURA_KEY_HERE"  # <-- REPLACE
+INFURA_URL  = f"https://mainnet.infura.io/v3/{INFURA_API_KEY}"
+ALCHEMY_URL = f"https://eth-mainnet.g.alchemy.com/v2/mmhv6R8fVVR6JnSoHSHD3KRsAWxuTPJV"  # <-- REPLACE
+
+w3_infura = Web3(Web3.HTTPProvider(INFURA_URL))
+w3_alchemy = Web3(Web3.HTTPProvider(ALCHEMY_URL))
+
+assert w3_infura.is_connected(),  "Infura not connected"
+assert w3_alchemy.is_connected(), "Alchemy not connected"
+
+# ERC20 Transfer topic (no 0x because we used .hex() earlier)
+ERC20_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+BLUR_EVENT_SIGS = {
+    # Loan originated (old & new)
+    "0x3f46e04eeebf1f650ed12c743bbef88b9aa5f3d9952b69eb614631beb3db0f74": "LOAN_OFFER_TAKEN",
+    "0xa80d9c4ae87df18eafb281daba3a0990353d363df23883228c166a4630bf8c29": "LOAN_STARTED",
+
+    # Refinance existing loan
+    "0xf11b7c4df4760a57232ece2b2043614d00f90e1aaff42ebc37f450b7b26eaa2d": "REFINANCE",
+
+    # Repayment
+    "0x9566e7e0c79fd1f3e2961abe6a4f13569c822ab15aeaa87b8fbdd7e5d142e507": "LOAN_REPAID",
+
+    # Collateral seizure
+    "0xe787db5c0bf2d6417382eef52c5f59c2e39f8a61f5bf299c24c45ea1ab696648": "SEIZE_COLLATERAL",
+
+    # Auction cycle
+    "0xf033b05f39b1e2a543bd5e9b2f3c23fee43c1430e9fcb2d80d790c5c442122d3": "START_AUCTION",
+    "0xc6adef0b9b0b14c9d87f69760867a82915ce3dd258808360835b22bc95e3e63c": "END_AUCTION",
+}
+
+
+# ------------------------------------------------------------
+# 1. LOAD HISTORICAL CSV + TX → TIMESTAMP MAPPING
+# -----
+
+=== Cell 1281 ===
+"""
+Gondi LoanFacet Decoder - Complete One-Shot Solution
+=====================================================
+
+Decodes Gondi NFT lending events and generates GAAP-compliant journal entries.
+Supports multi-tranche loans with per-tranche accounting.
+Supports multiple currencies (WETH, USDC, etc.) based on loan.principalAddress.
+Supports both LENDER and BORROWER perspectives for fund wallets.
+
+Events Handled:
+- LoanEmitted: New loan origination
+- LoanRepaid: Loan repayment by borrower
+- LoanRefinanced: Refinancing with existing lender (treated as payoff + new loan)
+- LoanRefinancedFromNewOffers: Refinancing with new lenders (treated as payoff + new loan)
+- LoanForeclosed: Single-tranche foreclosure (NFT to lender)
+- LoanLiquidated: Multi-tranche liquidation (auction proceeds)
+- LoanSentToLiquidator: Intermediate state (flag only)
+
+Interest Accrual Lifecycle (v1.3.0):
+- Accruals are estimates based on contractual loan terms (full duration)
+- Early termination events are detected (repay, foreclose, liquidate, refinance)
+- Exact 1:1 reversals are generated for any accruals after termination date
+- Original accruals remain immutable in the ledger (audit trail)
+- Net effect: Accrued Interest = (Payoff Amount - Principal)
+
+Output columns use generic names (debit, credit, principal, payoff_amount) in wei.
+Post-processing converts to debit_crypto, credit_crypto with proper decimal handling.
+
+Account Names:
+- LENDER: loan_receivable_*, interest_receivable_*, interest_income_*
+- BORROWER: note_payable_*, interest_payable_*, interest_expense_*
+- CASH: deemed_cash_usd (always, regardless of crypto)
+
+Author: Real World NAV
+Version: 1.6.0 - Canonical accrual grid with exact row-by-row reversals
+
+CHANGELOG:
+v1.6.0 - CRITICAL REWRITE: Canonical Accrual Grid Model
+
+       CONCEPTUAL MODEL:
+       - At loan inception, generate FULL CONTRACTUAL accruals (loan_start → loan_due_date)
+       - Accrual grid is IMMUTABLE - serves as source of truth
+       - On early termination, reverse EXACTLY what was not economically earned
+       - Reversals reference ORIGINAL accrual rows by identity (not recomputation)
+
+       CRITICAL INVARIANT (Must Always Hold):
+           SUM(accruals) - SUM(reversals) = interest earned to termination (exact)
+           No exceptions. No tolerances. No drift.
+
+       ACCRUAL GRID STRUCTURE:
+       - One row per day bucket (timestamp at 23:59:59 UTC)
+       - Partial first day: loan_start → 23:59:59
+       - Full intermediate days: 00:00:00 → 23:59:59
+       - Partial last day: 00:00:00 → loan_due_date
+       - Each row has: accrual_start_ts, accrual_end_ts, accrual_ts, seconds_in_row
+
+       REVERSAL RULES:
+       - Fully unearned rows (accrual_start >= termination_ts):
+         → 100% reversal with SAME timestamp as original row
+       - Partially earned row (accrual_start < termination_ts < accrual_end):
+         → Partial reversal: original × (unearned_seconds / total_seconds)
+         → JE timestamp = termination_ts (THE EXCEPTION)
+       - 
+
+=== Cell 1283 ===
+"""
+Gondi LoanFacet Decoder - Complete One-Shot Solution
+=====================================================
+
+Decodes Gondi NFT lending events and generates GAAP-compliant journal entries.
+Supports multi-tranche loans with per-tranche accounting.
+Supports multiple currencies (WETH, USDC, etc.) based on loan.principalAddress.
+Supports both LENDER and BORROWER perspectives for fund wallets.
+
+Events Handled:
+- LoanEmitted: New loan origination
+- LoanRepaid: Loan repayment by borrower
+- LoanRefinanced: Refinancing with existing lender (treated as payoff + new loan)
+- LoanRefinancedFromNewOffers: Refinancing with new lenders (treated as payoff + new loan)
+- LoanForeclosed: Single-tranche foreclosure (NFT to lender)
+- LoanLiquidated: Multi-tranche liquidation (auction proceeds)
+- LoanSentToLiquidator: Intermediate state (flag only)
+
+Interest Accrual Lifecycle (v1.3.0):
+- Accruals are estimates based on contractual loan terms (full duration)
+- Early termination events are detected (repay, foreclose, liquidate, refinance)
+- Exact 1:1 reversals are generated for any accruals after termination date
+- Original accruals remain immutable in the ledger (audit trail)
+- Net effect: Accrued Interest = (Payoff Amount - Principal)
+
+Output columns use generic names (debit, credit, principal, payoff_amount) in wei.
+Post-processing converts to debit_crypto, credit_crypto with proper decimal handling.
+
+Account Names:
+- LENDER: loan_receivable_*, interest_receivable_*, interest_income_*
+- BORROWER: note_payable_*, interest_payable_*, interest_expense_*
+- CASH: deemed_cash_usd (always, regardless of crypto)
+
+Author: Real World NAV
+Version: 1.7.0 - V2 continuation payoff fallback (minimal patch to v1.6.0)
+
+CHANGELOG:
+v1.7.0 - V2 CONTINUATION PAYOFF FALLBACK
+
+       PROBLEM SOLVED:
+       V2/MultiSource refinance events have old_loan = None, which caused
+       the payoff loop to be skipped for continuing lenders. This broke
+       the deemed_cash netting and left books unbalanced.
+
+       ROOT CAUSE:
+       - v1.6.0 assumes: if old_loan exists → generate payoff entries
+       - V2 events: old_loan is None, but fund continues as lender
+       - Detection signal: tranche.loanId == event.old_loan_id
+
+       MINIMAL FIX (preserves archive payoff+origination model):
+       1. V2 continuation detection: tranche.loanId == old_loan_id
+       2. Generate inferred payoff entries for V2 continuations
+       3. In origination, set accruedInterest = 0 for V2 continuations
+          (interest was EARNED, not PURCHASED - settled in payoff leg)
+       4. Add cash reconciliation assertion (validation, not logic)
+       5. Track transfer_outflows for increased participation cases
+
+       KEY POLICY INVARIANT:
+       Event accruedInterest is NOT the source of truth for continuing lenders.
+       - For new lenders: accruedInterest = purchased interest (Dr interest_receivable)
+       - For continuing lenders: accruedInterest = earned interest (settled in payoff)
+       Interest receivable s
+
+=== Cell 1285 ===
+"""
+Gondi LoanFacet Decoder - Complete One-Shot Solution
+=====================================================
+
+Decodes Gondi NFT lending events and generates GAAP-compliant journal entries.
+Supports multi-tranche loans with per-tranche accounting.
+Supports multiple currencies (WETH, USDC, etc.) based on loan.principalAddress.
+Supports both LENDER and BORROWER perspectives for fund wallets.
+
+Events Handled:
+- LoanEmitted: New loan origination
+- LoanRepaid: Loan repayment by borrower
+- LoanRefinanced: Refinancing with existing lender (treated as payoff + new loan)
+- LoanRefinancedFromNewOffers: Refinancing with new lenders (treated as payoff + new loan)
+- LoanForeclosed: Single-tranche foreclosure (NFT to lender)
+- LoanLiquidated: Multi-tranche liquidation (auction proceeds)
+- LoanSentToLiquidator: Intermediate state (flag only)
+
+Interest Accrual Lifecycle (v1.3.0):
+- Accruals are estimates based on contractual loan terms (full duration)
+- Early termination events are detected (repay, foreclose, liquidate, refinance)
+- Exact 1:1 reversals are generated for any accruals after termination date
+- Original accruals remain immutable in the ledger (audit trail)
+- Net effect: Accrued Interest = (Payoff Amount - Principal)
+
+Output columns use generic names (debit, credit, principal, payoff_amount) in wei.
+Post-processing converts to debit_crypto, credit_crypto with proper decimal handling.
+
+Account Names:
+- LENDER: loan_receivable_*, interest_receivable_*, interest_income_*
+- BORROWER: note_payable_*, interest_payable_*, interest_expense_*
+- CASH: deemed_cash_usd (always, regardless of crypto)
+
+Author: Real World NAV
+Version: 1.7.1 - Critical continuation accounting fix (precise conditions)
+
+CHANGELOG:
+v1.7.1 - CRITICAL ACCOUNTING FIX: Continuation lender handling (precise)
+
+       THREE BUGS FIXED (with PRECISE CONDITIONS):
+
+       BUG #1: Case sensitivity in fund_tranches filtering
+       ------------------------------------------------
+       Root cause: fund_wallet_list contains lowercase addresses, but
+       t.lender from blockchain data could be checksummed (mixed case).
+       Result: event.fund_tranches was EMPTY for continuing lenders!
+       Fix: Use t.lender.lower() when checking membership.
+
+       BUG #2: Payoff used FULL amounts instead of DELTA for continuations
+       ------------------------------------------------
+       Condition: `new_tranche.loanId == event.old_loan_id`
+       This ensures we only apply delta-based logic when there's a TRUE
+       continuation (same lender, new tranche references old loan ID).
+
+       For TRUE CONTINUATIONS:
+         principal_paid = old_principal - new_principal
+         interest_settled = net_cash - principal_paid
+
+       For NON-CONTINUATIONS (full exit, new lender):
+         principal_paid = old_principal (full)
+         interest_settled = calculated_interest (full)
+
+       BUG #3: Origination entries for continuation lenders
+       ------------------------------------------------
+       Conditio
+

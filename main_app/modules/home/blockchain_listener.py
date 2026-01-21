@@ -782,6 +782,16 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 registry_init_attempts.set(0)
                 return
 
+            # Skip re-initialization if registry already exists with same fund
+            # This prevents clearing decoded_cache on reactive re-runs
+            existing_registry = decoder_registry.get()
+            if existing_registry is not None:
+                if existing_registry.fund_id == current_fund and len(existing_registry.fund_wallets) > 0:
+                    logger.debug(f"Registry already initialized for fund {current_fund}, skipping re-creation")
+                    return
+                else:
+                    logger.info(f"Fund changed from {existing_registry.fund_id} to {current_fund}, re-initializing registry")
+
             if wallet_df.empty:
                 logger.warning("No wallet data available")
                 return

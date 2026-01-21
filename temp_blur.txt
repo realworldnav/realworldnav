@@ -1,0 +1,49 @@
+Cell 2179:
+"""
+March 2025 Transaction Analysis
+================================
+
+Paste your 130 transaction hashes below and run this to identify:
+1. Which protocols are involved
+2. Which decoders you need
+3. Which contracts need investigation
+
+Copy this to Google Colab and run it.
+"""
+
+# ============================================================================
+# SETUP - Run this cell first
+# ============================================================================
+
+# Install required packages (if needed)
+# !pip install web3 pandas tqdm
+
+from web3 import Web3
+import pandas as pd
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+
+# Your Infura API Key
+INFURA_API_KEY = "02321aab179b4085b84cda11f9bffb8a"
+
+# Initialize Web3
+w3 = Web3(Web3.HTTPProvider(f"https://mainnet.infura.io/v3/{INFURA_API_KEY}"))
+
+print(f"✅ Connected to Ethereum: {w3.is_connected()}")
+print(f"📊 Current block: {w3.eth.block_number:,}")
+
+# ============================================================================
+# KNOWN PROTOCOL REGISTRY - Extensive list of known contracts
+# ============================================================================
+
+KNOWN_CONTRACTS = {
+    # NFT LENDING
+    "0xb81965ddfda3923f292a47a1be83ba3a36b5133": {"protocol": "X2Y2", "name": "LoanFacet", "category": "NFT_LENDING", "decoder": "x2y2_loanfacet_decoder"},
+    "0xa3ed5b592855635c1fbfe1f59486578050234964": {"protocol": "X2Y2", "name": "Event Contract", "category": "NFT_LENDING", "decoder": "x2y2_loanfacet_decoder"},
+    "0x29469395eaf6f95920e59f858042f0e28d98a20b": {"protocol": "Blur Blend", "name": "Blend", "category": "NFT_LENDING", "decoder": "blur_blend_decoder"},
+    "0x81b2f8fc75bab64a6b144aa6d2faa127b4fa7fd9": {"protocol": "Arcade", "name": "LoanCore", "category": "NFT_LENDING", "decoder": "arcade

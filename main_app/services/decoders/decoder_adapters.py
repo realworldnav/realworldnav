@@ -357,11 +357,17 @@ class GondiDecoderAdapter(BaseDecoder):
                     )
 
             if contracts:
+                logger.info(f"Gondi adapter loaded {len(contracts)} contracts:")
+                for addr, c in contracts.items():
+                    logger.info(f"  {addr}: {c.address}")
+                logger.info(f"Gondi adapter wallet_metadata has {len(self.wallet_metadata)} wallets")
                 self._notebook_decoder = GondiEventDecoder(
                     w3=self.w3,
                     contracts=contracts,
                     wallet_metadata=self.wallet_metadata
                 )
+                logger.info(f"GondiEventDecoder fund_wallet_list has {len(self._notebook_decoder.fund_wallet_list)} wallets")
+                logger.info(f"GondiEventDecoder contracts keys: {list(self._notebook_decoder.contracts.keys())}")
                 self._journal_generator = GondiJournalEntryGenerator(
                     wallet_metadata=self.wallet_metadata
                 )
@@ -395,10 +401,15 @@ class GondiDecoderAdapter(BaseDecoder):
         gas_fee = calculate_gas_fee(receipt, tx)
 
         if not self._notebook_decoder:
+            logger.warning(f"Gondi decoder not initialized for tx {tx_hash[:16]}")
             return self._create_basic_result(tx, receipt, block, eth_price, "Gondi decoder not initialized")
 
         try:
             events = self._notebook_decoder.decode_transaction(tx_hash)
+            logger.info(f"Gondi decoded {len(events) if events else 0} events for tx {tx_hash[:16]}")
+            if events:
+                for e in events:
+                    logger.info(f"  Event: {e.event_type}, fund_tranches={len(e.fund_tranches)}, old_fund_tranches={len(e.old_fund_tranches)}")
             category = self._determine_category(events)
             journal_entries = []
 
