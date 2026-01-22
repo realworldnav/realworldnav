@@ -308,8 +308,11 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
         from_friendly = _get_friendly_name(from_address)
         to_friendly = _get_friendly_name(to_address)
 
-        # Etherscan URL
-        etherscan_url = f"https://etherscan.io/tx/{decoded.get('tx_hash', '')}"
+        # Etherscan URL - ensure 0x prefix
+        tx_hash = decoded.get('tx_hash', '')
+        if tx_hash and not tx_hash.startswith('0x'):
+            tx_hash = f"0x{tx_hash}"
+        etherscan_url = f"https://etherscan.io/tx/{tx_hash}"
 
         return ui.div(
             # Transaction Summary

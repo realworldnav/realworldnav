@@ -471,6 +471,8 @@ class BaseDecoder(ABC):
     AUTO_POST_CATEGORIES = {
         TransactionCategory.LOAN_ORIGINATION,
         TransactionCategory.LOAN_REPAYMENT,
+        TransactionCategory.LOAN_REFINANCE,
+        TransactionCategory.INTEREST_ACCRUAL,
         TransactionCategory.ETH_TRANSFER,
         TransactionCategory.WETH_WRAP,
         TransactionCategory.WETH_UNWRAP,
@@ -478,7 +480,8 @@ class BaseDecoder(ABC):
     }
 
     # Max ETH value for auto-posting (configurable threshold)
-    MAX_AUTO_POST_ETH = Decimal("100")
+    # Set high for loan transactions which can be large
+    MAX_AUTO_POST_ETH = Decimal("1000")
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
         self.w3 = w3

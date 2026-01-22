@@ -852,6 +852,11 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             registry = DecoderRegistryClass(w3, fund_wallet_addresses, fund_id=current_fund)
             decoder_registry.set(registry)
             registry_init_attempts.set(0)  # Reset counter on success
+
+            # Clear local decoded cache to force fresh decoding with new registry
+            # This ensures old failed decodes (from before code fixes) are re-tried
+            decoded_tx_cache.set({})
+
             logger.info(f"Initialized DecoderRegistry with {len(fund_wallet_addresses)} wallets (all from mapper)")
 
         except Exception as e:

@@ -858,52 +858,30 @@ class GondiEventDecoder:
                     except Exception:
                         continue
 
-            # DEBUG: Log contract addresses we're looking for
-            print(f"[DEBUG] Looking for events from contracts: {list(self.contracts.keys())}")
-            log_addresses = set(log['address'].lower() for log in receipt['logs'])
-            print(f"[DEBUG] Transaction logs from addresses: {log_addresses}")
-            matching = log_addresses & set(self.contracts.keys())
-            print(f"[DEBUG] Matching contracts: {matching}")
-
             # First pass: decode events from logs that match specific contracts
             for log in receipt['logs']:
                 log_addr = log['address'].lower()
 
                 # Check if this log is from one of our Gondi contracts
                 if log_addr in self.contracts:
-                    # DEBUG: Show topic0 (event signature) for this log
-                    if log.get('topics'):
-                        print(f"[DEBUG] Log from {log_addr[:10]}... topic0: {log['topics'][0].hex() if hasattr(log['topics'][0], 'hex') else log['topics'][0]}")
                     contract = self.contracts[log_addr]
-                    print(f"[DEBUG] Got contract from self.contracts: {contract.address}")
-                    print(f"[DEBUG] Contract has events: {[e for e in dir(contract.events) if not e.startswith('_')][:5]}...")
                     is_v2 = self._is_v2_contract(log_addr)
 
                     # Try to decode each event type
-                    print(f"[DEBUG] Trying {len(list(GondiEventType))} event types for log from {log_addr[:10]}...")
                     for event_type in GondiEventType:
                         try:
                             event_obj = getattr(contract.events, event_type.value, None)
                             if event_obj is None:
-                                print(f"[DEBUG]   Event {event_type.value} not in ABI")
                                 continue
-                            # DEBUG: Show expected signature
-                            try:
-                                expected_sig = event_obj.event_abi.get('name', 'unknown')
-                            except:
-                                expected_sig = event_type.value
 
                             # Use process_log for single log decoding (more reliable across web3.py versions)
                             try:
                                 decoded_log = event_obj.process_log(log)
-                                print(f"[DEBUG] process_log succeeded for {event_type.value}")
-                            except Exception as e:
-                                # Event signature doesn't match this log
-                                print(f"[DEBUG] process_log failed for {event_type.value}: {type(e).__name__}: {str(e)[:100]}")
+                            except Exception:
+                                # Event signature doesn't match this log - this is expected, continue to next event type
                                 continue
 
                             if decoded_log:
-                                print(f"[DEBUG] Found event {event_type.value} at logIndex {log['logIndex']}")
                                 decoded = self._decode_event(
                                     event_type.value,
                                     decoded_log,
@@ -916,16 +894,11 @@ class GondiEventDecoder:
                                     is_v2
                                 )
                                 if decoded:
-                                    print(f"[DEBUG] Successfully decoded {event_type.value}")
                                     decoded_events.append(decoded)
                                     decoded_log_indices.add(log['logIndex'])
-                                else:
-                                    print(f"[DEBUG] _decode_event returned None for {event_type.value}")
                                 break  # Found the event type for this log, move to next log
 
-                        except Exception as e:
-                            # Log all errors for debugging
-                            print(f"[DEBUG] Exception for {event_type.value}: {type(e).__name__}: {str(e)[:100]}")
+                        except Exception:
                             continue
 
             # Second pass: try all contracts for any Gondi-address logs we missed

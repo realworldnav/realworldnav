@@ -36,6 +36,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _normalize_tx_hash(tx: Dict) -> str:
+    """Extract and normalize transaction hash to always include 0x prefix."""
+    raw_hash = tx.get('hash', b'')
+    if isinstance(raw_hash, bytes):
+        hex_str = raw_hash.hex()
+    else:
+        hex_str = str(raw_hash)
+
+    # Remove any existing 0x prefix, then add it back
+    if hex_str.startswith('0x'):
+        return hex_str
+    return f"0x{hex_str}"
+
+
 # ============================================================================
 # PROXY DETECTION (from production notebook Cell 49)
 # ============================================================================
@@ -624,7 +638,7 @@ class DecoderRegistry:
 
         return DecodedTransaction(
             status="success",
-            tx_hash=tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', '')),
+            tx_hash=_normalize_tx_hash(tx),
             platform=Platform.GENERIC,
             category=TransactionCategory.CONTRACT_CALL,
             block=tx.get('blockNumber', 0),
@@ -648,7 +662,7 @@ class DecoderRegistry:
         """Create decoded result for spam/phishing transaction (not posted to GL)"""
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(dict(receipt), dict(tx))
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
 
         # Build spam details string
         reasons_str = ", ".join([r.value for r in spam_result.reasons])

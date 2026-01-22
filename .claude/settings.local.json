@@ -44,7 +44,9 @@
       "Bash(1 <<'PYEOF'\nimport warnings\nwarnings.filterwarnings\\('ignore'\\)\nimport os\nos.environ['PYTHONWARNINGS'] = 'ignore'\nimport logging\nfor name in logging.root.manager.loggerDict:\n    logging.getLogger\\(name\\).disabled = True\nlogging.disable\\(logging.CRITICAL\\)\n\nfrom main_app.s3_utils import load_COA_file\ncoa = load_COA_file\\(\\)\nprint\\('COA Accounts:'\\)\nfor _, row in coa.iterrows\\(\\):\n    print\\(f'{int\\(row[\"GL_Acct_Number\"]\\):>6} | {row[\"GL_Acct_Name\"]}'\\)\nPYEOF)",
       "Bash(tasklist:*)",
       "Bash(start /b python app.py)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(more:*)",
+      "Bash(del \"C:\\\\Users\\\\charl\\\\Documents\\\\GitHub\\\\realworldnav\\\\debug_decoder_integration.py\")"
     ],
     "deny": [],
     "ask": [],

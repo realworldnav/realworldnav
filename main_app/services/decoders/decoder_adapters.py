@@ -70,6 +70,20 @@ ZHARTA_CONTRACTS = {
 }
 
 
+def _normalize_tx_hash(tx: Dict) -> str:
+    """Extract and normalize transaction hash to always include 0x prefix."""
+    raw_hash = tx.get('hash', b'')
+    if isinstance(raw_hash, bytes):
+        hex_str = raw_hash.hex()
+    else:
+        hex_str = str(raw_hash)
+
+    # Remove any existing 0x prefix, then add it back
+    if hex_str.startswith('0x'):
+        return hex_str
+    return f"0x{hex_str}"
+
+
 def _build_wallet_metadata(fund_wallets: List[str]) -> Dict[str, Dict]:
     """Convert fund_wallets list to wallet_metadata dict expected by notebook decoders"""
     return {
@@ -162,7 +176,7 @@ class BlurDecoderAdapter(BaseDecoder):
         """Decode Blur transaction using notebook decoder"""
         self._load_abis()
 
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -300,7 +314,7 @@ class BlurDecoderAdapter(BaseDecoder):
     def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
                             eth_price: Decimal, error: str = None) -> DecodedTransaction:
         """Create basic result when decoding fails"""
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -396,7 +410,7 @@ class GondiDecoderAdapter(BaseDecoder):
         """Decode Gondi transaction using notebook decoder"""
         self._load_abis()
 
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -500,21 +514,28 @@ class GondiDecoderAdapter(BaseDecoder):
             first_row = rows[0]
             currency = first_row.get('cryptocurrency', 'ETH')
 
+            # Determine category and posting status
+            category = (TransactionCategory.LOAN_ORIGINATION if 'Emitted' in event else
+                        TransactionCategory.LOAN_REPAYMENT if 'Repaid' in event else
+                        TransactionCategory.LOAN_REFINANCE if 'Refinanced' in event else
+                        TransactionCategory.COLLATERAL_SEIZURE if 'Liquidated' in event else
+                        TransactionCategory.CONTRACT_CALL)
+
+            # Auto-post for known loan events, review queue for others
+            auto_post_events = {'LoanEmitted', 'LoanRepaid', 'LoanRefinanced', 'LoanRefinancedFromNewOffers'}
+            posting_status = PostingStatus.AUTO_POST if event in auto_post_events else PostingStatus.REVIEW_QUEUE
+
             entry = JournalEntry(
                 entry_id=f"gondi_{event}_{loan_id}_{uuid.uuid4().hex[:8]}",
                 date=first_row.get('date', datetime.now(timezone.utc)),
                 description=f"Gondi {event} - Loan #{loan_id}" if loan_id else f"Gondi {event}",
                 tx_hash=tx_hash,
-                category=TransactionCategory.LOAN_ORIGINATION if 'Emitted' in event else
-                         TransactionCategory.LOAN_REPAYMENT if 'Repaid' in event else
-                         TransactionCategory.LOAN_REFINANCE if 'Refinanced' in event else
-                         TransactionCategory.COLLATERAL_SEIZURE if 'Liquidated' in event else
-                         TransactionCategory.CONTRACT_CALL,
+                category=category,
                 platform=Platform.GONDI,
                 wallet_address=first_row.get('wallet_id', first_row.get('lender', '')),
                 wallet_role=first_row.get('fund_role', 'lender'),
                 eth_usd_price=Decimal(str(first_row.get('eth_price', 0))),
-                posting_status=PostingStatus.REVIEW_QUEUE
+                posting_status=posting_status
             )
 
             # Add debit/credit entries from each row
@@ -534,7 +555,7 @@ class GondiDecoderAdapter(BaseDecoder):
 
     def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
                             eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -620,7 +641,7 @@ class ArcadeDecoderAdapter(BaseDecoder):
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
         self._load_abis()
 
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -679,7 +700,7 @@ class ArcadeDecoderAdapter(BaseDecoder):
 
     def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
                             eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -753,7 +774,7 @@ class NFTfiDecoderAdapter(BaseDecoder):
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
         self._load_abis()
 
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -893,6 +914,10 @@ class NFTfiDecoderAdapter(BaseDecoder):
             else:
                 cat = TransactionCategory.CONTRACT_CALL
 
+            # Auto-post for known loan events, review queue for others
+            auto_post_events = {'LoanStarted', 'LoanRepaid', 'LoanLiquidated'}
+            posting_status = PostingStatus.AUTO_POST if any(e in event for e in auto_post_events) else PostingStatus.REVIEW_QUEUE
+
             entry = JournalEntry(
                 entry_id=f"nftfi_{event}_{loan_id}_{uuid.uuid4().hex[:8]}",
                 date=first_row.get('date', datetime.now(timezone.utc)),
@@ -903,7 +928,7 @@ class NFTfiDecoderAdapter(BaseDecoder):
                 wallet_address=first_row.get('wallet_id', first_row.get('lender', '')),
                 wallet_role=first_row.get('fund_role', 'lender'),
                 eth_usd_price=Decimal(str(first_row.get('eth_price', 0))),
-                posting_status=PostingStatus.REVIEW_QUEUE
+                posting_status=posting_status
             )
 
             # Add debit/credit entries from each row
@@ -923,7 +948,7 @@ class NFTfiDecoderAdapter(BaseDecoder):
 
     def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
                             eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -996,7 +1021,7 @@ class ZhartaDecoderAdapter(BaseDecoder):
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
         self._load_abis()
 
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
@@ -1053,7 +1078,7 @@ class ZhartaDecoderAdapter(BaseDecoder):
 
     def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
                             eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = tx.get('hash', b'').hex() if isinstance(tx.get('hash'), bytes) else str(tx.get('hash', ''))
+        tx_hash = _normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 

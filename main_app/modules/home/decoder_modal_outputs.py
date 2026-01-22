@@ -173,11 +173,11 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
                 )
             ),
 
-            # Etherscan link
+            # Etherscan link - ensure 0x prefix
             ui.div(
                 ui.a(
                     "View on Etherscan →",
-                    href=f"https://etherscan.io/tx/{result.get('tx_hash', '')}",
+                    href=f"https://etherscan.io/tx/{'0x' + result.get('tx_hash', '') if result.get('tx_hash', '') and not result.get('tx_hash', '').startswith('0x') else result.get('tx_hash', '')}",
                     target="_blank",
                     class_="btn btn-outline-primary"
                 ),
