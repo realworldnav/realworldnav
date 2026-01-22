@@ -785,6 +785,8 @@ class DecoderRegistry:
         transactions = list(self.decoded_cache.values())
         success_count = sum(1 for t in transactions if t.status == "success")
         error_count = sum(1 for t in transactions if t.status == "error")
+        spam_count = sum(1 for t in transactions if t.posting_status == PostingStatus.SPAM_FILTERED)
+        posted_count = sum(1 for t in transactions if t.posting_status == PostingStatus.POSTED)
 
         platform_counts = {}
         for t in transactions:
@@ -796,6 +798,8 @@ class DecoderRegistry:
             "error_count": error_count,
             "auto_post_ready": len(self.get_auto_post_ready()),
             "review_queue": len(self.get_review_queue()),
+            "spam_filtered": spam_count,
+            "posted": posted_count,
             "platforms": platform_counts,
             "decoders_loaded": list(self.decoders.keys()),
             "fifo_enabled": self.fifo_integrator is not None,

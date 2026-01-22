@@ -123,6 +123,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     decoded_tx_cache = reactive.value({})  # Cache of decoded transactions
     decoder_registry = reactive.value(None)  # New multi-platform decoder registry
     registry_init_attempts = reactive.value(0)  # Retry counter for Web3 initialization
+    decoded_refresh_trigger = reactive.value(0)  # Increment to force decoded transactions UI refresh
     MAX_REGISTRY_INIT_ATTEMPTS = 3  # Max retries before giving up
 
     # Register decoder modal outputs
@@ -130,7 +131,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
     # Register decoded transactions outputs (new tab)
     # Pass both registry and local cache for fallback when registry unavailable
-    register_decoded_transactions_outputs(output, input, session, decoder_registry, decoded_tx_cache)
+    register_decoded_transactions_outputs(output, input, session, decoder_registry, decoded_tx_cache, decoded_refresh_trigger)
 
     # Create wallet selector UI with friendly names filtered by fund
     @output
@@ -180,12 +181,8 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         # Add custom wallet option
         wallet_choices["custom"] = "+ Enter Custom Address..."
 
-        # Set default to specific wallet address, or fallback to first valid wallet
-        preferred_wallet = "0xF9B64dc47dbE8c75f6FFC573cbC7599404bfe5A7"
-        if preferred_wallet in wallet_choices:
-            default_selection = preferred_wallet
-        else:
-            default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom"]), "custom")
+        # Set default to first valid wallet in the list (not hardcoded)
+        default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom", "all_fund"]), "custom")
 
         return ui.div(
             ui.p(f"Fund: {current_fund}", class_="text-muted small mb-2"),
@@ -927,6 +924,8 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         if updated:
             decoded_tx_cache.set(current_cache)
+            # Trigger UI refresh for decoded transactions tab
+            decoded_refresh_trigger.set(decoded_refresh_trigger.get() + 1)
             # Log summary
             if decode_count > 0:
                 types_summary = ", ".join(f"{k}:{v}" for k, v in tx_types.items())
@@ -1115,7 +1114,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     @reactive.effect
     @reactive.event(input.refresh_data)
     def refresh_transactions():
-        """Manually refresh transaction data"""
+        """Manually refresh transaction data and clear decoded caches"""
         try:
             wallet = input.wallet_address() if hasattr(input, 'wallet_address') else get_blockchain_service().wallet_address
             limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
@@ -1123,6 +1122,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             # Re-initialize if wallet changed
             if wallet != get_blockchain_service().wallet_address:
                 get_blockchain_service().wallet_address = wallet
+
+            # Clear decoded transaction caches on refresh
+            decoded_tx_cache.set({})
+            registry = decoder_registry.get()
+            if registry and hasattr(registry, 'decoded_cache'):
+                registry.decoded_cache.clear()
+                logger.info("Cleared decoded transaction caches on refresh")
 
             # Fetch fresh data
             fresh_data = get_blockchain_service().fetch_historical_transactions(limit=limit)
@@ -1135,13 +1141,34 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             logger.error(f"Error refreshing transactions: {e}")
             error_message.set(f"Refresh error: {str(e)}")
 
-    # Handle wallet address change
+    # Track the last wallet to detect changes
+    last_wallet_selection = reactive.value(None)
+
+    # Handle wallet address change - use @reactive.effect without @reactive.event
+    # This pattern works better for dynamically rendered inputs
     @reactive.effect
-    @reactive.event(input.wallet_address, ignore_none=True)
     def wallet_changed():
         """Handle wallet address change"""
         try:
-            new_selection = input.wallet_address()
+            # Try to get the wallet address - may not exist yet if UI not rendered
+            try:
+                new_selection = input.wallet_address()
+            except:
+                return  # Input doesn't exist yet
+
+            if not new_selection:
+                return
+
+            # Check if this is actually a change
+            previous = last_wallet_selection.get()
+            if new_selection == previous:
+                return  # No change, skip
+
+            # Update tracked value
+            last_wallet_selection.set(new_selection)
+
+            current_wallet = get_blockchain_service().wallet_address
+            print(f"[WALLET] Selection changed: {new_selection[:10] if new_selection else None}... (current: {current_wallet[:10] if current_wallet else None}...)")
             logger.info(f"Wallet selection changed to: {new_selection}")
 
             # Handle special cases
@@ -1175,6 +1202,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 else:
                     logger.warning(f"Invalid wallet address: {new_selection}")
                     return
+
+            # Clear decoded transaction caches when switching wallets
+            decoded_tx_cache.set({})
+            registry = decoder_registry.get()
+            if registry and hasattr(registry, 'decoded_cache'):
+                registry.decoded_cache.clear()
+                logger.info("Cleared decoded transaction caches for wallet switch")
 
             # Fetch fresh data for the new wallet
             logger.info(f"Fetching transactions for: {get_blockchain_service().wallet_address}")

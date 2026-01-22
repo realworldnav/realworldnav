@@ -101,10 +101,10 @@ def decoded_transactions_ui():
                 theme="warning",
             ),
             ui.value_box(
-                "Platforms",
-                ui.output_text("decoded_platforms_count"),
-                showcase=ui.span(class_="bi bi-grid-fill"),
-                theme="info",
+                "Spam Filtered",
+                ui.output_text("decoded_spam_count"),
+                showcase=ui.span(class_="bi bi-shield-x"),
+                theme="secondary",
             ),
             col_widths=[3, 3, 3, 3]
         ),

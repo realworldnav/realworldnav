@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 CONTEXT_DIR = Path.home() / ".claude" / "realworldnav_context"
 
 # Reports directory (in project root for easy access)
-REPORTS_DIR = Path(__file__).parent.parent.parent / "decoder_reports"
+REPORTS_DIR = Path(__file__).parent.parent.parent / "claude_reports_for_improvement"
 
 
 def ensure_dirs():
@@ -67,36 +67,50 @@ def launch_claude_code_analysis(tx_data: Dict, tx_hash: str) -> bool:
         logger.error(f"Failed to write context file: {e}")
         return False
 
-    # Build the prompt for Claude Code
-    # Use single quotes in the prompt to avoid escaping issues
-    prompt = f"""Analyze this decoded blockchain transaction and verify the journal entries are correct.
+    # Get the project root directory
+    project_root = Path(__file__).parent.parent.parent
 
-Transaction context has been saved to: {context_file}
+    # Reports directory for saving analysis
+    reports_dir = project_root / "claude_reports_for_improvement"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build the prompt for Claude Code
+    prompt = f"""Read the transaction context file and analyze this blockchain transaction:
+
+Context file: {context_file}
 
 Please:
-1. Read the transaction context file using the Read tool
+1. Read the context file above using the Read tool
 2. Explain what happened on-chain in plain English
 3. Check if the journal entries correctly reflect the economic reality
 4. Identify any issues or discrepancies
 5. Suggest corrections if needed
 
-The transaction is from platform '{tx_data.get('platform', 'unknown')}' with category '{tx_data.get('category', 'unknown')}'.
+Platform: {tx_data.get('platform', 'unknown')}
+Category: {tx_data.get('category', 'unknown')}
+TX Hash: {tx_hash}
 
-If you find issues that need to be fixed in the decoder, let me know so I can save a report."""
+IMPORTANT: If you find issues that need to be fixed in the decoder, save a report to:
+{reports_dir}
 
-    # Get the project root directory
-    project_root = Path(__file__).parent.parent.parent
+Use filename format: {short_hash}_analysis.txt"""
 
     # Spawn Claude Code in new terminal (Windows)
     try:
-        # Escape the prompt for command line
-        # Using a temp file approach for complex prompts
-        prompt_file = CONTEXT_DIR / f"prompt_{short_hash}.txt"
-        with open(prompt_file, 'w', encoding='utf-8') as f:
-            f.write(prompt)
+        # Copy prompt to clipboard using Windows clip command
+        try:
+            process = subprocess.Popen(
+                ['clip'],
+                stdin=subprocess.PIPE,
+                shell=True
+            )
+            process.communicate(input=prompt.encode('utf-8'))
+            logger.info("Copied prompt to clipboard")
+        except Exception as clip_err:
+            logger.warning(f"Could not copy to clipboard: {clip_err}")
 
-        # Build the command - read prompt from file
-        cmd = f'start cmd /k "cd /d {project_root} && claude"'
+        # Launch Claude Code in interactive mode (no -p flag)
+        cmd = f'start cmd /k "cd /d {project_root} && echo Prompt copied to clipboard - press Ctrl+V to paste && claude"'
 
         subprocess.Popen(
             cmd,

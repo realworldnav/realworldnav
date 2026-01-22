@@ -522,8 +522,9 @@ class GondiDecoderAdapter(BaseDecoder):
                         TransactionCategory.CONTRACT_CALL)
 
             # Auto-post for known loan events, review queue for others
-            auto_post_events = {'LoanEmitted', 'LoanRepaid', 'LoanRefinanced', 'LoanRefinancedFromNewOffers'}
-            posting_status = PostingStatus.AUTO_POST if event in auto_post_events else PostingStatus.REVIEW_QUEUE
+            # Use substring matching since events can have suffixes like _payoff, _origination
+            auto_post_patterns = ['LoanEmitted', 'LoanRepaid', 'LoanRefinanced', 'LoanRefinancedFromNewOffers']
+            posting_status = PostingStatus.AUTO_POST if any(p in event for p in auto_post_patterns) else PostingStatus.REVIEW_QUEUE
 
             entry = JournalEntry(
                 entry_id=f"gondi_{event}_{loan_id}_{uuid.uuid4().hex[:8]}",

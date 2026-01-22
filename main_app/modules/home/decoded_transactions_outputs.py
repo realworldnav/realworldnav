@@ -62,7 +62,7 @@ def _get_unified_registry(decoder_registry_value, decoded_tx_cache_value):
     return None
 
 
-def register_decoded_transactions_outputs(output, input, session, decoder_registry_value, decoded_tx_cache_value=None):
+def register_decoded_transactions_outputs(output, input, session, decoder_registry_value, decoded_tx_cache_value=None, refresh_trigger_value=None):
     """
     Register server outputs for the Decoded Transactions tab.
 
@@ -72,6 +72,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
         session: Shiny session object
         decoder_registry_value: Reactive value containing DecoderRegistry instance
         decoded_tx_cache_value: Reactive value containing legacy decoded transactions cache (fallback)
+        refresh_trigger_value: Reactive value that triggers UI refresh when incremented
     """
 
     # =========================================================================
@@ -82,6 +83,10 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
     def filtered_decoded_transactions() -> List[Dict[str, Any]]:
         """Get filtered decoded transactions based on user selections"""
         transactions = []
+
+        # Read refresh trigger to establish dependency (forces re-calc when trigger changes)
+        if refresh_trigger_value:
+            _ = refresh_trigger_value.get()
 
         # Try to get from registry first
         registry = decoder_registry_value.get()
@@ -208,6 +213,20 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
         stats = decoded_stats()
         platforms = stats.get('platforms', {})
         return str(len([k for k, v in platforms.items() if v > 0]))
+
+    @output
+    @render.text
+    def decoded_spam_count():
+        """Spam filtered count"""
+        stats = decoded_stats()
+        return str(stats.get('spam_filtered', 0))
+
+    @output
+    @render.text
+    def decoded_posted_count():
+        """Already posted count"""
+        stats = decoded_stats()
+        return str(stats.get('posted', 0))
 
     # =========================================================================
     # CARD RENDERING

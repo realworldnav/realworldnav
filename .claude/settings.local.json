@@ -46,7 +46,8 @@
       "Bash(start /b python app.py)",
       "Bash(git push:*)",
       "Bash(more:*)",
-      "Bash(del \"C:\\\\Users\\\\charl\\\\Documents\\\\GitHub\\\\realworldnav\\\\debug_decoder_integration.py\")"
+      "Bash(del \"C:\\\\Users\\\\charl\\\\Documents\\\\GitHub\\\\realworldnav\\\\debug_decoder_integration.py\")",
+      "Bash(wmic process where \"ProcessId=47288\" delete)"
     ],
     "deny": [],
     "ask": [],
