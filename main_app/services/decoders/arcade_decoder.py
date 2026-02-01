@@ -59,13 +59,20 @@ getcontext().prec = 28
 # Module exports
 __all__ = [
     'ArcadeEventDecoder',
-    'ArcadeJournalGenerator',
+    'ArcadeJournalEntryGenerator',
+    'ArcadeJournalGenerator',  # Alias for backwards compatibility
     'DecodedArcadeEvent',
     'LoanData',
     'ArcadeEventType',
     'LoanState',
+    'ARCADE_LOANCORE',
     'ARCADE_ORIGINATION_CONTROLLER',
+    'ARCADE_ORIGINATION_CONTROLLER_V1',
+    'ARCADE_ORIGINATION_CONTROLLER_V2',
+    'ARCADE_ORIGINATION_CONTROLLER_V3',
     'ARCADE_REPAYMENT_CONTROLLER',
+    'ARCADE_REPAYMENT_CONTROLLER_LEGACY',
+    'ARCADE_EVENT_CONTRACTS',
     'PLATFORM',
     'get_token_info',
     'get_token_symbol',
@@ -77,8 +84,54 @@ __all__ = [
 # CONTRACT ADDRESSES (Arcade v3)
 # ============================================================================
 
-ARCADE_ORIGINATION_CONTROLLER = "0xB7BFcca7D7ff0f371867B770856FAc184B185878"
-ARCADE_REPAYMENT_CONTROLLER = "0x74241e1A9c021643289476426B9B70229Ab40D53"
+# ============================================================================
+# ARCADE CONTRACT ARCHITECTURE
+# ============================================================================
+# Arcade has multiple versions with different contract architectures:
+#
+# Version 1 (Legacy):
+#   - Single contract that is BOTH LoanCore and event emitter
+#   - getLoan() is called on the same contract that emits events
+#   - Address: 0x89bc08BA00f135d608bc335f6B33D7a9ABCC98aF
+#
+# Version 3 (Current):
+#   - Separate LoanCore (state), OriginationController, RepaymentController
+#   - getLoan() is called on LoanCore: 0x81b2F8Fc75Bab64A6b144aa6d2fAa127B4Fa7fD9
+#   - Events emitted from OriginationController/RepaymentController
+# ============================================================================
+
+# Arcade v1 - This contract is BOTH the LoanCore AND event emitter
+ARCADE_V1_LOANCORE = "0x89bc08BA00f135d608bc335f6B33D7a9ABCC98aF"
+
+# Arcade v3 - Separate contracts
+ARCADE_V3_LOANCORE = "0x81b2F8Fc75Bab64A6b144aa6d2fAa127B4Fa7fD9"
+ARCADE_V3_ORIGINATION_CONTROLLER = "0xB7BFcca7D7ff0f371867B770856FAc184B185878"
+ARCADE_V3_REPAYMENT_CONTROLLER = "0xB39dAb85FA05C381767Ff992cCDE4c94619993D4"
+
+# Legacy controller addresses (older deployments)
+ARCADE_REPAYMENT_CONTROLLER_LEGACY = "0x74241e1A9c021643289476426B9B70229Ab40D53"
+ARCADE_ORIGINATION_CONTROLLER_V2 = "0xB7b1bc9b44eB0D3e61b52550c85C29D7a43dB96c"
+
+# Mapping: event source contract -> LoanCore to use for getLoan()
+# This is CRITICAL for proper loan data enrichment
+ARCADE_LOANCORE_MAP = {
+    ARCADE_V1_LOANCORE.lower(): ARCADE_V1_LOANCORE,  # v1 uses same contract
+    ARCADE_V3_LOANCORE.lower(): ARCADE_V3_LOANCORE,  # v3 loancore
+    ARCADE_V3_ORIGINATION_CONTROLLER.lower(): ARCADE_V3_LOANCORE,  # v3 origination -> v3 loancore
+    ARCADE_V3_REPAYMENT_CONTROLLER.lower(): ARCADE_V3_LOANCORE,  # v3 repayment -> v3 loancore
+    ARCADE_REPAYMENT_CONTROLLER_LEGACY.lower(): ARCADE_V1_LOANCORE,  # legacy repay -> v1 loancore
+    ARCADE_ORIGINATION_CONTROLLER_V2.lower(): ARCADE_V1_LOANCORE,  # v2 -> v1 loancore (same)
+}
+
+# All Arcade contracts that emit loan events (used for log filtering)
+ARCADE_EVENT_CONTRACTS = set(ARCADE_LOANCORE_MAP.keys())
+
+# Legacy exports for backwards compatibility
+ARCADE_LOANCORE = ARCADE_V3_LOANCORE  # Default to v3
+ARCADE_ORIGINATION_CONTROLLER = ARCADE_V3_ORIGINATION_CONTROLLER
+ARCADE_ORIGINATION_CONTROLLER_V1 = ARCADE_V1_LOANCORE
+ARCADE_ORIGINATION_CONTROLLER_V3 = ARCADE_V3_ORIGINATION_CONTROLLER
+ARCADE_REPAYMENT_CONTROLLER = ARCADE_V3_REPAYMENT_CONTROLLER
 
 # Token Addresses
 WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
@@ -521,6 +574,13 @@ class ArcadeEventDecoder:
     """
     Decodes Arcade LoanCore events from transaction receipts.
 
+    IMPORTANT: Arcade's event architecture spans multiple contracts:
+    - LoanCore: Stores loan state (used for getLoan() calls)
+    - OriginationController (v1, v2, v3): Emits LoanStarted, LoanRolledOver
+    - RepaymentController: Emits LoanRepaid, LoanClaimed, ForceRepay
+
+    This decoder looks for events from ALL these contracts, not just LoanCore.
+
     Events are "lean" - most only contain loanId. We enrich via:
     1. getLoan(loanId) for loan terms and fee snapshot
     2. PromissoryNote.ownerOf(loanId) for lender/borrower addresses
@@ -548,29 +608,53 @@ class ArcadeEventDecoder:
             if str(info.get('category', '')).lower() == 'fund'
         ]
 
-        # Get LoanCore address from OriginationController
-        if loancore_address:
-            self.loancore_address = Web3.to_checksum_address(loancore_address)
-        else:
-            self.loancore_address = self._get_loancore_address()
+        # All contracts that emit Arcade loan events
+        self.event_contract_addresses = ARCADE_EVENT_CONTRACTS
 
-        # Initialize contracts
-        self.loancore_contract = w3.eth.contract(
+        # Create contracts for event decoding and loan data lookups
+        # Each event source maps to a specific LoanCore for getLoan() calls
+        self.event_contracts = {}  # For decoding events from logs
+        self.loancore_contracts = {}  # For getLoan() calls
+
+        for event_addr in self.event_contract_addresses:
+            try:
+                checksum_event_addr = Web3.to_checksum_address(event_addr)
+                self.event_contracts[event_addr] = w3.eth.contract(
+                    address=checksum_event_addr,
+                    abi=LOANCORE_ABI  # Events have same ABI across all contracts
+                )
+
+                # Get the corresponding LoanCore for this event source
+                loancore_addr = ARCADE_LOANCORE_MAP.get(event_addr)
+                if loancore_addr and loancore_addr.lower() not in self.loancore_contracts:
+                    checksum_lc = Web3.to_checksum_address(loancore_addr)
+                    self.loancore_contracts[loancore_addr.lower()] = w3.eth.contract(
+                        address=checksum_lc,
+                        abi=LOANCORE_ABI
+                    )
+            except Exception as e:
+                print(f"   [WARN] Could not create contract for {event_addr}: {e}")
+
+        # Default loancore (v3) for backwards compatibility
+        self.loancore_address = Web3.to_checksum_address(loancore_address) if loancore_address else Web3.to_checksum_address(ARCADE_V3_LOANCORE)
+        self.loancore_contract = self.loancore_contracts.get(self.loancore_address.lower()) or w3.eth.contract(
             address=self.loancore_address,
             abi=LOANCORE_ABI
         )
 
-        # Get note contracts
+        # Get note contracts - one per LoanCore (V1 and V3 have different notes)
         self.borrower_note = None
         self.lender_note = None
+        self.note_contracts = {}  # {loancore_addr: {"borrower": contract, "lender": contract}}
         self._init_note_contracts()
 
         # Caches
         self._block_cache: Dict[int, int] = {}
         self._loan_cache: Dict[int, LoanData] = {}
 
-        print(f"[OK] Arcade EventDecoder initialized")
+        print(f"[OK] Arcade EventDecoder initialized (multi-contract)")
         print(f"   LoanCore: {self.loancore_address}")
+        print(f"   Event contracts: {len(self.event_contracts)}")
         print(f"   Total wallets in metadata: {len(self.wallet_metadata)}")
         print(f"   Fund wallets (category='fund'): {len(self.fund_wallet_list)}")
 
@@ -588,23 +672,42 @@ class ArcadeEventDecoder:
             raise ValueError(f"Could not fetch LoanCore address: {e}")
 
     def _init_note_contracts(self):
-        """Initialize PromissoryNote contracts."""
-        try:
-            borrower_note_addr = self.loancore_contract.functions.borrowerNote().call()
-            lender_note_addr = self.loancore_contract.functions.lenderNote().call()
+        """Initialize PromissoryNote contracts for each LoanCore.
 
-            self.borrower_note = self.w3.eth.contract(
-                address=borrower_note_addr,
-                abi=PROMISSORY_NOTE_ABI
-            )
-            self.lender_note = self.w3.eth.contract(
-                address=lender_note_addr,
-                abi=PROMISSORY_NOTE_ABI
-            )
-            print(f"   BorrowerNote: {borrower_note_addr}")
-            print(f"   LenderNote: {lender_note_addr}")
-        except Exception as e:
-            print(f"[\!] Could not fetch note addresses: {e}")
+        V1 and V3 have different note contracts, so we need to track them separately.
+        """
+        # Initialize note contracts for each LoanCore
+        for loancore_addr, loancore in self.loancore_contracts.items():
+            try:
+                borrower_note_addr = loancore.functions.borrowerNote().call()
+                lender_note_addr = loancore.functions.lenderNote().call()
+
+                borrower_note = self.w3.eth.contract(
+                    address=borrower_note_addr,
+                    abi=PROMISSORY_NOTE_ABI
+                )
+                lender_note = self.w3.eth.contract(
+                    address=lender_note_addr,
+                    abi=PROMISSORY_NOTE_ABI
+                )
+
+                self.note_contracts[loancore_addr] = {
+                    "borrower": borrower_note,
+                    "lender": lender_note,
+                    "borrower_addr": borrower_note_addr,
+                    "lender_addr": lender_note_addr
+                }
+                print(f"   Notes for {loancore_addr[:20]}... BorrowerNote: {borrower_note_addr}, LenderNote: {lender_note_addr}")
+            except Exception as e:
+                print(f"[!] Could not fetch note addresses for {loancore_addr}: {e}")
+
+        # Set default note contracts (V3) for backwards compatibility
+        v3_loancore = ARCADE_V3_LOANCORE.lower()
+        if v3_loancore in self.note_contracts:
+            self.borrower_note = self.note_contracts[v3_loancore]["borrower"]
+            self.lender_note = self.note_contracts[v3_loancore]["lender"]
+            print(f"   BorrowerNote: {self.note_contracts[v3_loancore]['borrower_addr']}")
+            print(f"   LenderNote: {self.note_contracts[v3_loancore]['lender_addr']}")
 
     @lru_cache(maxsize=10000)
     def _get_block_timestamp(self, block_number: int) -> datetime:
@@ -612,34 +715,68 @@ class ArcadeEventDecoder:
         block = self.w3.eth.get_block(block_number)
         return datetime.fromtimestamp(block['timestamp'], tz=timezone.utc)
 
-    def _get_loan_data(self, loan_id: int, block_number: int = None) -> Optional[LoanData]:
+    def _get_loan_data(self, loan_id: int, block_number: int = None, source_contract: str = None) -> Optional[LoanData]:
         """
         Get loan data from contract with caching.
 
+        Args:
+            loan_id: The loan ID to fetch
+            block_number: Block number for historical state (optional)
+            source_contract: The contract that emitted the event (used to determine correct LoanCore)
+
         Note: For closed loans, state will be Repaid/Defaulted but terms are preserved.
         """
-        cache_key = loan_id
+        # Determine which LoanCore to use based on source contract
+        if source_contract:
+            loancore_addr = ARCADE_LOANCORE_MAP.get(source_contract.lower())
+            loancore = self.loancore_contracts.get(loancore_addr.lower()) if loancore_addr else self.loancore_contract
+        else:
+            loancore = self.loancore_contract
+
+        # Use cache key that includes the loancore address
+        cache_key = (loan_id, loancore.address.lower())
         if cache_key in self._loan_cache:
             return self._loan_cache[cache_key]
 
         try:
             # Try to get historical state if block provided
             if block_number:
-                raw_data = self.loancore_contract.functions.getLoan(loan_id).call(
+                raw_data = loancore.functions.getLoan(loan_id).call(
                     block_identifier=block_number
                 )
             else:
-                raw_data = self.loancore_contract.functions.getLoan(loan_id).call()
+                raw_data = loancore.functions.getLoan(loan_id).call()
 
             loan_data = LoanData.from_tuple(raw_data)
             self._loan_cache[cache_key] = loan_data
             return loan_data
         except Exception as e:
-            print(f"[\!] Could not fetch loan {loan_id}: {e}")
+            print(f"[!] Could not fetch loan {loan_id} from {loancore.address}: {e}")
             return None
 
-    def _get_note_owner(self, note_contract, loan_id: int, block_number: int = None) -> Optional[str]:
-        """Get owner of a promissory note (may fail for burned notes)."""
+    def _get_note_owner(self, note_type: str, loan_id: int, block_number: int = None, source_contract: str = None) -> Optional[str]:
+        """Get owner of a promissory note (may fail for burned notes).
+
+        Args:
+            note_type: "lender" or "borrower"
+            loan_id: The loan ID to look up
+            block_number: Block number for historical state (optional)
+            source_contract: The contract that emitted the event (used to determine correct LoanCore's notes)
+
+        Note: V1 and V3 have different note contracts, so we must use the correct one.
+        """
+        # Determine which LoanCore's notes to use
+        if source_contract:
+            loancore_addr = ARCADE_LOANCORE_MAP.get(source_contract.lower())
+            if loancore_addr and loancore_addr.lower() in self.note_contracts:
+                note_contract = self.note_contracts[loancore_addr.lower()].get(note_type)
+            else:
+                # Fallback to default notes
+                note_contract = self.lender_note if note_type == "lender" else self.borrower_note
+        else:
+            # Use default notes
+            note_contract = self.lender_note if note_type == "lender" else self.borrower_note
+
         if not note_contract:
             return None
         try:
@@ -659,8 +796,13 @@ class ArcadeEventDecoder:
         """
         Decode all relevant events from a transaction.
 
+        IMPORTANT: Events can come from multiple Arcade contracts:
+        - OriginationController (v1, v2, v3): LoanStarted, LoanRolledOver
+        - RepaymentController: LoanRepaid, LoanClaimed, ForceRepay
+        - LoanCore: NoteRedeemed (and historical events)
+
         For each event:
-        1. Parse event data
+        1. Parse event data from ANY Arcade contract
         2. Enrich with loan terms from getLoan()
         3. Identify lender/borrower from event or notes
         4. Calculate derived fields (interest, fees, due date)
@@ -671,7 +813,7 @@ class ArcadeEventDecoder:
         try:
             receipt = self.w3.eth.get_transaction_receipt(tx_hash)
         except Exception as e:
-            print(f"[\!] Could not fetch receipt for {tx_hash}: {e}")
+            print(f"[!] Could not fetch receipt for {tx_hash}: {e}")
             return []
 
         block_number = receipt['blockNumber']
@@ -681,9 +823,17 @@ class ArcadeEventDecoder:
 
         # Process each log
         for log in receipt['logs']:
-            # Check if log is from LoanCore
-            if log['address'].lower() != self.loancore_address.lower():
+            log_address = log['address'].lower()
+
+            # Check if log is from ANY Arcade event contract
+            if log_address not in self.event_contract_addresses:
                 continue
+
+            # Get the appropriate contract for this log
+            contract = self.event_contracts.get(log_address)
+            if not contract:
+                # Fallback to loancore contract (same ABI)
+                contract = self.loancore_contract
 
             # Try to match each event type
             for event_name in relevant_events:
@@ -691,12 +841,13 @@ class ArcadeEventDecoder:
                     continue
 
                 try:
-                    event = getattr(self.loancore_contract.events, event_name)()
+                    event = getattr(contract.events, event_name)()
                     decoded = event.process_log(log)
 
-                    # Successfully decoded - process it
+                    # Successfully decoded - process it with source contract for proper LoanCore lookup
                     event_dict = self._process_decoded_event(
-                        decoded, event_name, tx_hash, block_number, tx_datetime
+                        decoded, event_name, tx_hash, block_number, tx_datetime,
+                        source_contract=log_address
                     )
                     if event_dict:
                         decoded_events.append(event_dict)
@@ -713,8 +864,13 @@ class ArcadeEventDecoder:
         tx_hash: str,
         block_number: int,
         tx_datetime: datetime,
+        source_contract: str = None,
     ) -> Optional[Dict]:
-        """Process a decoded event and enrich with loan data."""
+        """Process a decoded event and enrich with loan data.
+
+        Args:
+            source_contract: The contract that emitted this event (used to determine correct LoanCore)
+        """
         args = dict(decoded['args'])
 
         event_dict = {
@@ -723,6 +879,7 @@ class ArcadeEventDecoder:
             'blockNumber': block_number,
             'logIndex': decoded['logIndex'],
             'transaction_datetime': tx_datetime,
+            'source_contract': source_contract,
         }
 
         # Extract loan IDs based on event type
@@ -753,9 +910,9 @@ class ArcadeEventDecoder:
         # For LoanClaimed/LoanRepaid, get loan data at block BEFORE (state changes during tx)
         if event_name in ['LoanClaimed', 'LoanRepaid']:
             # Get loan data at block BEFORE to see original state
-            loan_data = self._get_loan_data(loan_id, block_number - 1)
+            loan_data = self._get_loan_data(loan_id, block_number - 1, source_contract)
         else:
-            loan_data = self._get_loan_data(loan_id, block_number)
+            loan_data = self._get_loan_data(loan_id, block_number, source_contract)
 
         if loan_data:
             self._enrich_with_loan_data(event_dict, loan_data, event_name)
@@ -769,9 +926,9 @@ class ArcadeEventDecoder:
             note_block = block_number
 
         if 'lender' not in event_dict or not event_dict.get('lender'):
-            event_dict['lender'] = self._get_note_owner(self.lender_note, loan_id, note_block)
+            event_dict['lender'] = self._get_note_owner("lender", loan_id, note_block, source_contract)
         if 'borrower' not in event_dict or not event_dict.get('borrower'):
-            event_dict['borrower'] = self._get_note_owner(self.borrower_note, loan_id, note_block)
+            event_dict['borrower'] = self._get_note_owner("borrower", loan_id, note_block, source_contract)
 
         # Fallback: for LoanClaimed, tx sender is typically the lender (or authorized)
         if event_name == 'LoanClaimed' and not event_dict.get('lender'):
@@ -787,7 +944,7 @@ class ArcadeEventDecoder:
             old_loan_id = event_dict['oldLoanId']
 
             # Get old loan data at block BEFORE rollover (to see original state)
-            old_loan_data = self._get_loan_data(old_loan_id, block_number - 1)
+            old_loan_data = self._get_loan_data(old_loan_id, block_number - 1, source_contract)
             if old_loan_data:
                 event_dict['oldPrincipal'] = old_loan_data.terms.principal
                 event_dict['oldProratedInterestRate'] = old_loan_data.terms.proratedInterestRate
@@ -799,7 +956,7 @@ class ArcadeEventDecoder:
 
             # CRITICAL: Get OLD LENDER from note ownership BEFORE rollover
             # (The lender note for oldLoanId is burned during rollover)
-            old_lender = self._get_note_owner(self.lender_note, old_loan_id, block_number - 1)
+            old_lender = self._get_note_owner("lender", old_loan_id, block_number - 1, source_contract)
             event_dict['oldLender'] = old_lender
 
             # The 'lender' field already has NEW LENDER from LoanStarted event
@@ -809,7 +966,7 @@ class ArcadeEventDecoder:
 
             # Borrower stays the same (from newLoanId)
             # Get old borrower too (should be same but let's be safe)
-            old_borrower = self._get_note_owner(self.borrower_note, old_loan_id, block_number - 1)
+            old_borrower = self._get_note_owner("borrower", old_loan_id, block_number - 1, source_contract)
             event_dict['oldBorrower'] = old_borrower
 
         return event_dict

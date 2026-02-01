@@ -104,9 +104,10 @@ def get_decoder_registry():
         return None
 
 
-# Start background initialization immediately when module is imported
-# This runs in background so doesn't block app startup
-start_background_init()
+# NOTE: Background initialization is now triggered by Connect button click
+# instead of automatically on module import. This prevents unnecessary
+# blockchain service initialization when users don't need the listener.
+# start_background_init()  # Removed - now triggered by user action
 
 # Thread pool for background operations
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -118,12 +119,14 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     # Reactive values
     transaction_data = reactive.value(pd.DataFrame())
     last_refresh = reactive.value(datetime.now(timezone.utc))
-    initialization_status = reactive.value("initializing")
+    initialization_status = reactive.value("not_connected")  # Start as not connected
     error_message = reactive.value("")
     decoded_tx_cache = reactive.value({})  # Cache of decoded transactions
     decoder_registry = reactive.value(None)  # New multi-platform decoder registry
     registry_init_attempts = reactive.value(0)  # Retry counter for Web3 initialization
     decoded_refresh_trigger = reactive.value(0)  # Increment to force decoded transactions UI refresh
+    connection_initiated = reactive.value(False)  # Gate for blockchain service initialization
+    persisted_wallet_selection = reactive.value(None)  # Persist wallet selection across UI re-renders
     MAX_REGISTRY_INIT_ATTEMPTS = 3  # Max retries before giving up
 
     # Register decoder modal outputs
@@ -133,12 +136,187 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     # Pass both registry and local cache for fallback when registry unavailable
     register_decoded_transactions_outputs(output, input, session, decoder_registry, decoded_tx_cache, decoded_refresh_trigger)
 
-    # Create wallet selector UI with friendly names filtered by fund
+    # Connection panel - shows wallet selector and Connect button until clicked
     @output
     @render.ui
-    @reactive.event(selected_fund)  # Re-render when fund changes
-    def wallet_selector_ui():
-        """Create wallet selector dropdown with friendly names filtered by selected fund"""
+    def connection_panel():
+        """Show wallet selector and Connect button until user initiates connection"""
+        if connection_initiated.get():
+            # Already connected - show nothing (content shown in listener_content)
+            return ui.div()
+
+        return ui.div(
+            ui.div(
+                ui.HTML('<i class="bi bi-broadcast" style="font-size: 4rem; color: #6c757d;"></i>'),
+                ui.h3("Connect to Blockchain", class_="mt-3 mb-2"),
+                ui.p(
+                    "Select a wallet and click Connect to start monitoring transactions.",
+                    class_="text-muted mb-4"
+                ),
+                # Wallet selector - shown before connect
+                ui.div(
+                    _build_wallet_selector(),
+                    class_="mb-4",
+                    style="max-width: 400px; margin: 0 auto;"
+                ),
+                ui.input_action_button(
+                    "connect_blockchain",
+                    ui.HTML('<i class="bi bi-plug me-2"></i>Connect'),
+                    class_="btn btn-primary connect-btn"
+                ),
+                ui.p(
+                    "This will connect to Ethereum via Infura/Etherscan to fetch wallet transactions.",
+                    class_="text-muted small mt-3"
+                ),
+                class_="connect-panel"
+            )
+        )
+
+    # Listener content - only shown after Connect button clicked
+    @output
+    @render.ui
+    def listener_content():
+        """Main listener UI - only rendered after connection initiated"""
+        if not connection_initiated.get():
+            # Not connected yet - show nothing
+            return ui.div()
+
+        # Return the full listener UI
+        return ui.div(
+            # Combined Monitor Settings & Filters
+            ui.card(
+                ui.card_header("Monitor Settings"),
+                ui.div(
+                    # Main controls row
+                    ui.layout_columns(
+                        ui.div(
+                            _build_wallet_selector(),
+                        ),
+                        ui.div(
+                            ui.input_select(
+                                "transaction_limit",
+                                "Display Limit:",
+                                {
+                                    "50": "Last 50",
+                                    "100": "Last 100",
+                                    "200": "Last 200",
+                                },
+                                selected="100",
+                                width="100%"
+                            ),
+                        ),
+                        ui.div(
+                            ui.input_select(
+                                "network",
+                                "Network:",
+                                {
+                                    "1": "Ethereum Mainnet",
+                                },
+                                selected="1",
+                                width="100%"
+                            ),
+                        ),
+                        col_widths=[6, 3, 3]
+                    ),
+                    # Advanced filters toggle
+                    ui.div(
+                        ui.layout_columns(
+                            ui.div(
+                                ui.input_switch("show_filters", "Advanced Filters", value=False),
+                                class_="d-flex align-items-center"
+                            ),
+                            col_widths=[12]
+                        ),
+                        class_="mt-3 pt-3 border-top"
+                    ),
+                    # Filter controls (conditionally shown)
+                    ui.output_ui("filter_controls"),
+                    class_="p-3"
+                ),
+                class_="mb-3"
+            ),
+
+            # Compact Status Row
+            ui.layout_columns(
+                ui.div(
+                    ui.tags.div("STATUS", class_="text-muted small mb-1"),
+                    ui.output_ui("connection_status"),
+                    class_="p-2"
+                ),
+                ui.div(
+                    ui.tags.div("WALLET", class_="text-muted small mb-1"),
+                    ui.output_ui("active_wallet_display"),
+                    class_="p-2"
+                ),
+                ui.div(
+                    ui.tags.div("TODAY", class_="text-muted small mb-1"),
+                    ui.output_ui("transactions_today_count"),
+                    class_="p-2"
+                ),
+                ui.div(
+                    ui.tags.div("LAST TX", class_="text-muted small mb-1"),
+                    ui.output_ui("last_transaction_time"),
+                    class_="p-2"
+                ),
+                col_widths=[3, 4, 2, 3],
+                class_="bg-white rounded border mb-3 mx-0"
+            ),
+
+            # Transaction Table
+            ui.card(
+                ui.card_header(
+                    ui.layout_columns(
+                        ui.h5("Recent Transactions"),
+                        ui.div(
+                            ui.output_ui("auto_refresh_indicator"),
+                            class_="text-end"
+                        ),
+                        col_widths=[6, 6]
+                    )
+                ),
+                ui.div(
+                    ui.output_data_frame("blockchain_transactions_table"),
+                    class_="transaction-table-container"
+                ),
+                full_screen=True,
+                class_="mt-4"
+            ),
+
+            # Transaction Details Panel
+            ui.card(
+                ui.card_header("Transaction Details"),
+                ui.div(
+                    ui.output_ui("transaction_details_panel"),
+                    class_="p-3"
+                ),
+                class_="mt-4"
+            )
+        )
+
+    # Handle Connect button click
+    @reactive.effect
+    @reactive.event(input.connect_blockchain)
+    def handle_connect_click():
+        """Handle Connect button click - starts blockchain service initialization"""
+        # CRITICAL: Capture wallet selection BEFORE setting connection_initiated
+        # because that triggers UI switch which destroys the old dropdown
+        try:
+            current_wallet = input.wallet_address()
+            if current_wallet and current_wallet not in ["none", "error"]:
+                persisted_wallet_selection.set(current_wallet)
+                logger.info(f"Connect clicked - persisted wallet selection: {current_wallet[:10]}...")
+        except Exception as e:
+            logger.warning(f"Could not capture wallet selection: {e}")
+
+        logger.info("Connect button clicked - initiating blockchain service...")
+        connection_initiated.set(True)
+        initialization_status.set("initializing")
+        # Start background initialization
+        start_background_init()
+
+    # Helper function to build wallet selector (called directly, not an output)
+    def _build_wallet_selector():
+        """Build wallet selector dropdown with friendly names filtered by selected fund"""
         # Get current fund
         current_fund = selected_fund()
         wallet_choices = {}
@@ -181,8 +359,18 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         # Add custom wallet option
         wallet_choices["custom"] = "+ Enter Custom Address..."
 
-        # Set default to first valid wallet in the list (not hardcoded)
-        default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom", "all_fund"]), "custom")
+        # Use persisted selection if valid, otherwise default to first wallet
+        persisted = persisted_wallet_selection.get()
+        print(f"[WALLET_UI] Rendering wallet_selector_ui - persisted={persisted[:10] if persisted else None}...")
+        if persisted and persisted in wallet_choices:
+            default_selection = persisted
+            print(f"[WALLET_UI] Using persisted selection: {default_selection[:10]}...")
+        else:
+            default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom", "all_fund"]), "custom")
+            print(f"[WALLET_UI] Persisted not valid, using default: {default_selection[:10] if default_selection != 'custom' else 'custom'}...")
+            # Initialize persisted value if not set
+            if not persisted:
+                persisted_wallet_selection.set(default_selection)
 
         return ui.div(
             ui.p(f"Fund: {current_fund}", class_="text-muted small mb-2"),
@@ -195,12 +383,27 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             )
         )
 
+    # Persist wallet selection when user changes dropdown
+    @reactive.effect
+    def persist_wallet_selection():
+        """Save wallet selection to reactive value so it persists across UI re-renders"""
+        try:
+            current = input.wallet_address()
+            if current and current not in ["none", "error"]:
+                persisted_wallet_selection.set(current)
+        except:
+            pass
+
     # Get list of wallets to monitor based on selection
     @reactive.calc
     def get_monitored_wallets():
         """Get list of wallet addresses to monitor based on current selection"""
         try:
-            wallet_selection = input.wallet_address()
+            # Try input first, fall back to persisted value
+            try:
+                wallet_selection = input.wallet_address()
+            except:
+                wallet_selection = persisted_wallet_selection.get()
 
             if wallet_selection == "all_fund":
                 # Get all wallets for the selected fund
@@ -233,10 +436,14 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         return await loop.run_in_executor(_executor, _fetch)
 
-    # Initialize blockchain service on module load (non-blocking)
+    # Initialize blockchain service when Connect button clicked (non-blocking)
     @reactive.effect
     def initialize_listener():
-        """Initialize the blockchain listener on startup - triggers background fetch"""
+        """Initialize the blockchain listener after Connect button clicked - triggers background fetch"""
+        # Only run if user has clicked Connect
+        if not connection_initiated.get():
+            return
+
         try:
             # Get wallets to monitor
             wallets = get_monitored_wallets()
@@ -749,7 +956,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
     # Initialize DecoderRegistry when fund wallets are available (with retry logic)
     @reactive.effect
-    @reactive.event(selected_fund, registry_init_attempts)
+    @reactive.event(selected_fund, registry_init_attempts, connection_initiated)
     def initialize_decoder_registry():
         """
         Initialize the multi-platform decoder registry with retry logic.
@@ -757,6 +964,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         Tries multiple Web3 sources and retries if connection fails.
         Resets retry counter on fund change or successful init.
         """
+        # Only run if user has clicked Connect
+        if not connection_initiated.get():
+            return
+
         # Try to get DecoderRegistry class (lazy load)
         DecoderRegistryClass = get_decoder_registry()
         if DecoderRegistryClass is None:
@@ -796,9 +1007,28 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             # Load ALL wallets from mapper - decode any transaction involving our wallets
             fund_wallet_addresses = wallet_df['wallet_address'].str.strip().tolist()
 
+            # CRITICAL: Also include currently monitored wallets to ensure they're decoded
+            # This handles cases where monitored wallets aren't in the S3 mapper file
+            try:
+                monitored = get_monitored_wallets()
+                if monitored:
+                    for wallet in monitored:
+                        if wallet and wallet.lower() not in [w.lower() for w in fund_wallet_addresses]:
+                            fund_wallet_addresses.append(wallet)
+                            logger.info(f"Added monitored wallet {wallet[:10]}... to decoder fund list")
+            except Exception as e:
+                logger.debug(f"Could not add monitored wallets: {e}")
+
             if not fund_wallet_addresses:
                 logger.warning("No wallets found in wallet mapper")
                 return
+
+            # Log wallet addresses for debugging
+            logger.info(f"Decoder will use {len(fund_wallet_addresses)} fund wallets:")
+            for i, addr in enumerate(fund_wallet_addresses[:5]):  # Log first 5
+                logger.info(f"  [{i+1}] {addr}")
+            if len(fund_wallet_addresses) > 5:
+                logger.info(f"  ... and {len(fund_wallet_addresses) - 5} more")
 
             # Try multiple Web3 sources
             w3 = None
@@ -865,6 +1095,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     @reactive.effect
     def auto_decode_transactions():
         """Automatically decode transactions in background using multi-platform registry"""
+        # Only run if connected
+        if not connection_initiated.get():
+            return
+
         df = transaction_data.get()
 
         if df.empty:
@@ -1115,6 +1349,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     @reactive.event(input.refresh_data)
     def refresh_transactions():
         """Manually refresh transaction data and clear decoded caches"""
+        # Only run if connected
+        if not connection_initiated.get():
+            return
+
         try:
             wallet = input.wallet_address() if hasattr(input, 'wallet_address') else get_blockchain_service().wallet_address
             limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
@@ -1149,6 +1387,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     @reactive.effect
     def wallet_changed():
         """Handle wallet address change"""
+        # Only run if connected
+        if not connection_initiated.get():
+            return
+
         try:
             # Try to get the wallet address - may not exist yet if UI not rendered
             try:
@@ -1210,6 +1452,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 registry.decoded_cache.clear()
                 logger.info("Cleared decoded transaction caches for wallet switch")
 
+            # Trigger decoded transactions UI refresh
+            decoded_refresh_trigger.set(decoded_refresh_trigger.get() + 1)
+
             # Fetch fresh data for the new wallet
             logger.info(f"Fetching transactions for: {get_blockchain_service().wallet_address}")
             fresh_data = get_blockchain_service().fetch_historical_transactions(limit=int(input.transaction_limit() if hasattr(input, 'transaction_limit') else 100))
@@ -1235,6 +1480,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     @reactive.effect
     def periodic_refresh():
         """Periodically refresh data - faster with Infura (15s) vs Etherscan (30s)"""
+        # Only run if connected
+        if not connection_initiated.get():
+            return
+
         # Use faster refresh interval when Infura is connected
         refresh_interval = 15 if get_blockchain_service().is_infura_connected() else 30
         reactive.invalidate_later(refresh_interval)

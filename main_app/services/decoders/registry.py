@@ -22,6 +22,7 @@ import logging
 
 from .base import (
     BaseDecoder,
+    BaseDecoderAdapter,
     DecodedTransaction,
     TransactionCategory,
     PostingStatus,
@@ -178,8 +179,11 @@ CONTRACT_ROUTING: Dict[str, Platform] = {
     # === ARCADE ===
     "0x81b2f8fc75bab64a6b144aa6d2faa127b4fa7fd9": Platform.ARCADE,  # LoanCore v3 (Proxy)
     "0x6ddb57101a17854109c3b9feb80ae19662ea950f": Platform.ARCADE,  # LoanCore v3 (Implementation)
-    "0x89bc08ba00f135d608bc335f6b33d7a9abcc98af": Platform.ARCADE,  # OriginationController
+    "0x89bc08ba00f135d608bc335f6b33d7a9abcc98af": Platform.ARCADE,  # OriginationController v1
+    "0xb7b1bc9b44eb0d3e61b52550c85c29d7a43db96c": Platform.ARCADE,  # OriginationController v2
+    "0xb7bfcca7d7ff0f371867b770856fac184b185878": Platform.ARCADE,  # OriginationController v3
     "0xb39dab85fa05c381767ff992ccde4c94619993d4": Platform.ARCADE,  # RepaymentController (active)
+    "0x74241e1a9c021643289476426b9b70229ab40d53": Platform.ARCADE,  # RepaymentController (legacy)
     "0x349a026a43ffa8e2ab4c4e59fcaa93f87bd8ddee": Platform.ARCADE,  # Lender Note (aLN)
     "0x337104a4f06260ff327d6734c555a0f5d8f863aa": Platform.ARCADE,  # Borrower Note (aBN)
 
@@ -812,3 +816,271 @@ class DecoderRegistry:
             stats["fifo_total_cost_basis"] = fifo_summary.get('total_cost_basis_usd', 0)
 
         return stats
+
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check health of the registry and all decoders.
+
+        Returns:
+            Dict with overall status, web3 connection, and per-decoder health info
+        """
+        results = {
+            'overall_status': 'healthy',
+            'web3_connected': False,
+            'current_block': None,
+            'fund_wallets_count': len(self.fund_wallets),
+            'decoders': {},
+            'errors': [],
+        }
+
+        # Check Web3 connection
+        try:
+            block_number = self.w3.eth.block_number
+            results['web3_connected'] = True
+            results['current_block'] = block_number
+        except Exception as e:
+            results['overall_status'] = 'degraded'
+            results['errors'].append(f"Web3 connection error: {str(e)}")
+
+        # Check each instantiated decoder
+        for platform, decoder in self.decoders.items():
+            if hasattr(decoder, 'health_check'):
+                results['decoders'][platform.value] = decoder.health_check()
+            else:
+                # Legacy decoder without health_check method
+                results['decoders'][platform.value] = {
+                    'status': 'unknown',
+                    'initialized': True,
+                    'note': 'Legacy decoder without health_check method'
+                }
+
+        # Check registered but not yet instantiated decoders
+        for platform in self._decoder_classes.keys():
+            if platform not in self.decoders:
+                results['decoders'][platform.value] = {
+                    'status': 'not_instantiated',
+                    'note': 'Decoder registered but not yet instantiated (lazy loading)'
+                }
+
+        # Determine overall status
+        decoder_statuses = [d.get('status', 'unknown') for d in results['decoders'].values()]
+        if 'error' in decoder_statuses or results['errors']:
+            results['overall_status'] = 'degraded'
+        elif all(s in ['healthy', 'not_instantiated', 'pending', 'unknown'] for s in decoder_statuses):
+            results['overall_status'] = 'healthy'
+
+        return results
+
+    def validate_all_decoders(self, eager_init: bool = False) -> Dict[str, List[str]]:
+        """
+        Validate all decoders can be initialized properly.
+
+        Args:
+            eager_init: If True, instantiate and initialize all decoders immediately
+                       If False, only validate already-instantiated decoders
+
+        Returns:
+            Dict mapping platform name to list of validation errors (empty list if valid)
+        """
+        errors = {}
+
+        for platform, decoder_class in self._decoder_classes.items():
+            platform_errors = []
+
+            try:
+                if eager_init or platform in self.decoders:
+                    # Get or create decoder instance
+                    if platform not in self.decoders:
+                        self.decoders[platform] = decoder_class(self.w3, self.fund_wallets)
+
+                    decoder = self.decoders[platform]
+
+                    # Use validate() method if available (BaseDecoderAdapter)
+                    if hasattr(decoder, 'validate'):
+                        platform_errors = decoder.validate()
+                    # Otherwise just check it has required methods
+                    elif not (hasattr(decoder, 'can_decode') and hasattr(decoder, 'decode')):
+                        platform_errors.append("Decoder missing required methods (can_decode, decode)")
+
+            except Exception as e:
+                platform_errors.append(f"Instantiation error: {str(e)}")
+
+            if platform_errors:
+                errors[platform.value] = platform_errors
+
+        # Log summary
+        if errors:
+            logger.warning(f"Decoder validation found errors in {len(errors)} platform(s): {list(errors.keys())}")
+        else:
+            logger.info(f"All {len(self._decoder_classes)} decoders validated successfully")
+
+        return errors
+
+    def get_decoder_capabilities(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get capabilities and metadata for each registered decoder.
+
+        Returns:
+            Dict mapping platform name to capabilities dict
+        """
+        capabilities = {}
+
+        for platform, decoder_class in self._decoder_classes.items():
+            caps = {
+                'platform': platform.value,
+                'class_name': decoder_class.__name__,
+                'contract_addresses': [],
+                'auto_post_categories': [],
+            }
+
+            # Get contract addresses
+            if hasattr(decoder_class, 'CONTRACT_ADDRESSES'):
+                caps['contract_addresses'] = [
+                    addr[:16] + '...' for addr in decoder_class.CONTRACT_ADDRESSES
+                ]
+
+            # Get auto-post categories
+            if hasattr(decoder_class, 'AUTO_POST_CATEGORIES'):
+                caps['auto_post_categories'] = [
+                    cat.value for cat in decoder_class.AUTO_POST_CATEGORIES
+                ]
+
+            # Check if it uses the new BaseDecoderAdapter pattern
+            caps['uses_adapter_pattern'] = issubclass(decoder_class, BaseDecoderAdapter)
+
+            capabilities[platform.value] = caps
+
+        return capabilities
+
+    def export_decoded_transactions(self, output_path: str = None, format: str = "json") -> str:
+        """
+        Export all decoded transactions to a file.
+
+        Args:
+            output_path: Path to output file. If None, uses default path.
+            format: Output format - "json" or "csv"
+
+        Returns:
+            Path to the exported file
+        """
+        import json
+        import pandas as pd
+        from pathlib import Path
+
+        if output_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"decoded_transactions_{timestamp}.{format}"
+
+        transactions = list(self.decoded_cache.values())
+        logger.info(f"Exporting {len(transactions)} decoded transactions to {output_path}")
+
+        if format == "json":
+            # Export as JSON with full detail
+            data = {
+                "export_timestamp": datetime.now(timezone.utc).isoformat(),
+                "total_transactions": len(transactions),
+                "stats": self.stats(),
+                "transactions": [tx.to_dict() for tx in transactions]
+            }
+            with open(output_path, 'w') as f:
+                json.dump(data, f, indent=2, default=str)
+
+        elif format == "csv":
+            # Export as flattened CSV for spreadsheet analysis
+            rows = []
+            for tx in transactions:
+                base_row = {
+                    "tx_hash": tx.tx_hash,
+                    "status": tx.status,
+                    "platform": tx.platform.value if hasattr(tx.platform, 'value') else str(tx.platform),
+                    "category": tx.category.value if hasattr(tx.category, 'value') else str(tx.category),
+                    "block": tx.block,
+                    "timestamp": tx.timestamp.isoformat() if hasattr(tx.timestamp, 'isoformat') else str(tx.timestamp),
+                    "from_address": tx.from_address,
+                    "to_address": tx.to_address,
+                    "value_eth": float(tx.value),
+                    "eth_price_usd": float(tx.eth_price),
+                    "gas_fee_eth": float(tx.gas_fee),
+                    "function_name": tx.function_name,
+                    "posting_status": tx.posting_status.value if hasattr(tx.posting_status, 'value') else str(tx.posting_status),
+                    "journal_entries_count": len(tx.journal_entries),
+                    "entries_balanced": tx.entries_balanced,
+                    "error": tx.error or "",
+                }
+                rows.append(base_row)
+
+            df = pd.DataFrame(rows)
+            df.to_csv(output_path, index=False)
+
+        else:
+            raise ValueError(f"Unsupported format: {format}. Use 'json' or 'csv'")
+
+        logger.info(f"Export complete: {output_path}")
+        return output_path
+
+    def export_journal_entries(self, output_path: str = None) -> str:
+        """
+        Export all journal entries from decoded transactions to CSV.
+        Each row is a single debit or credit entry.
+
+        Args:
+            output_path: Path to output file. If None, uses default path.
+
+        Returns:
+            Path to the exported file
+        """
+        import pandas as pd
+        from .accounts import COA
+
+        if output_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"journal_entries_{timestamp}.csv"
+
+        transactions = list(self.decoded_cache.values())
+        logger.info(f"Exporting journal entries from {len(transactions)} transactions")
+
+        rows = []
+        for tx in transactions:
+            for je in tx.journal_entries:
+                for entry in je.entries:
+                    account_key = entry.get('account', '')
+                    gl_num = None
+                    gl_name = account_key
+
+                    # Look up GL account info
+                    if account_key in COA:
+                        gl_num, gl_name = COA[account_key]
+
+                    rows.append({
+                        "tx_hash": tx.tx_hash,
+                        "entry_id": je.entry_id,
+                        "date": je.date.isoformat() if hasattr(je.date, 'isoformat') else str(je.date),
+                        "platform": tx.platform.value if hasattr(tx.platform, 'value') else str(tx.platform),
+                        "category": je.category.value if hasattr(je.category, 'value') else str(je.category),
+                        "description": je.description,
+                        "posting_status": je.posting_status.value if hasattr(je.posting_status, 'value') else str(je.posting_status),
+                        "type": entry.get('type', ''),
+                        "account_key": account_key,
+                        "gl_acct_number": gl_num,
+                        "gl_acct_name": gl_name,
+                        "amount": entry.get('amount', 0),
+                        "asset": entry.get('asset', ''),
+                        "eth_usd_price": float(je.eth_usd_price),
+                        "amount_usd": float(entry.get('amount', 0)) * float(je.eth_usd_price) if entry.get('asset') in ('ETH', 'WETH') else float(entry.get('amount', 0)),
+                        "in_coa": account_key in COA,
+                    })
+
+        df = pd.DataFrame(rows)
+        df.to_csv(output_path, index=False)
+
+        # Summary
+        non_coa = df[~df['in_coa']]['account_key'].unique()
+        if len(non_coa) > 0:
+            logger.warning(f"Found {len(non_coa)} accounts NOT in COA: {list(non_coa)}")
+
+        logger.info(f"Exported {len(rows)} journal entry lines to {output_path}")
+        return output_path
+
+    def get_all_tx_hashes(self) -> List[str]:
+        """Get list of all decoded transaction hashes."""
+        return list(self.decoded_cache.keys())

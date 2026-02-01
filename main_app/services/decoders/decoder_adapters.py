@@ -20,6 +20,7 @@ from web3 import Web3
 
 from .base import (
     BaseDecoder,
+    BaseDecoderAdapter,
     DecodedTransaction,
     DecodedEvent,
     JournalEntry,
@@ -47,8 +48,11 @@ GONDI_CONTRACTS = {
 
 ARCADE_CONTRACTS = {
     "0x81b2f8fc75bab64a6b144aa6d2faa127b4fa7fd9": "LoanCore",
-    "0xb7b1bc9b44eb0d3e61b52550c85c29d7a43db96c": "OriginationController",
-    "0x74241e1a9c021643289476426b9b70229ab40d53": "RepaymentController",
+    "0x89bc08ba00f135d608bc335f6b33d7a9abcc98af": "OriginationController_v1",
+    "0xb7b1bc9b44eb0d3e61b52550c85c29d7a43db96c": "OriginationController_v2",
+    "0xb7bfcca7d7ff0f371867b770856fac184b185878": "OriginationController_v3",
+    "0x74241e1a9c021643289476426b9b70229ab40d53": "RepaymentController_legacy",
+    "0xb39dab85fa05c381767ff992ccde4c94619993d4": "RepaymentController",
 }
 
 NFTFI_CONTRACTS = {
@@ -70,54 +74,17 @@ ZHARTA_CONTRACTS = {
 }
 
 
-def _normalize_tx_hash(tx: Dict) -> str:
-    """Extract and normalize transaction hash to always include 0x prefix."""
-    raw_hash = tx.get('hash', b'')
-    if isinstance(raw_hash, bytes):
-        hex_str = raw_hash.hex()
-    else:
-        hex_str = str(raw_hash)
-
-    # Remove any existing 0x prefix, then add it back
-    if hex_str.startswith('0x'):
-        return hex_str
-    return f"0x{hex_str}"
-
-
-def _build_wallet_metadata(fund_wallets: List[str]) -> Dict[str, Dict]:
-    """Convert fund_wallets list to wallet_metadata dict expected by notebook decoders"""
-    return {
-        addr.lower(): {
-            'fund_id': 'fund',
-            'wallet_name': f'Wallet {addr[:8]}',
-            'category': 'fund',
-            'wallet_type': 'hot',
-        }
-        for addr in fund_wallets
-    }
-
-
-class BlurDecoderAdapter(BaseDecoder):
+class BlurDecoderAdapter(BaseDecoderAdapter):
     """Adapter for Blur notebook decoder (v1.0.0)"""
 
     PLATFORM = Platform.BLUR
     CONTRACT_ADDRESSES = [BLUR_BLEND_PROXY, BLUR_POOL]
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
-        self.w3 = w3
-        self.fund_wallets = [w.lower() for w in fund_wallets]
-        self.wallet_metadata = _build_wallet_metadata(fund_wallets)
-        self.positions = {}
-        self.contracts_cache = {}
-        self._notebook_decoder = None
-        self._journal_generator = None
-        self._initialized = False
+        super().__init__(w3, fund_wallets)
 
-    def _load_abis(self):
-        """Load Blur contract ABIs and initialize notebook decoder"""
-        if self._initialized:
-            return
-
+    def _initialize_decoder(self) -> bool:
+        """Initialize Blur decoder with contracts."""
         try:
             from .blur_decoder import BlurEventDecoder, BlurJournalEntryGenerator
 
@@ -130,33 +97,38 @@ class BlurDecoderAdapter(BaseDecoder):
 
             pool_abi = load_abi(BLUR_POOL, "blur_pool")
 
-            if blend_abi and pool_abi:
-                blend_contract = self.w3.eth.contract(
-                    address=Web3.to_checksum_address(BLUR_BLEND_PROXY),
-                    abi=blend_abi
-                )
-                pool_contract = self.w3.eth.contract(
-                    address=Web3.to_checksum_address(BLUR_POOL),
-                    abi=pool_abi
-                )
+            if not blend_abi or not pool_abi:
+                self._initialization_error = "Failed to load Blur ABIs"
+                return False
 
-                self._notebook_decoder = BlurEventDecoder(
-                    w3=self.w3,
-                    blend_contract=blend_contract,
-                    pool_contract=pool_contract,
-                    wallet_metadata=self.wallet_metadata,
-                    debug=False
-                )
-                self._journal_generator = BlurJournalEntryGenerator(
-                    wallet_metadata=self.wallet_metadata
-                )
-                self._initialized = True
-                logger.info("Blur adapter initialized with contracts")
-            else:
-                logger.warning("Could not load Blur ABIs")
+            blend_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(BLUR_BLEND_PROXY),
+                abi=blend_abi
+            )
+            pool_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(BLUR_POOL),
+                abi=pool_abi
+            )
 
+            self._notebook_decoder = BlurEventDecoder(
+                w3=self.w3,
+                blend_contract=blend_contract,
+                pool_contract=pool_contract,
+                wallet_metadata=self.wallet_metadata,
+                debug=False
+            )
+            self._journal_generator = BlurJournalEntryGenerator(
+                wallet_metadata=self.wallet_metadata
+            )
+            logger.info("Blur adapter initialized successfully")
+            return True
+
+        except ImportError as e:
+            self._initialization_error = f"Import error: {e}"
+            return False
         except Exception as e:
-            logger.error(f"Failed to initialize Blur adapter: {e}")
+            self._initialization_error = str(e)
+            return False
 
     def can_decode(self, tx: Dict, receipt: Dict) -> bool:
         """Check if transaction involves Blur contracts"""
@@ -174,19 +146,25 @@ class BlurDecoderAdapter(BaseDecoder):
 
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
         """Decode Blur transaction using notebook decoder"""
-        self._load_abis()
+        # Use lazy initialization via base class
+        if not self._ensure_initialized():
+            return self._create_basic_result(tx, receipt, block, eth_price,
+                                            f"Blur decoder not initialized: {self._initialization_error}")
 
-        tx_hash = _normalize_tx_hash(tx)
+        tx_hash = self._normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
-
-        # If decoder not initialized, return basic result
-        if not self._notebook_decoder:
-            return self._create_basic_result(tx, receipt, block, eth_price, "Blur decoder not initialized")
 
         try:
             # Decode using notebook decoder
             events = self._notebook_decoder.decode_transaction(tx_hash)
+            logger.info(f"Blur decoded {len(events) if events else 0} events for tx {tx_hash[:16]}...")
+
+            if events:
+                for e in events:
+                    logger.info(f"  Event: {e.event_type}, lien_id={getattr(e, 'lien_id', 'N/A')}")
+            else:
+                logger.warning(f"  No Blur events decoded for {tx_hash[:16]}...")
 
             # Convert to DecodedTransaction
             category = self._determine_category(events)
@@ -196,45 +174,53 @@ class BlurDecoderAdapter(BaseDecoder):
                 # Generate journal entries using individual methods
                 import pandas as pd
                 events_df = pd.DataFrame([e.to_dict() for e in events])
+                logger.info(f"  Blur events_df has {len(events_df)} rows, columns: {list(events_df.columns)[:5]}...")
                 all_entries = []
 
                 # Originations
                 try:
                     df_orig = self._journal_generator.generate_loan_origination_entries(events_df)
-                    if not df_orig.empty:
+                    if df_orig is not None and not df_orig.empty:
                         all_entries.append(df_orig)
+                        logger.info(f"    Generated {len(df_orig)} origination entries")
                 except Exception as e:
-                    logger.debug(f"Origination entries error: {e}")
+                    logger.warning(f"Origination entries error: {e}")
 
                 # Repayments (returns tuple: entries, accruals)
                 try:
                     df_repay, df_accruals = self._journal_generator.generate_loan_repayment_entries(events_df)
-                    if not df_repay.empty:
+                    if df_repay is not None and not df_repay.empty:
                         all_entries.append(df_repay)
-                    if not df_accruals.empty:
+                        logger.info(f"    Generated {len(df_repay)} repayment entries")
+                    if df_accruals is not None and not df_accruals.empty:
                         all_entries.append(df_accruals)
+                        logger.info(f"    Generated {len(df_accruals)} accrual entries")
                 except Exception as e:
-                    logger.debug(f"Repayment entries error: {e}")
+                    logger.warning(f"Repayment entries error: {e}")
 
                 # Refinances (returns tuple)
                 try:
                     df_refi, df_refi_acc = self._journal_generator.generate_refinance_entries(events_df)
-                    if not df_refi.empty:
+                    if df_refi is not None and not df_refi.empty:
                         all_entries.append(df_refi)
-                    if not df_refi_acc.empty:
+                        logger.info(f"    Generated {len(df_refi)} refinance entries")
+                    if df_refi_acc is not None and not df_refi_acc.empty:
                         all_entries.append(df_refi_acc)
+                        logger.info(f"    Generated {len(df_refi_acc)} refinance accrual entries")
                 except Exception as e:
-                    logger.debug(f"Refinance entries error: {e}")
+                    logger.warning(f"Refinance entries error: {e}")
 
                 # Seizes (returns tuple)
                 try:
                     df_seize, df_seize_acc = self._journal_generator.generate_seize_entries(events_df)
-                    if not df_seize.empty:
+                    if df_seize is not None and not df_seize.empty:
                         all_entries.append(df_seize)
-                    if not df_seize_acc.empty:
+                        logger.info(f"    Generated {len(df_seize)} seize entries")
+                    if df_seize_acc is not None and not df_seize_acc.empty:
                         all_entries.append(df_seize_acc)
+                        logger.info(f"    Generated {len(df_seize_acc)} seize accrual entries")
                 except Exception as e:
-                    logger.debug(f"Seize entries error: {e}")
+                    logger.warning(f"Seize entries error: {e}")
 
                 if all_entries:
                     combined_df = pd.concat(all_entries, ignore_index=True)
@@ -297,71 +283,106 @@ class BlurDecoderAdapter(BaseDecoder):
 
     def _convert_journal_entries(self, entries_df) -> List[JournalEntry]:
         """Convert DataFrame to JournalEntry objects"""
-        entries = []
+        import pandas as pd
+
+        journal_entries = []
         if entries_df is None or entries_df.empty:
-            return entries
+            return journal_entries
 
-        for _, row in entries_df.iterrows():
-            entries.append(JournalEntry(
-                account=row.get('account_name', ''),
-                debit=Decimal(str(row.get('debit', 0))),
-                credit=Decimal(str(row.get('credit', 0))),
-                currency=row.get('currency', 'ETH'),
-                description=row.get('description', ''),
-            ))
-        return entries
+        # Group by transaction (loan_id + event) to create proper journal entries
+        group_cols = []
+        if 'loan_id' in entries_df.columns:
+            group_cols.append('loan_id')
+        if 'lien_id' in entries_df.columns and 'loan_id' not in entries_df.columns:
+            group_cols.append('lien_id')
+        if 'event' in entries_df.columns:
+            group_cols.append('event')
+        if 'hash' in entries_df.columns:
+            group_cols.append('hash')
+        elif 'transactionHash' in entries_df.columns:
+            group_cols.append('transactionHash')
 
-    def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
-                            eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        """Create basic result when decoding fails"""
-        tx_hash = _normalize_tx_hash(tx)
-        timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
-        gas_fee = calculate_gas_fee(receipt, tx)
+        if not group_cols:
+            group_cols = [entries_df.index]
 
-        return DecodedTransaction(
-            status="error" if error else "success",
-            tx_hash=tx_hash,
-            platform=Platform.BLUR,
-            category=TransactionCategory.CONTRACT_CALL,
-            block=tx.get('blockNumber', 0),
-            timestamp=timestamp,
-            eth_price=eth_price,
-            gas_used=receipt.get('gasUsed', 0),
-            gas_fee=gas_fee,
-            from_address=tx.get('from', ''),
-            to_address=tx.get('to', '') or '',
-            value=wei_to_eth(tx.get('value', 0)),
-            function_name="unknown",
-            error=error,
-        )
+        try:
+            grouped = entries_df.groupby(group_cols, dropna=False)
+        except Exception:
+            # Fallback: treat entire df as one group
+            grouped = [(None, entries_df)]
+
+        for group_key, group in grouped:
+            if group.empty:
+                continue
+
+            first_row = group.iloc[0]
+            tx_hash = first_row.get('hash', first_row.get('transactionHash', 'unknown'))
+            event_type = first_row.get('event', 'unknown')
+            loan_id = first_row.get('loan_id', first_row.get('lien_id', 'unknown'))
+
+            # Determine category
+            if event_type in ['LoanOfferTaken', 'borrow']:
+                category = TransactionCategory.LOAN_ORIGINATION
+            elif event_type in ['Repay', 'LoanRepaid']:
+                category = TransactionCategory.LOAN_REPAYMENT
+            elif event_type in ['Refinance', 'BorrowerRefinance']:
+                category = TransactionCategory.LOAN_REFINANCE
+            elif event_type == 'Seize':
+                category = TransactionCategory.COLLATERAL_SEIZURE
+            else:
+                category = TransactionCategory.CONTRACT_CALL
+
+            # Create journal entry
+            entry = JournalEntry(
+                entry_id=f"{event_type}_{loan_id}_{tx_hash[:8] if tx_hash else 'unknown'}",
+                date=pd.to_datetime(first_row.get('date', datetime.now(timezone.utc))),
+                description=f"Blur {event_type} - Lien #{loan_id}",
+                tx_hash=str(tx_hash) if tx_hash else 'unknown',
+                category=category,
+                platform=Platform.BLUR,
+                wallet_address=str(first_row.get('wallet_id', first_row.get('lender', ''))),
+                wallet_role="lender" if first_row.get('is_lender_fund', False) else "borrower",
+                fund_id=str(first_row.get('fund_id', '')),
+                eth_usd_price=Decimal(str(first_row.get('eth_usd_price') or 0)),
+            )
+
+            # Add debit/credit entries
+            for _, row in group.iterrows():
+                account = row.get('account_name', 'unknown')
+                debit_val = row.get('debit', row.get('debit_crypto', 0))
+                credit_val = row.get('credit', row.get('credit_crypto', 0))
+                debit = Decimal(str(debit_val if debit_val is not None and not pd.isna(debit_val) else 0))
+                credit = Decimal(str(credit_val if credit_val is not None and not pd.isna(credit_val) else 0))
+                currency = row.get('cryptocurrency', row.get('currency', 'BLUR_POOL'))
+
+                if debit > 0:
+                    entry.add_debit(account, debit, currency)
+                if credit > 0:
+                    entry.add_credit(account, credit, currency)
+
+            if entry.entries:  # Only add if there are actual debit/credit entries
+                journal_entries.append(entry)
+
+        return journal_entries
 
 
-class GondiDecoderAdapter(BaseDecoder):
+class GondiDecoderAdapter(BaseDecoderAdapter):
     """Adapter for Gondi notebook decoder (v1.7.1)"""
 
     PLATFORM = Platform.GONDI
     CONTRACT_ADDRESSES = list(GONDI_CONTRACTS.keys())
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
-        self.w3 = w3
-        self.fund_wallets = [w.lower() for w in fund_wallets]
-        self.wallet_metadata = _build_wallet_metadata(fund_wallets)
-        self.positions = {}
-        self.contracts_cache = {}
-        self._notebook_decoder = None
-        self._journal_generator = None
-        self._initialized = False
+        super().__init__(w3, fund_wallets)
 
-    def _load_abis(self):
-        """Load Gondi contract ABIs and initialize notebook decoder"""
-        if self._initialized:
-            return
-
+    def _initialize_decoder(self) -> bool:
+        """Initialize Gondi decoder with contracts."""
         try:
             from .gondi_decoder import GondiEventDecoder, GondiJournalEntryGenerator
 
             # Load Gondi contracts
             contracts = {}
+            failed_abis = []
             for addr, version in GONDI_CONTRACTS.items():
                 abi = load_abi(addr, f"gondi_{version}")
                 if abi:
@@ -369,29 +390,48 @@ class GondiDecoderAdapter(BaseDecoder):
                         address=Web3.to_checksum_address(addr),
                         abi=abi
                     )
+                    logger.info(f"  Loaded Gondi {version} ABI for {addr[:16]}... ({len(abi)} entries)")
+                    # DEBUG: List event names in this ABI
+                    event_names = [item.get('name') for item in abi if item.get('type') == 'event']
+                    print(f"[DEBUG] Gondi {version} events: {event_names}")
+                else:
+                    failed_abis.append((addr, version))
+                    logger.warning(f"  FAILED to load Gondi {version} ABI for {addr[:16]}...")
 
-            if contracts:
-                logger.info(f"Gondi adapter loaded {len(contracts)} contracts:")
-                for addr, c in contracts.items():
-                    logger.info(f"  {addr}: {c.address}")
-                logger.info(f"Gondi adapter wallet_metadata has {len(self.wallet_metadata)} wallets")
-                self._notebook_decoder = GondiEventDecoder(
-                    w3=self.w3,
-                    contracts=contracts,
-                    wallet_metadata=self.wallet_metadata
-                )
-                logger.info(f"GondiEventDecoder fund_wallet_list has {len(self._notebook_decoder.fund_wallet_list)} wallets")
-                logger.info(f"GondiEventDecoder contracts keys: {list(self._notebook_decoder.contracts.keys())}")
-                self._journal_generator = GondiJournalEntryGenerator(
-                    wallet_metadata=self.wallet_metadata
-                )
-                self._initialized = True
-                logger.info(f"Gondi adapter initialized with {len(contracts)} contracts")
-            else:
-                logger.warning("Could not load any Gondi ABIs")
+            if not contracts:
+                self._initialization_error = f"Could not load any Gondi ABIs. Failed: {failed_abis}"
+                logger.error(self._initialization_error)
+                return False
 
+            logger.info(f"Gondi adapter loaded {len(contracts)}/{len(GONDI_CONTRACTS)} contracts")
+            if failed_abis:
+                logger.warning(f"  Failed ABIs: {failed_abis}")
+
+            logger.info(f"Gondi adapter wallet_metadata has {len(self.wallet_metadata)} wallets")
+            # Log first few wallets for debugging
+            for i, addr in enumerate(list(self.wallet_metadata.keys())[:3]):
+                logger.info(f"  Fund wallet [{i+1}]: {addr}")
+
+            self._notebook_decoder = GondiEventDecoder(
+                w3=self.w3,
+                contracts=contracts,
+                wallet_metadata=self.wallet_metadata
+            )
+            logger.info(f"GondiEventDecoder fund_wallet_list has {len(self._notebook_decoder.fund_wallet_list)} wallets")
+            logger.info(f"GondiEventDecoder contracts keys: {list(self._notebook_decoder.contracts.keys())}")
+
+            self._journal_generator = GondiJournalEntryGenerator(
+                wallet_metadata=self.wallet_metadata
+            )
+            logger.info(f"Gondi adapter initialized successfully with {len(contracts)} contracts")
+            return True
+
+        except ImportError as e:
+            self._initialization_error = f"Import error: {e}"
+            return False
         except Exception as e:
-            logger.error(f"Failed to initialize Gondi adapter: {e}")
+            self._initialization_error = str(e)
+            return False
 
     def can_decode(self, tx: Dict, receipt: Dict) -> bool:
         """Check if transaction involves Gondi contracts"""
@@ -408,22 +448,34 @@ class GondiDecoderAdapter(BaseDecoder):
 
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
         """Decode Gondi transaction using notebook decoder"""
-        self._load_abis()
+        if not self._ensure_initialized():
+            tx_hash = self._normalize_tx_hash(tx)
+            logger.warning(f"Gondi decoder not initialized for tx {tx_hash[:16]}")
+            return self._create_basic_result(tx, receipt, block, eth_price,
+                                            f"Gondi decoder not initialized: {self._initialization_error}")
 
-        tx_hash = _normalize_tx_hash(tx)
+        tx_hash = self._normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
-        if not self._notebook_decoder:
-            logger.warning(f"Gondi decoder not initialized for tx {tx_hash[:16]}")
-            return self._create_basic_result(tx, receipt, block, eth_price, "Gondi decoder not initialized")
-
         try:
             events = self._notebook_decoder.decode_transaction(tx_hash)
-            logger.info(f"Gondi decoded {len(events) if events else 0} events for tx {tx_hash[:16]}")
+            logger.info(f"Gondi decoded {len(events) if events else 0} events for tx {tx_hash[:16]}...")
+
             if events:
                 for e in events:
-                    logger.info(f"  Event: {e.event_type}, fund_tranches={len(e.fund_tranches)}, old_fund_tranches={len(e.old_fund_tranches)}")
+                    logger.info(f"  Event: {e.event_type}, fund_tranches={len(e.fund_tranches)}, old_fund_tranches={len(e.old_fund_tranches)}, is_fund_borrower={e.is_fund_borrower}")
+                    # Log loan participants for debugging
+                    if e.loan:
+                        logger.debug(f"    Loan borrower: {e.loan.borrower[:16]}...")
+                        for t in e.loan.tranches[:3]:  # First 3 tranches
+                            logger.debug(f"    Tranche lender: {t.lender[:16]}...")
+            else:
+                # Diagnose why no events - check if contracts loaded
+                logger.warning(f"  No events decoded for {tx_hash[:16]}...")
+                logger.warning(f"  Decoder has {len(self._notebook_decoder.contracts)} contracts")
+                logger.warning(f"  Decoder has {len(self._notebook_decoder.fund_wallet_list)} fund wallets")
+
             category = self._determine_category(events)
             journal_entries = []
 
@@ -554,50 +606,18 @@ class GondiDecoderAdapter(BaseDecoder):
 
         return journal_entries
 
-    def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
-                            eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = _normalize_tx_hash(tx)
-        timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
-        gas_fee = calculate_gas_fee(receipt, tx)
 
-        return DecodedTransaction(
-            status="error" if error else "success",
-            tx_hash=tx_hash,
-            platform=Platform.GONDI,
-            category=TransactionCategory.CONTRACT_CALL,
-            block=tx.get('blockNumber', 0),
-            timestamp=timestamp,
-            eth_price=eth_price,
-            gas_used=receipt.get('gasUsed', 0),
-            gas_fee=gas_fee,
-            from_address=tx.get('from', ''),
-            to_address=tx.get('to', '') or '',
-            value=wei_to_eth(tx.get('value', 0)),
-            function_name="unknown",
-            error=error,
-        )
-
-
-class ArcadeDecoderAdapter(BaseDecoder):
+class ArcadeDecoderAdapter(BaseDecoderAdapter):
     """Adapter for Arcade notebook decoder (v2.0.0)"""
 
     PLATFORM = Platform.ARCADE
     CONTRACT_ADDRESSES = list(ARCADE_CONTRACTS.keys())
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
-        self.w3 = w3
-        self.fund_wallets = [w.lower() for w in fund_wallets]
-        self.wallet_metadata = _build_wallet_metadata(fund_wallets)
-        self.positions = {}
-        self.contracts_cache = {}
-        self._notebook_decoder = None
-        self._journal_generator = None
-        self._initialized = False
+        super().__init__(w3, fund_wallets)
 
-    def _load_abis(self):
-        if self._initialized:
-            return
-
+    def _initialize_decoder(self) -> bool:
+        """Initialize Arcade decoder with contracts."""
         try:
             from .arcade_decoder import ArcadeEventDecoder, ArcadeJournalEntryGenerator
 
@@ -605,27 +625,32 @@ class ArcadeDecoderAdapter(BaseDecoder):
             loan_core_addr = "0x81b2f8fc75bab64a6b144aa6d2faa127b4fa7fd9"
             loan_core_abi = load_abi(loan_core_addr, "arcade_loancore")
 
-            if loan_core_abi:
-                loan_core_contract = self.w3.eth.contract(
-                    address=Web3.to_checksum_address(loan_core_addr),
-                    abi=loan_core_abi
-                )
+            if not loan_core_abi:
+                self._initialization_error = "Could not load Arcade LoanCore ABI"
+                return False
 
-                self._notebook_decoder = ArcadeEventDecoder(
-                    w3=self.w3,
-                    wallet_metadata=self.wallet_metadata,
-                    loancore_address=loan_core_addr
-                )
-                self._journal_generator = ArcadeJournalEntryGenerator(
-                    wallet_metadata=self.wallet_metadata
-                )
-                self._initialized = True
-                logger.info("Arcade adapter initialized")
-            else:
-                logger.warning("Could not load Arcade LoanCore ABI")
+            loan_core_contract = self.w3.eth.contract(
+                address=Web3.to_checksum_address(loan_core_addr),
+                abi=loan_core_abi
+            )
 
+            self._notebook_decoder = ArcadeEventDecoder(
+                w3=self.w3,
+                wallet_metadata=self.wallet_metadata,
+                loancore_address=loan_core_addr
+            )
+            self._journal_generator = ArcadeJournalEntryGenerator(
+                wallet_metadata=self.wallet_metadata
+            )
+            logger.info("Arcade adapter initialized successfully")
+            return True
+
+        except ImportError as e:
+            self._initialization_error = f"Import error: {e}"
+            return False
         except Exception as e:
-            logger.error(f"Failed to initialize Arcade adapter: {e}")
+            self._initialization_error = str(e)
+            return False
 
     def can_decode(self, tx: Dict, receipt: Dict) -> bool:
         to_addr = (tx.get('to') or '').lower()
@@ -640,18 +665,36 @@ class ArcadeDecoderAdapter(BaseDecoder):
         return False
 
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
-        self._load_abis()
+        if not self._ensure_initialized():
+            return self._create_basic_result(tx, receipt, block, eth_price,
+                                            f"Arcade decoder not initialized: {self._initialization_error}")
 
-        tx_hash = _normalize_tx_hash(tx)
+        tx_hash = self._normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
 
-        if not self._notebook_decoder:
-            return self._create_basic_result(tx, receipt, block, eth_price, "Arcade decoder not initialized")
-
         try:
-            events = self._notebook_decoder.decode_transaction(tx_hash)
-            category = self._determine_category(events)
+            # Decode events from the transaction
+            raw_events = self._notebook_decoder.decode_transaction(tx_hash)
+
+            # Convert raw event dicts to DecodedEvent objects
+            decoded_events = []
+            for evt in raw_events:
+                decoded_events.append(DecodedEvent(
+                    name=evt.get('event', 'Unknown'),
+                    args=evt,  # Pass full event dict as args
+                    log_index=evt.get('logIndex', 0),
+                    contract_address=self._notebook_decoder.loancore_address
+                ))
+
+            # Determine category from events
+            category = self._determine_category(raw_events)
+
+            # Generate journal entries using the journal generator
+            journal_entries = self._generate_journal_entries(raw_events, eth_price, timestamp, tx_hash)
+
+            # Determine wallet roles
+            wallet_roles = self._extract_wallet_roles(raw_events)
 
             return DecodedTransaction(
                 status="success",
@@ -666,22 +709,156 @@ class ArcadeDecoderAdapter(BaseDecoder):
                 from_address=tx.get('from', ''),
                 to_address=tx.get('to', '') or '',
                 value=wei_to_eth(tx.get('value', 0)),
-                function_name=self._get_function_name(events),
-                journal_entries=[],
-                events=[],
-                wallet_roles={},
+                function_name=self._get_function_name(raw_events),
+                journal_entries=journal_entries,
+                events=decoded_events,
+                wallet_roles=wallet_roles,
                 positions={},
             )
 
         except Exception as e:
             logger.error(f"Error decoding Arcade tx {tx_hash}: {e}")
+            import traceback
+            traceback.print_exc()
             return self._create_basic_result(tx, receipt, block, eth_price, str(e))
 
-    def _determine_category(self, events) -> TransactionCategory:
+    def _generate_journal_entries(self, events: List[Dict], eth_price: Decimal,
+                                   timestamp: datetime, tx_hash: str) -> List[JournalEntry]:
+        """Generate journal entries from decoded events using the journal generator."""
+        import pandas as pd
+
+        if not events:
+            return []
+
+        journal_entries = []
+
+        try:
+            # Convert events to DataFrame for the generator
+            df = pd.DataFrame(events)
+
+            # Add ETH price column required by generator
+            df['eth_price'] = float(eth_price)
+
+            # Process each event type
+            for evt in events:
+                event_type = evt.get('event', '')
+
+                if event_type == 'LoanStarted':
+                    # Generate loan origination entries
+                    entries_df = self._journal_generator.generate_loan_started_entries(df[df['event'] == 'LoanStarted'])
+                    journal_entries.extend(self._convert_df_to_journal_entries(entries_df, eth_price, timestamp, tx_hash))
+
+                elif event_type == 'LoanRepaid':
+                    # Generate loan repayment entries
+                    entries_df = self._journal_generator.generate_loan_repaid_entries(df[df['event'] == 'LoanRepaid'])
+                    journal_entries.extend(self._convert_df_to_journal_entries(entries_df, eth_price, timestamp, tx_hash))
+
+                elif event_type == 'LoanClaimed':
+                    # Generate collateral seizure entries
+                    entries_df = self._journal_generator.generate_loan_claimed_entries(df[df['event'] == 'LoanClaimed'])
+                    journal_entries.extend(self._convert_df_to_journal_entries(entries_df, eth_price, timestamp, tx_hash))
+
+        except Exception as e:
+            logger.warning(f"Could not generate Arcade journal entries: {e}")
+            import traceback
+            traceback.print_exc()
+
+        return journal_entries
+
+    def _convert_df_to_journal_entries(self, df, eth_price: Decimal,
+                                        timestamp: datetime, tx_hash: str) -> List[JournalEntry]:
+        """Convert journal entry DataFrame to JournalEntry objects.
+
+        The ArcadeJournalEntryGenerator returns DataFrames with columns:
+        - date, platform, account_name, debit, credit, cryptocurrency
+        - fund_id, wallet_id, lender, borrower, loan_id, etc.
+
+        We group entries by (loan_id, event) to create balanced journal entries.
+        """
+        if df is None or df.empty:
+            return []
+
+        import uuid
+        entries = []
+
+        # Determine grouping key - use loan_id and event if available, otherwise treat as single entry
+        if 'loan_id' in df.columns and 'event' in df.columns:
+            group_cols = ['loan_id', 'event']
+        elif 'loan_id' in df.columns:
+            group_cols = ['loan_id']
+        else:
+            # No grouping - treat entire df as one entry
+            group_cols = None
+
+        if group_cols:
+            grouped = df.groupby(group_cols)
+        else:
+            # Create a single group
+            grouped = [(('all',), df)]
+
+        for group_key, group in grouped:
+            first_row = group.iloc[0]
+
+            # Get event type for description and category
+            event_type = first_row.get('event', 'Unknown')
+            loan_id = first_row.get('loan_id', '')
+
+            # Determine category from event type
+            if 'Started' in str(event_type) or 'Emitted' in str(event_type):
+                category = TransactionCategory.LOAN_ORIGINATION
+            elif 'Repaid' in str(event_type):
+                category = TransactionCategory.LOAN_REPAYMENT
+            elif 'Claimed' in str(event_type) or 'Foreclos' in str(event_type):
+                category = TransactionCategory.COLLATERAL_SEIZURE
+            else:
+                category = TransactionCategory.CONTRACT_CALL
+
+            entry = JournalEntry(
+                entry_id=f"arcade_{event_type}_{loan_id}_{uuid.uuid4().hex[:8]}",
+                date=first_row.get('date', timestamp),
+                description=f"Arcade {event_type} - Loan #{loan_id}" if loan_id else f"Arcade {event_type}",
+                tx_hash=tx_hash,
+                category=category,
+                platform=Platform.ARCADE,
+                wallet_address=first_row.get('wallet_id', first_row.get('lender', '')),
+                wallet_role=first_row.get('transaction_type', 'lender'),
+                eth_usd_price=eth_price,
+                posting_status=PostingStatus.AUTO_POST if event_type in ['LoanStarted', 'LoanRepaid', 'LoanClaimed'] else PostingStatus.REVIEW_QUEUE
+            )
+
+            for _, row in group.iterrows():
+                # Handle both column naming conventions
+                debit = float(row.get('debit', row.get('debit_crypto', 0)) or 0)
+                credit = float(row.get('credit', row.get('credit_crypto', 0)) or 0)
+                account = row.get('account_name', '')
+                currency = row.get('cryptocurrency', 'WETH')
+
+                if debit > 0:
+                    entry.add_debit(account, Decimal(str(debit)), currency)
+                if credit > 0:
+                    entry.add_credit(account, Decimal(str(credit)), currency)
+
+            entries.append(entry)
+
+        return entries
+
+    def _extract_wallet_roles(self, events: List[Dict]) -> Dict[str, str]:
+        """Extract wallet roles from decoded events."""
+        roles = {}
+        for evt in events:
+            lender = evt.get('lender', '')
+            borrower = evt.get('borrower', '')
+            if lender:
+                roles[lender.lower()] = 'lender'
+            if borrower:
+                roles[borrower.lower()] = 'borrower'
+        return roles
+
+    def _determine_category(self, events: List[Dict]) -> TransactionCategory:
         if not events:
             return TransactionCategory.CONTRACT_CALL
 
-        event_types = {e.event_type for e in events}
+        event_types = {evt.get('event', '') for evt in events}
 
         if 'LoanStarted' in event_types:
             return TransactionCategory.LOAN_ORIGINATION
@@ -694,55 +871,23 @@ class ArcadeDecoderAdapter(BaseDecoder):
 
         return TransactionCategory.CONTRACT_CALL
 
-    def _get_function_name(self, events) -> str:
+    def _get_function_name(self, events: List[Dict]) -> str:
         if not events:
             return "unknown"
-        return events[0].event_type if events else "unknown"
-
-    def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
-                            eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = _normalize_tx_hash(tx)
-        timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
-        gas_fee = calculate_gas_fee(receipt, tx)
-
-        return DecodedTransaction(
-            status="error" if error else "success",
-            tx_hash=tx_hash,
-            platform=Platform.ARCADE,
-            category=TransactionCategory.CONTRACT_CALL,
-            block=tx.get('blockNumber', 0),
-            timestamp=timestamp,
-            eth_price=eth_price,
-            gas_used=receipt.get('gasUsed', 0),
-            gas_fee=gas_fee,
-            from_address=tx.get('from', ''),
-            to_address=tx.get('to', '') or '',
-            value=wei_to_eth(tx.get('value', 0)),
-            function_name="unknown",
-            error=error,
-        )
+        return events[0].get('event', 'unknown') if events else "unknown"
 
 
-class NFTfiDecoderAdapter(BaseDecoder):
+class NFTfiDecoderAdapter(BaseDecoderAdapter):
     """Adapter for NFTfi notebook decoder (v2.0.0)"""
 
     PLATFORM = Platform.NFTFI
     CONTRACT_ADDRESSES = list(NFTFI_CONTRACTS.keys())
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
-        self.w3 = w3
-        self.fund_wallets = [w.lower() for w in fund_wallets]
-        self.wallet_metadata = _build_wallet_metadata(fund_wallets)
-        self.positions = {}
-        self.contracts_cache = {}
-        self._notebook_decoder = None
-        self._journal_generator = None
-        self._initialized = False
+        super().__init__(w3, fund_wallets)
 
-    def _load_abis(self):
-        if self._initialized:
-            return
-
+    def _initialize_decoder(self) -> bool:
+        """Initialize NFTfi decoder."""
         try:
             from .nftfi_decoder import NFTfiEventDecoder, NFTfiJournalEntryGenerator
 
@@ -754,11 +899,15 @@ class NFTfiDecoderAdapter(BaseDecoder):
                 w3=self.w3,
                 wallet_metadata=self.wallet_metadata
             )
-            self._initialized = True
-            logger.info("NFTfi adapter initialized")
+            logger.info("NFTfi adapter initialized successfully")
+            return True
 
+        except ImportError as e:
+            self._initialization_error = f"Import error: {e}"
+            return False
         except Exception as e:
-            logger.error(f"Failed to initialize NFTfi adapter: {e}")
+            self._initialization_error = str(e)
+            return False
 
     def can_decode(self, tx: Dict, receipt: Dict) -> bool:
         to_addr = (tx.get('to') or '').lower()
@@ -773,14 +922,13 @@ class NFTfiDecoderAdapter(BaseDecoder):
         return False
 
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
-        self._load_abis()
+        if not self._ensure_initialized():
+            return self._create_basic_result(tx, receipt, block, eth_price,
+                                            f"NFTfi decoder not initialized: {self._initialization_error}")
 
-        tx_hash = _normalize_tx_hash(tx)
+        tx_hash = self._normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
-
-        if not self._notebook_decoder:
-            return self._create_basic_result(tx, receipt, block, eth_price, "NFTfi decoder not initialized")
 
         try:
             events = self._notebook_decoder.decode_transaction(tx_hash)
@@ -947,50 +1095,20 @@ class NFTfiDecoderAdapter(BaseDecoder):
 
         return journal_entries
 
-    def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
-                            eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = _normalize_tx_hash(tx)
-        timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
-        gas_fee = calculate_gas_fee(receipt, tx)
 
-        return DecodedTransaction(
-            status="error" if error else "success",
-            tx_hash=tx_hash,
-            platform=Platform.NFTFI,
-            category=TransactionCategory.CONTRACT_CALL,
-            block=tx.get('blockNumber', 0),
-            timestamp=timestamp,
-            eth_price=eth_price,
-            gas_used=receipt.get('gasUsed', 0),
-            gas_fee=gas_fee,
-            from_address=tx.get('from', ''),
-            to_address=tx.get('to', '') or '',
-            value=wei_to_eth(tx.get('value', 0)),
-            function_name="unknown",
-            error=error,
-        )
-
-
-class ZhartaDecoderAdapter(BaseDecoder):
+class ZhartaDecoderAdapter(BaseDecoderAdapter):
     """Adapter for Zharta notebook decoder (v3.0.0)"""
 
     PLATFORM = Platform.ZHARTA
     CONTRACT_ADDRESSES = list(ZHARTA_CONTRACTS.keys())
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
-        self.w3 = w3
-        self.fund_wallets = [w.lower() for w in fund_wallets]
+        super().__init__(w3, fund_wallets)
+        # Zharta decoder expects a set of fund wallets
         self.fund_wallets_set = set(self.fund_wallets)
-        self.positions = {}
-        self.contracts_cache = {}
-        self._notebook_decoder = None
-        self._journal_generator = None
-        self._initialized = False
 
-    def _load_abis(self):
-        if self._initialized:
-            return
-
+    def _initialize_decoder(self) -> bool:
+        """Initialize Zharta decoder."""
         try:
             from .zharta_decoder import ZhartaDecoder, ZhartaJournalGenerator
 
@@ -1001,11 +1119,15 @@ class ZhartaDecoderAdapter(BaseDecoder):
             self._journal_generator = ZhartaJournalGenerator(
                 fund_wallets=self.fund_wallets_set
             )
-            self._initialized = True
-            logger.info("Zharta adapter initialized")
+            logger.info("Zharta adapter initialized successfully")
+            return True
 
+        except ImportError as e:
+            self._initialization_error = f"Import error: {e}"
+            return False
         except Exception as e:
-            logger.error(f"Failed to initialize Zharta adapter: {e}")
+            self._initialization_error = str(e)
+            return False
 
     def can_decode(self, tx: Dict, receipt: Dict) -> bool:
         to_addr = (tx.get('to') or '').lower()
@@ -1020,14 +1142,13 @@ class ZhartaDecoderAdapter(BaseDecoder):
         return False
 
     def decode(self, tx: Dict, receipt: Dict, block: Dict, eth_price: Decimal) -> DecodedTransaction:
-        self._load_abis()
+        if not self._ensure_initialized():
+            return self._create_basic_result(tx, receipt, block, eth_price,
+                                            f"Zharta decoder not initialized: {self._initialization_error}")
 
-        tx_hash = _normalize_tx_hash(tx)
+        tx_hash = self._normalize_tx_hash(tx)
         timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
         gas_fee = calculate_gas_fee(receipt, tx)
-
-        if not self._notebook_decoder:
-            return self._create_basic_result(tx, receipt, block, eth_price, "Zharta decoder not initialized")
 
         try:
             events = self._notebook_decoder.decode_transaction(tx_hash)
@@ -1076,26 +1197,3 @@ class ZhartaDecoderAdapter(BaseDecoder):
         if not events:
             return "unknown"
         return events[0].event_type if events else "unknown"
-
-    def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
-                            eth_price: Decimal, error: str = None) -> DecodedTransaction:
-        tx_hash = _normalize_tx_hash(tx)
-        timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
-        gas_fee = calculate_gas_fee(receipt, tx)
-
-        return DecodedTransaction(
-            status="error" if error else "success",
-            tx_hash=tx_hash,
-            platform=Platform.ZHARTA,
-            category=TransactionCategory.CONTRACT_CALL,
-            block=tx.get('blockNumber', 0),
-            timestamp=timestamp,
-            eth_price=eth_price,
-            gas_used=receipt.get('gasUsed', 0),
-            gas_fee=gas_fee,
-            from_address=tx.get('from', ''),
-            to_address=tx.get('to', '') or '',
-            value=wei_to_eth(tx.get('value', 0)),
-            function_name="unknown",
-            error=error,
-        )

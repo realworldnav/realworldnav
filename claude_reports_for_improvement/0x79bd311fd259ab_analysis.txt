@@ -1,0 +1,134 @@
+================================================================================
+ARCADE DECODER ANALYSIS REPORT
+================================================================================
+Transaction: 0x79bd311fd259abdcdf80f8ba5bf37096a65b355a7cc81504970fd0172dbaa617
+Platform: Arcade
+Date: 2025-11-24T16:01:35+00:00
+Block: 23869769
+Analyzed: 2026-01-26
+
+================================================================================
+1. WHAT HAPPENED ON-CHAIN
+================================================================================
+The transaction was sent TO: 0xB7BFcca7D7ff0f371867B770856FAc184B185878
+
+This address is the Arcade OriginationController (as defined in arcade_decoder.py).
+However, the transaction produced:
+- Events: []  (EMPTY - no events captured)
+- Journal Entries: []  (EMPTY - no accounting entries)
+- Function name: "unknown"
+
+The context file shows the transaction was successful (status: "success") but
+the decoder failed to decode anything meaningful.
+
+================================================================================
+2. ROOT CAUSE ANALYSIS
+================================================================================
+CRITICAL ISSUE: Contract Address Mismatch
+
+The transaction's `to_address` (0xB7BFcca7D7ff0f371867B770856FAc184B185878) is
+NOT registered in the routing tables, causing the transaction to fall through
+to the GENERIC decoder instead of the Arcade decoder.
+
+There are THREE different OriginationController addresses across the codebase:
+
+A) In arcade_decoder.py (line 80):
+   ARCADE_ORIGINATION_CONTROLLER = "0xB7BFcca7D7ff0f371867B770856FAc184B185878"
+
+B) In registry.py CONTRACT_ROUTING (line 182):
+   "0x89bc08ba00f135d608bc335f6b33d7a9abcc98af": Platform.ARCADE  # OriginationController
+
+C) In decoder_adapters.py ARCADE_CONTRACTS (line 51):
+   "0xb7b1bc9b44eb0d3e61b52550c85c29d7a43db96c": "OriginationController"
+
+NONE of these match the actual transaction target address!
+
+This means:
+1. The registry doesn't route this transaction to Arcade
+2. The adapter's can_decode() returns False
+3. The transaction falls through to GENERIC decoder
+4. No events or journal entries are generated
+
+================================================================================
+3. SECONDARY ISSUES
+================================================================================
+The decoder architecture has several other concerns:
+
+A) INCONSISTENT CONTRACT ADDRESSES
+   - Three different files have different Arcade contract addresses
+   - This suggests the contract list was not synchronized after updates
+   - Arcade may have deployed new versions of their controllers
+
+B) DECODER ONLY LOOKS AT LoanCore LOGS
+   In arcade_decoder.py line 684-686:
+   ```python
+   for log in receipt['logs']:
+       if log['address'].lower() != self.loancore_address.lower():
+           continue
+   ```
+   The decoder ONLY processes logs from LoanCore contract. If the OriginationController
+   emits events directly (not via LoanCore), they would be missed.
+
+================================================================================
+4. REQUIRED FIXES
+================================================================================
+
+FIX 1: Add missing OriginationController address to CONTRACT_ROUTING
+File: main_app/services/decoders/registry.py
+Add to ARCADE section (around line 179-186):
+   "0xb7bfcca7d7ff0f371867b770856fac184b185878": Platform.ARCADE,  # OriginationController v3
+
+FIX 2: Add missing address to ARCADE_CONTRACTS
+File: main_app/services/decoders/decoder_adapters.py
+Update ARCADE_CONTRACTS (around line 49-53):
+   ARCADE_CONTRACTS = {
+       "0x81b2f8fc75bab64a6b144aa6d2faa127b4fa7fd9": "LoanCore",
+       "0xb7b1bc9b44eb0d3e61b52550c85c29d7a43db96c": "OriginationController_v1",
+       "0x89bc08ba00f135d608bc335f6b33d7a9abcc98af": "OriginationController_v2",
+       "0xb7bfcca7d7ff0f371867b770856fac184b185878": "OriginationController_v3",  # ADD THIS
+       "0x74241e1a9c021643289476426b9b70229ab40d53": "RepaymentController",
+   }
+
+FIX 3: Verify LoanCore address is correct
+The LoanCore proxy at 0x81b2f8fc75bab64a6b144aa6d2faa127b4fa7fd9 should emit
+the LoanStarted events. Verify this transaction's logs include events from LoanCore.
+
+FIX 4: Update the decoder to also check logs from OriginationController
+Consider expanding the log filtering in arcade_decoder.py to also process
+logs from OriginationController addresses, not just LoanCore.
+
+================================================================================
+5. JOURNAL ENTRY ASSESSMENT
+================================================================================
+Current state: NO journal entries generated
+
+Expected behavior for a LoanStarted event (typical loan origination):
+- Debit: Loans Receivable (asset increases)
+- Credit: Cash/WETH (asset decreases - principal disbursed)
+
+Without proper decoding, we cannot determine:
+- The loan amount
+- The interest rate
+- The collateral details
+- The lender/borrower roles
+- Whether the fund wallet is involved
+
+================================================================================
+6. RECOMMENDED NEXT STEPS
+================================================================================
+1. Verify the actual events in this transaction using Etherscan or web3
+2. Confirm which LoanCore address emitted events (if any)
+3. Apply the contract address fixes to both files
+4. Re-process this transaction after fixes
+5. Consider adding a validation step that warns when unknown contract addresses
+   are encountered in Arcade-related transactions
+
+================================================================================
+7. PRIORITY
+================================================================================
+HIGH - This is blocking ALL transactions to the v3 OriginationController
+from being properly decoded and recorded in the general ledger.
+
+================================================================================
+END OF REPORT
+================================================================================

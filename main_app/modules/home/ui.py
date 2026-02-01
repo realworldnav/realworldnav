@@ -85,119 +85,16 @@ def quick_dashboard_ui():
 
 
 def blockchain_listener_ui():
-    """Blockchain listener UI - heavy initialization deferred until tab clicked"""
+    """Blockchain listener UI - heavy initialization deferred until Connect button clicked"""
     return ui.page_fluid(
         ui.h2("Blockchain Transaction Monitor"),
         ui.p("Live monitoring of wallet transactions on the blockchain", class_="text-muted mb-3"),
 
-        # Combined Monitor Settings & Filters
-        ui.card(
-            ui.card_header("Monitor Settings"),
-            ui.div(
-                # Main controls row
-                ui.layout_columns(
-                    ui.div(
-                        ui.output_ui("wallet_selector_ui"),
-                    ),
-                    ui.div(
-                        ui.input_select(
-                            "transaction_limit",
-                            "Display Limit:",
-                            {
-                                "50": "Last 50",
-                                "100": "Last 100",
-                                "200": "Last 200",
-                            },
-                            selected="100",
-                            width="100%"
-                        ),
-                    ),
-                    ui.div(
-                        ui.input_select(
-                            "network",
-                            "Network:",
-                            {
-                                "1": "Ethereum Mainnet",
-                            },
-                            selected="1",
-                            width="100%"
-                        ),
-                    ),
-                    col_widths=[6, 3, 3]
-                ),
-                # Advanced filters toggle
-                ui.div(
-                    ui.layout_columns(
-                        ui.div(
-                            ui.input_switch("show_filters", "Advanced Filters", value=False),
-                            class_="d-flex align-items-center"
-                        ),
-                        col_widths=[12]
-                    ),
-                    class_="mt-3 pt-3 border-top"
-                ),
-                # Filter controls (conditionally shown)
-                ui.output_ui("filter_controls"),
-                class_="p-3"
-            ),
-            class_="mb-3"
-        ),
+        # Connection Panel - shows Connect button until clicked
+        ui.output_ui("connection_panel"),
 
-        # Compact Status Row
-        ui.layout_columns(
-            ui.div(
-                ui.tags.div("STATUS", class_="text-muted small mb-1"),
-                ui.output_ui("connection_status"),
-                class_="p-2"
-            ),
-            ui.div(
-                ui.tags.div("WALLET", class_="text-muted small mb-1"),
-                ui.output_ui("active_wallet_display"),
-                class_="p-2"
-            ),
-            ui.div(
-                ui.tags.div("TODAY", class_="text-muted small mb-1"),
-                ui.output_ui("transactions_today_count"),
-                class_="p-2"
-            ),
-            ui.div(
-                ui.tags.div("LAST TX", class_="text-muted small mb-1"),
-                ui.output_ui("last_transaction_time"),
-                class_="p-2"
-            ),
-            col_widths=[3, 4, 2, 3],
-            class_="bg-white rounded border mb-3 mx-0"
-        ),
-
-        # Transaction Table
-        ui.card(
-            ui.card_header(
-                ui.layout_columns(
-                    ui.h5("Recent Transactions"),
-                    ui.div(
-                        ui.output_ui("auto_refresh_indicator"),
-                        class_="text-end"
-                    ),
-                    col_widths=[6, 6]
-                )
-            ),
-            ui.div(
-                ui.output_data_frame("blockchain_transactions_table"),
-                class_="transaction-table-container"
-            ),
-            full_screen=True,
-            class_="mt-4"
-        ),
-
-        # Transaction Details Panel
-        ui.card(
-            ui.card_header("Transaction Details"),
-            ui.div(
-                ui.output_ui("transaction_details_panel"),
-                class_="p-3"
-            ),
-            class_="mt-4"
-        ),
+        # All listener content - only shown after Connect button clicked
+        ui.output_ui("listener_content"),
 
         # Add custom CSS for the listener
         ui.tags.style("""
@@ -295,6 +192,26 @@ def blockchain_listener_ui():
             .address-text.small {
                 font-size: 0.75em;
                 opacity: 0.8;
+            }
+
+            .connect-panel {
+                text-align: center;
+                padding: 60px 20px;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                border-radius: 12px;
+                margin-bottom: 20px;
+            }
+
+            .connect-btn {
+                font-size: 1.2rem;
+                padding: 15px 40px;
+                border-radius: 8px;
+                transition: all 0.3s ease;
+            }
+
+            .connect-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0,123,255,0.3);
             }
         """)
     )

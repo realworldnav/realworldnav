@@ -29,6 +29,7 @@ from .base import (
     calculate_gas_fee,
 )
 from .abis import load_abi, WETH_ABI, ERC20_ABI
+from .accounts import GenericAccounts, get_account
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +99,12 @@ class GenericDecoder(BaseDecoder):
     PLATFORM = Platform.GENERIC
     CONTRACT_ADDRESSES = [WETH_ADDRESS]
 
+    # Account keys from centralized COA (see accounts.py)
     ACCOUNTS = {
-        "eth_wallet": "100.30 - ETH Wallet",
-        "weth_wallet": "100.31 - WETH Wallet",
-        "usdc_wallet": "100.32 - USDC Wallet",
-        "gas_expense": "600.10 - Gas Expense",
+        "eth_wallet": GenericAccounts.ETH,           # digital_assets_eth (10200)
+        "weth_wallet": GenericAccounts.WETH,         # digital_assets_weth (10201)
+        "usdc_wallet": GenericAccounts.USDC,         # digital_assets_usdc (10100)
+        "gas_expense": GenericAccounts.GAS_FEE_EXPENSE,  # gas_fee_expense (80001)
     }
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
@@ -605,13 +607,13 @@ class GenericDecoder(BaseDecoder):
             )
 
             if is_from_fund:
-                # Outgoing transfer
-                entry.add_debit("200.10 - Accounts Receivable", value, "ETH")
+                # Outgoing transfer - use suspense until we know the purpose
+                entry.add_debit(GenericAccounts.SUSPENSE, value, "ETH")
                 entry.add_credit(self.ACCOUNTS["eth_wallet"], value, "ETH")
             else:
                 # Incoming transfer
                 entry.add_debit(self.ACCOUNTS["eth_wallet"], value, "ETH")
-                entry.add_credit("300.10 - Revenue", value, "ETH")
+                entry.add_credit(GenericAccounts.OTHER_INCOME, value, "ETH")
 
             journal_entries.append(entry)
 
@@ -719,6 +721,8 @@ class GenericDecoder(BaseDecoder):
         # Track ALL fund wallet transfers per token (handle multiple transfers in one tx)
         # Key: (token_address, token_symbol), Value: {"in": amount, "out": amount, "wallet": address, "counterparties": set}
         fund_flows = {}
+        # Track internal transfers (between two fund wallets) separately
+        internal_transfers = []  # List of {from_wallet, to_wallet, amount, token_sym}
 
         for evt in events:
             if evt.name == "Transfer":
@@ -738,22 +742,81 @@ class GenericDecoder(BaseDecoder):
                 evt_amount = evt_value / Decimal(10**evt_decimals)
                 flow_key = (evt_token_addr, evt_symbol)
 
+                # Check if this is an INTERNAL transfer (both sender and receiver are fund wallets)
+                from_is_fund = self.is_fund_wallet(evt_from)
+                to_is_fund = self.is_fund_wallet(evt_to)
+
+                if from_is_fund and to_is_fund:
+                    # Internal transfer - track separately
+                    internal_transfers.append({
+                        "from_wallet": evt_from,
+                        "to_wallet": evt_to,
+                        "amount": evt_amount,
+                        "token_sym": evt_symbol,
+                        "token_addr": evt_token_addr
+                    })
+                    wallet_roles[evt_from] = "sender"
+                    wallet_roles[evt_to] = "recipient"
+                    continue  # Don't add to fund_flows
+
                 if flow_key not in fund_flows:
                     fund_flows[flow_key] = {"in": Decimal(0), "out": Decimal(0), "wallet": None, "counterparties": set()}
 
-                # Fund wallet received tokens
-                if self.is_fund_wallet(evt_to):
+                # Fund wallet received tokens (from external)
+                if to_is_fund:
                     fund_flows[flow_key]["in"] += evt_amount
                     fund_flows[flow_key]["wallet"] = evt_to
                     fund_flows[flow_key]["counterparties"].add(evt_from)
                     wallet_roles[evt_to] = "recipient"
 
-                # Fund wallet sent tokens
-                if self.is_fund_wallet(evt_from):
+                # Fund wallet sent tokens (to external)
+                if from_is_fund:
                     fund_flows[flow_key]["out"] += evt_amount
                     fund_flows[flow_key]["wallet"] = evt_from
                     fund_flows[flow_key]["counterparties"].add(evt_to)
                     wallet_roles[evt_from] = "sender"
+
+        # Create journal entries for INTERNAL fund transfers first
+        for transfer in internal_transfers:
+            from_wallet = transfer["from_wallet"]
+            to_wallet = transfer["to_wallet"]
+            amount = transfer["amount"]
+            token_sym = transfer["token_sym"]
+
+            # Minimum threshold
+            if token_sym in ["USDC", "USDT"]:
+                min_threshold = MIN_AMOUNT_USDC
+            else:
+                min_threshold = MIN_AMOUNT_ETH
+
+            if amount < min_threshold:
+                logger.debug(f"Skipping dust internal transfer: {amount} {token_sym}")
+                continue
+
+            token_account = self.ACCOUNTS.get(f"{token_sym.lower()}_wallet", f"100.40 - {token_sym} Wallet")
+
+            # Internal transfer: Suspense to Suspense (or use a transfer clearing account)
+            # For fund accounting, internal transfers don't affect P&L
+            entry = JournalEntry(
+                entry_id=f"internal_{tx_hash[:8]}_{token_sym}",
+                date=timestamp,
+                description=f"Internal {token_sym} transfer: {from_wallet[:10]}... -> {to_wallet[:10]}...",
+                tx_hash=tx_hash,
+                category=TransactionCategory.ERC20_TRANSFER,
+                platform=Platform.GENERIC,
+                wallet_address=from_wallet,
+                wallet_role="sender",
+                eth_usd_price=eth_price,
+                posting_status=PostingStatus.REVIEW_QUEUE  # Internal transfers need review
+            )
+            # Dr: Receiving wallet's token account
+            # Cr: Sending wallet's token account
+            # For simplicity, we record it as a suspense-to-suspense transfer
+            entry.add_debit(GenericAccounts.SUSPENSE, amount, token_sym)
+            entry.add_credit(GenericAccounts.SUSPENSE, amount, token_sym)
+            journal_entries.append(entry)
+            value = amount
+            token_symbol = token_sym
 
         # Create journal entries for net flows
         for (token_addr, token_sym), flow in fund_flows.items():
@@ -788,11 +851,11 @@ class GenericDecoder(BaseDecoder):
                 # Determine credit account based on source
                 if is_vault_interaction:
                     # Vault withdrawal - reduction of investment, not income
-                    credit_account = "120.10 - DeFi Vault Investments"
+                    credit_account = GenericAccounts.YIELD_POOLS
                     description = f"{token_sym} withdrawn from DeFi vault: {net_amount:.6f}"
                 else:
-                    # Unknown source - use suspense account for review
-                    credit_account = "400.10 - Other Income"
+                    # Unknown source - use other income for review
+                    credit_account = GenericAccounts.OTHER_INCOME
                     description = f"{token_sym} received: {net_amount:.6f}"
 
                 entry = JournalEntry(
@@ -825,11 +888,11 @@ class GenericDecoder(BaseDecoder):
                 # Determine debit account based on destination
                 if is_vault_interaction:
                     # Vault deposit - investment, not expense
-                    debit_account = "120.10 - DeFi Vault Investments"
+                    debit_account = GenericAccounts.YIELD_POOLS
                     description = f"{token_sym} deposited to DeFi vault: {net_amount:.6f}"
                 else:
-                    # Unknown destination - use suspense account for review
-                    debit_account = "600.30 - Other Expense"
+                    # Unknown destination - use miscellaneous expense for review
+                    debit_account = GenericAccounts.MISCELLANEOUS_EXPENSE
                     description = f"{token_sym} sent: {net_amount:.6f}"
 
                 entry = JournalEntry(

@@ -46,6 +46,22 @@ from .base import (
 
 from .registry import DecoderRegistry
 
+# === CENTRALIZED CHART OF ACCOUNTS ===
+from .accounts import (
+    COA,
+    get_account,
+    get_account_number,
+    get_account_name,
+    get_account_safe,
+    build_coa_map,
+    get_interest_accrual_accounts,
+    get_loan_accounts,
+    BlurAccounts as COABlurAccounts,
+    WETHAccounts,
+    USDCAccounts,
+    GenericAccounts,
+)
+
 # Try to import adapter (may not exist)
 try:
     from .adapter import LegacyRegistryAdapter
@@ -148,6 +164,19 @@ __all__ = [
     'BaseDecoder',
     'DecoderRegistry',
     'LegacyRegistryAdapter',
+    # Centralized Chart of Accounts
+    'COA',
+    'get_account',
+    'get_account_number',
+    'get_account_name',
+    'get_account_safe',
+    'build_coa_map',
+    'get_interest_accrual_accounts',
+    'get_loan_accounts',
+    'COABlurAccounts',
+    'WETHAccounts',
+    'USDCAccounts',
+    'GenericAccounts',
     # Gondi v1.7.1
     'GondiEventDecoder',
     'GondiJournalEntryGenerator',

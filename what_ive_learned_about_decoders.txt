@@ -1,0 +1,563 @@
+================================================================================
+DECODER ENGINE DEBUGGING GUIDE - COMPREHENSIVE FINDINGS
+================================================================================
+Created: 2025-01-29
+Purpose: Document all findings from debugging the transaction decoder engines
+         so future Claude instances can quickly diagnose and fix issues.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. Architecture Overview
+2. Data Flow Through the System
+3. Arcade Decoder - Critical Issues Found & Fixed
+4. Wallet Metadata Flow - Important!
+5. Journal Entry Generation Pipeline
+6. Column Name Mismatches (Common Bug Source)
+7. How to Debug Decoders
+8. Platform-Specific Notes
+9. Key Files and Their Purposes
+10. Quick Diagnostic Commands
+
+================================================================================
+1. ARCHITECTURE OVERVIEW
+================================================================================
+
+The decoder system has multiple layers:
+
+    User Request
+         │
+         ▼
+    DecoderRegistry (registry.py)
+         │ - Routes transactions to correct decoder based on contract address
+         │ - Lazy-loads decoder adapters
+         ▼
+    DecoderAdapter (decoder_adapters.py)
+         │ - BlurDecoderAdapter, ArcadeDecoderAdapter, GondiDecoderAdapter, etc.
+         │ - Wraps "notebook decoders" with BaseDecoder interface
+         │ - Handles wallet_metadata conversion
+         ▼
+    Notebook Decoder (arcade_decoder.py, blur_decoder.py, etc.)
+         │ - Decodes events from transaction receipts
+         │ - Enriches with on-chain data (getLoan, etc.)
+         ▼
+    Journal Entry Generator (inside each decoder file)
+         │ - Generates GAAP-compliant journal entries
+         │ - Only creates entries when fund wallets are involved
+         ▼
+    JournalEntry objects returned to app
+
+
+================================================================================
+2. DATA FLOW THROUGH THE SYSTEM
+================================================================================
+
+STEP 1: Registry Initialization
+-------------------------------
+File: main_app/services/decoders/registry.py
+
+    DecoderRegistry.__init__(w3, fund_wallets, fund_id)
+        │
+        │ fund_wallets = List of wallet addresses (strings)
+        │
+        └─► Stored as self.fund_wallets = [w.lower() for w in fund_wallets]
+
+
+STEP 2: Adapter Initialization (Lazy)
+-------------------------------------
+File: main_app/services/decoders/decoder_adapters.py
+File: main_app/services/decoders/base.py (BaseDecoderAdapter)
+
+When a decoder is first needed:
+
+    BaseDecoderAdapter.__init__(w3, fund_wallets)
+        │
+        │ Creates wallet_metadata dict:
+        │
+        └─► self.wallet_metadata = {
+                addr.lower(): {
+                    'fund_id': 'fund',
+                    'wallet_name': f'Wallet {addr[:8]}',
+                    'category': 'fund',    # <-- ALL wallets marked as 'fund'
+                    'wallet_type': 'hot',
+                }
+                for addr in fund_wallets
+            }
+
+IMPORTANT: The adapter marks ALL passed wallets as category='fund'.
+           The notebook decoder then filters for category='fund'.
+
+
+STEP 3: Notebook Decoder Initialization
+---------------------------------------
+File: main_app/services/decoders/arcade_decoder.py (example)
+
+    ArcadeEventDecoder.__init__(w3, wallet_metadata, loancore_address)
+        │
+        └─► self.fund_wallet_list = [
+                addr for addr, info in wallet_metadata.items()
+                if str(info.get('category', '')).lower() == 'fund'
+            ]
+
+This is where the decoder gets its list of "fund wallets" to check against.
+
+
+STEP 4: Transaction Decoding
+----------------------------
+    adapter.decode(tx, receipt, block, eth_price)
+        │
+        ├─► notebook_decoder.decode_transaction(tx_hash)
+        │       │
+        │       └─► Returns List[Dict] of decoded events
+        │
+        └─► adapter._generate_journal_entries(events, eth_price, timestamp, tx_hash)
+                │
+                └─► Calls journal_generator.generate_X_entries(events_df)
+                        │
+                        └─► Returns DataFrame of debit/credit entries
+
+
+================================================================================
+3. ARCADE DECODER - CRITICAL ISSUES FOUND & FIXED
+================================================================================
+
+ISSUE #1: Wrong Contract Address Filtering
+------------------------------------------
+SYMPTOM: 0 events decoded from Arcade transactions
+ROOT CAUSE: Decoder only looked for events from LoanCore address
+
+Original code (arcade_decoder.py line ~684):
+
+    if log['address'].lower() != self.loancore_address.lower():
+        continue  # <-- Skipped ALL events not from LoanCore!
+
+PROBLEM: Arcade's architecture spans MULTIPLE contracts:
+- Arcade v1: Single contract (0x89bc08BA00...) is BOTH LoanCore AND event emitter
+- Arcade v3: Separate contracts:
+  - LoanCore (0x81b2F8Fc75...) - stores state, used for getLoan()
+  - OriginationController (0xB7BFcca7D7...) - emits LoanStarted
+  - RepaymentController (0xB39dAb85FA...) - emits LoanRepaid, LoanClaimed
+
+FIX: Added ARCADE_EVENT_CONTRACTS set with ALL Arcade contracts:
+
+    ARCADE_EVENT_CONTRACTS = {
+        ARCADE_V1_LOANCORE.lower(),           # 0x89bc08BA00...
+        ARCADE_V3_LOANCORE.lower(),           # 0x81b2F8Fc75...
+        ARCADE_V3_ORIGINATION_CONTROLLER.lower(),
+        ARCADE_V3_REPAYMENT_CONTROLLER.lower(),
+        ARCADE_REPAYMENT_CONTROLLER_LEGACY.lower(),
+        ARCADE_ORIGINATION_CONTROLLER_V2.lower(),
+    }
+
+Changed filter to:
+
+    if log_address not in self.event_contract_addresses:
+        continue
+
+
+ISSUE #2: Wrong LoanCore for getLoan() Calls
+--------------------------------------------
+SYMPTOM: Events decoded but loan data all zeros (principal=0, etc.)
+ROOT CAUSE: Using v3 LoanCore for v1 transactions
+
+The decoder was calling getLoan() on the wrong contract:
+- Events from v1 (0x89bc08BA00...) need getLoan() on v1 LoanCore
+- Events from v3 need getLoan() on v3 LoanCore
+
+FIX: Added ARCADE_LOANCORE_MAP to route each event source to correct LoanCore:
+
+    ARCADE_LOANCORE_MAP = {
+        ARCADE_V1_LOANCORE.lower(): ARCADE_V1_LOANCORE,  # v1 uses same contract
+        ARCADE_V3_LOANCORE.lower(): ARCADE_V3_LOANCORE,
+        ARCADE_V3_ORIGINATION_CONTROLLER.lower(): ARCADE_V3_LOANCORE,
+        ARCADE_V3_REPAYMENT_CONTROLLER.lower(): ARCADE_V3_LOANCORE,
+        # ... etc
+    }
+
+Updated _get_loan_data() to accept source_contract parameter and use correct LoanCore.
+
+
+ISSUE #3: Journal Entry Conversion Failing
+------------------------------------------
+SYMPTOM: Events decoded with data, but 0 journal entries generated
+ROOT CAUSE: Adapter's _convert_df_to_journal_entries() expected wrong column names
+
+Original code looked for:
+- 'entry_id' column (didn't exist) - returned [] if missing!
+- 'debit_crypto' / 'credit_crypto' columns
+
+But journal generator returns:
+- 'debit' / 'credit' columns
+- 'loan_id' / 'event' for grouping
+
+FIX: Rewrote _convert_df_to_journal_entries() to:
+- Group by (loan_id, event) instead of entry_id
+- Handle both column naming conventions: debit/debit_crypto, credit/credit_crypto
+
+
+================================================================================
+4. WALLET METADATA FLOW - IMPORTANT!
+================================================================================
+
+This is a common source of bugs. The wallet data flows like this:
+
+1. S3: load_WALLET_file() returns DataFrame with columns:
+   - wallet_address, friendly_name, category, fund_id, etc.
+   - Categories: 'fund' (24), 'gp' (9), 'lp' (1) = 34 total
+
+2. App loads wallets:
+   - wallet_df['wallet_address'].tolist() = ALL 34 wallets
+
+3. Registry receives:
+   - Just a list of addresses (no category info!)
+
+4. Adapter converts to metadata:
+   - ALL addresses marked as category='fund'
+
+5. Decoder filters:
+   - Only uses wallets where category='fund'
+   - So ALL 34 wallets are used
+
+RESULT: All 34 wallets ARE being checked (not just 24).
+        The adapter's _build_wallet_metadata() marks everything as 'fund'.
+
+
+================================================================================
+5. JOURNAL ENTRY GENERATION PIPELINE
+================================================================================
+
+For Arcade (similar pattern for other platforms):
+
+1. Adapter calls: notebook_decoder.decode_transaction(tx_hash)
+   - Returns List[Dict] with event data
+
+2. Adapter converts to DataFrame:
+   df = pd.DataFrame(events)
+   df['eth_price'] = float(eth_price)
+
+3. Adapter calls journal generator methods:
+   entries_df = journal_generator.generate_loan_started_entries(df[df['event'] == 'LoanStarted'])
+
+4. Journal generator checks fund involvement:
+   is_lender_fund = lender in self.fund_wallet_list
+   is_borrower_fund = borrower in self.fund_wallet_list
+
+   # Only generates entries if fund is involved!
+   if is_lender_fund:
+       entries.append({...debit loan_receivable, credit cash...})
+
+5. Adapter converts DataFrame to JournalEntry objects:
+   journal_entries = self._convert_df_to_journal_entries(entries_df, ...)
+
+6. Returns DecodedTransaction with journal_entries
+
+
+================================================================================
+6. COLUMN NAME MISMATCHES (Common Bug Source)
+================================================================================
+
+Different parts of the system use different column names:
+
+Journal Generator Output:
+- debit, credit
+- account_name
+- cryptocurrency
+- loan_id, event
+- wallet_id, fund_id
+
+Adapter Expected (OLD - buggy):
+- debit_crypto, credit_crypto
+- entry_id (for grouping)
+
+FIX: Adapter should handle BOTH naming conventions:
+    debit = row.get('debit', row.get('debit_crypto', 0))
+    credit = row.get('credit', row.get('credit_crypto', 0))
+
+
+================================================================================
+7. HOW TO DEBUG DECODERS
+================================================================================
+
+STEP 1: Run debug_decoder_engine.py
+--------------------------------------
+    python debug_decoder_engine.py --hash <tx_hash>
+
+Shows:
+- Platform detected
+- Events decoded
+- Journal entries generated
+
+
+STEP 2: Check if events are being decoded
+-----------------------------------------
+    from main_app.services.decoders.arcade_decoder import ArcadeEventDecoder
+
+    decoder = ArcadeEventDecoder(w3, wallet_metadata)
+    events = decoder.decode_transaction(tx_hash)
+    print(f"Events: {len(events)}")
+    for e in events:
+        print(f"  {e.get('event')}: lender={e.get('lender')}")
+
+If 0 events: Check contract address filtering in decode_transaction()
+
+
+STEP 3: Check if loan data is enriched
+--------------------------------------
+    for e in events:
+        print(f"principal={e.get('principal')}")
+        print(f"payableCurrency={e.get('payableCurrency')}")
+
+If all zeros: Check getLoan() is using correct LoanCore address
+
+
+STEP 4: Check if fund wallets match
+-----------------------------------
+    lender = events[0].get('lender', '')
+    print(f"Lender: {lender}")
+    print(f"In fund_wallet_list? {lender in decoder.fund_wallet_list}")
+
+If False: Check wallet_metadata building in adapter
+
+
+STEP 5: Check journal generator directly
+----------------------------------------
+    from main_app.services.decoders.arcade_decoder import ArcadeJournalEntryGenerator
+
+    journal_gen = ArcadeJournalEntryGenerator(wallet_metadata)
+    df = pd.DataFrame(events)
+    entries_df = journal_gen.generate_loan_started_entries(df[df['event'] == 'LoanStarted'])
+    print(f"Entries: {len(entries_df)}")
+
+If 0 rows: Fund wallet not lender/borrower, or check filtering logic
+
+
+STEP 6: Check adapter conversion
+--------------------------------
+If journal generator returns data but final JEs are 0:
+- Check _convert_df_to_journal_entries() column name handling
+- Check grouping logic (entry_id vs loan_id)
+
+
+================================================================================
+8. PLATFORM-SPECIFIC NOTES
+================================================================================
+
+ARCADE (v2.0.0)
+---------------
+- Multi-contract architecture (v1 vs v3)
+- Events: LoanStarted, LoanRepaid, ForceRepay, LoanClaimed, LoanRolledOver, NoteRedeemed
+- Uses PromissoryNote contracts for lender/borrower lookup
+- Interest calculation: principal * proratedInterestRate / 1e22
+- Fee mechanics: interestFee, principalFee, claimFee
+
+BLUR (v1.0.0)
+-------------
+- Contracts: Blend proxy (0x29469395eAf6f95920E59F858042f0e28D98a20B), Pool
+- Events: LoanOfferTaken, Repay, Refinance, StartAuction, Seize
+- KNOWN ISSUE: Seize event may not be in ABI
+- Continuous compounding interest
+
+GONDI (v1.7.1)
+--------------
+- Multi-version contracts (v1, v2, v3, multi_source)
+- Events: LoanEmitted, LoanRepaid, LoanRefinanced, LoanForeclosed, LoanLiquidated
+- Tranche-based lending (fund_tranches, old_fund_tranches)
+- Interest accrual grid with reversals
+
+NFTFI (v2.0.0)
+--------------
+- Multiple contract versions (v2, v2.1, v2.3, v3_asset, v3_collection)
+- Events: LoanStarted, LoanRepaid, LoanLiquidated
+- Has refinancing/aggregator contracts
+
+ZHARTA (v3.0.0)
+---------------
+- Pool-based lending (WETH_Pool, USDC_V2, P2PLendingNfts)
+- Events: LoanCreated, LoanPaid, LoanDefaulted
+
+
+================================================================================
+9. KEY FILES AND THEIR PURPOSES
+================================================================================
+
+main_app/services/decoders/
+├── __init__.py              # Exports DecoderRegistry
+├── registry.py              # Routes transactions to correct decoder
+├── base.py                  # BaseDecoder, BaseDecoderAdapter, JournalEntry classes
+├── decoder_adapters.py      # Platform-specific adapters (wrap notebook decoders)
+├── abis.py                  # ABI loading utilities
+├── arcade_decoder.py        # Arcade event decoder + journal generator
+├── blur_decoder.py          # Blur event decoder + journal generator
+├── gondi_decoder.py         # Gondi event decoder + journal generator
+├── nftfi_decoder.py         # NFTfi event decoder + journal generator
+├── zharta_decoder.py        # Zharta event decoder + journal generator
+├── generic_decoder.py       # Fallback for unknown contracts (ERC20 transfers, etc.)
+└── abis/                    # Directory with contract ABI JSON files
+
+debug_decoder_engine.py      # CLI tool to test decoding (replicates app.py flow)
+raw_transactions_export.csv  # Sample transactions for testing
+
+
+================================================================================
+10. QUICK DIAGNOSTIC COMMANDS
+================================================================================
+
+# Test single transaction
+python debug_decoder_engine.py --hash 0x123...
+
+# Test with failures only shown
+python debug_decoder_engine.py --failures-only --limit 50
+
+# Test all transactions
+python debug_decoder_engine.py --limit 50
+
+# Quick Python test
+python -c "
+from main_app.services.decoders import DecoderRegistry
+from web3 import Web3
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+w3 = Web3(Web3.HTTPProvider(f'https://mainnet.infura.io/v3/{os.getenv(\"INFURA_API_KEY\")}'))
+registry = DecoderRegistry(w3, ['0x3b2a51fec517bbc7feaf68acfdb068b57870713f'], 'test')
+result = registry.decode_transaction('0x73cf3919db7618f1cf6c97be692c764af91131026c4ba77bc5137f02141c09d8')
+print(f'JEs: {len(result.journal_entries)}')
+"
+
+
+================================================================================
+SUMMARY OF FIXES MADE (2025-01-29)
+================================================================================
+
+1. arcade_decoder.py:
+   - Added ARCADE_EVENT_CONTRACTS set for multi-contract support
+   - Added ARCADE_LOANCORE_MAP for correct getLoan() routing
+   - Updated decode_transaction() to check all Arcade contracts
+   - Updated _get_loan_data() to accept source_contract parameter
+   - Updated _process_decoded_event() to pass source_contract
+
+2. decoder_adapters.py:
+   - Rewrote ArcadeDecoderAdapter._convert_df_to_journal_entries():
+     - Group by (loan_id, event) instead of entry_id
+     - Handle both column naming conventions (debit vs debit_crypto)
+     - Proper category detection from event type
+
+RESULT: Arcade decoder now properly:
+- Detects events from all Arcade contract versions
+- Enriches with correct loan data using proper LoanCore
+- Generates journal entries when fund wallets are involved
+
+
+================================================================================
+ADDITIONAL FIXES (2025-01-29 - Session 2)
+================================================================================
+
+ISSUE #4: Arcade V1 Note Contracts
+----------------------------------
+SYMPTOM: Arcade transactions return lender/borrower as None
+ROOT CAUSE: Using V3 note contracts for V1 loans
+
+V1 and V3 have DIFFERENT note contracts:
+- V1: BorrowerNote 0xe5B12BEfaf3a91065DA7FDD461dEd2d8F8ECb7BE
+- V1: LenderNote 0x92ED78b41537C902Ad287608d8535bb6780A7618
+- V3: BorrowerNote 0x337104A4f06260Ff327d6734C555A0f5d8F863aa
+- V3: LenderNote 0x349A026A43FFA8e2Ab4c4e59FCAa93F87Bd8DdeE
+
+FIX: Added per-LoanCore note contracts:
+    self.note_contracts = {}  # {loancore_addr: {"borrower": contract, "lender": contract}}
+
+Updated _get_note_owner() to accept source_contract and use correct notes.
+
+
+ISSUE #5: Blur Seize Event Missing from ABI
+-------------------------------------------
+SYMPTOM: Error: "The event 'Seize' was not found in this contract's abi"
+ROOT CAUSE: Blur ABI in S3 missing Seize event
+
+FIX 1: Added manual Seize event decoding as fallback:
+    # Seize(uint256 lienId, address collection) - lienId in data
+    if data_hex and len(data_hex) >= 64:
+        lien_id_from_event = int(data_hex[:64], 16)
+
+FIX 2: Added fallback function input decoding for seize():
+    def _fallback_decode_function(self, tx):
+        # Handle seize(LienPointer[] lienPointers) - selector 0x5b43226f
+        # Manually parse ABI-encoded array to extract Lien struct
+
+
+ISSUE #6: Internal Fund Transfers
+---------------------------------
+SYMPTOM: USDC transfers between two fund wallets generate 0 JEs
+ROOT CAUSE: Net flows cancel out (in == out) when both sender and receiver are fund wallets
+
+FIX: Added separate tracking for internal transfers:
+    internal_transfers = []
+    if from_is_fund and to_is_fund:
+        internal_transfers.append({...})
+        continue  # Don't add to fund_flows
+
+Create suspense-to-suspense JEs for internal transfers for tracking purposes.
+
+
+ISSUE #7: JournalEntry Initialization Error (Blur Adapter)
+----------------------------------------------------------
+SYMPTOM: "JournalEntry.__init__() got an unexpected keyword argument 'account'"
+ROOT CAUSE: _convert_journal_entries() using wrong parameters
+
+FIX: Rewrote _convert_journal_entries() to:
+    - Group rows by (loan_id/lien_id, event, hash)
+    - Create proper JournalEntry dataclass instances
+    - Use add_debit()/add_credit() methods
+    - Handle None values in eth_usd_price
+
+
+ISSUE #8: Decimal Conversion Syntax Error
+-----------------------------------------
+SYMPTOM: [<class 'decimal.ConversionSyntax'>]
+ROOT CAUSE: Decimal(str(None)) when eth_usd_price is None
+
+FIX: Use fallback values:
+    eth_usd_price=Decimal(str(first_row.get('eth_usd_price') or 0))
+
+
+================================================================================
+FINAL TEST RESULTS (2025-01-29)
+================================================================================
+
+Total processed: 50
+With JEs:        47 (94%)
+Without JEs:     3 (6%)
+
+By Platform:
+- Arcade:  36 txs, 71 JEs (1.97 avg) - 100% success
+- Blur:     1 tx,   2 JEs            - 100% success
+- Generic: 13 txs, 16 JEs (1.23 avg) - 77% success (3 NFT transfers expected failures)
+
+Remaining Failures (3):
+- 0x46d89255... - NFT Transfer (Pudgy Penguins) - NOT ERC20
+- 0xa18640c8... - NFT Note Redemption (Arcade LenderNote) - NOT ERC20
+- 0xa2a3e25f... - NFT Transfer - NOT ERC20
+
+These failures are EXPECTED - they're NFT transfers, not ERC20 transfers.
+The generic decoder correctly skips them as unknown tokens.
+
+
+================================================================================
+HOW TO HANDLE REMAINING NFT TRANSFERS
+================================================================================
+
+NFT transfers need different accounting treatment than ERC20. Options:
+
+1. Create NFT Transfer Decoder:
+   - Detect Transfer events from ERC721/ERC1155 contracts
+   - Different category: NFT_TRANSFER
+   - Different accounts: investments_nfts vs token_wallet
+
+2. Filter at ingestion:
+   - Don't add NFT transfers to raw_transactions_export.csv
+   - Or mark them with category NFT_TRANSFER
+
+3. Manual handling:
+   - Queue for review (PostingStatus.REVIEW_QUEUE)
+   - Let user categorize and post manually

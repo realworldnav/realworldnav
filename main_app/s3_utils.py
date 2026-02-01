@@ -80,8 +80,12 @@ def get_master_gl_key() -> str:
 @lru_cache(maxsize=128)
 def load_abi_from_s3(contract_address: str) -> dict:
     """
-    Load contract ABI from S3.
-    ABIs can be stored with contract address OR friendly names.
+    Load contract ABI with three-tier fallback:
+    1. S3 storage (fast, cached)
+    2. Etherscan API (auto-fetch if not in S3)
+    3. Return empty dict (decoding will fail gracefully)
+
+    Fetched ABIs are automatically cached to S3 for future use.
 
     Args:
         contract_address: Ethereum contract address (checksummed or not)
@@ -119,6 +123,7 @@ def load_abi_from_s3(contract_address: str) -> dict:
 
     s3_client = get_s3_client()
 
+    # TIER 1: Try S3 storage
     for key in possible_keys:
         try:
             obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=key)
@@ -132,8 +137,62 @@ def load_abi_from_s3(contract_address: str) -> dict:
             logger.warning(f"Error loading ABI from {key}: {e}")
             continue
 
-    logger.warning(f"ABI not found in S3 for address: {contract_address}")
+    # TIER 2: Try Etherscan API (auto-fetch)
+    try:
+        from .services.etherscan_abi_fetcher import fetch_abi_from_etherscan
+
+        logger.info(f"ABI not in S3 for {contract_address}, trying Etherscan...")
+        abi = fetch_abi_from_etherscan(contract_address)
+
+        if abi:
+            # Cache to S3 for future use
+            try:
+                save_abi_to_s3(contract_address, abi)
+            except Exception as e:
+                logger.warning(f"Failed to cache ABI to S3: {e}")
+
+            return abi
+
+    except ImportError:
+        logger.debug("Etherscan ABI fetcher not available")
+    except Exception as e:
+        logger.warning(f"Etherscan ABI fetch failed for {contract_address}: {e}")
+
+    # TIER 3: Return empty dict (decoding will fail gracefully)
+    logger.warning(f"ABI not found for address: {contract_address}")
     return {}
+
+
+def save_abi_to_s3(contract_address: str, abi: list) -> bool:
+    """
+    Save ABI to S3 for future use.
+
+    Args:
+        contract_address: Contract address (used as filename)
+        abi: ABI list to save
+
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    addr = contract_address.lower()
+    if addr.startswith('0x'):
+        addr = addr[2:]
+
+    key = f"{ABI_PREFIX}{addr}.json"
+
+    try:
+        s3_client = get_s3_client()
+        s3_client.put_object(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Body=json.dumps(abi, indent=2),
+            ContentType='application/json'
+        )
+        logger.info(f"Saved ABI to S3: {key}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save ABI to S3: {e}")
+        return False
 
 def list_available_abis() -> list:
     """List all available ABIs in S3"""

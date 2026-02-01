@@ -199,6 +199,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from web3 import Web3
 import web3.logs
+from eth_utils import event_abi_to_log_topic
+from web3._utils.events import get_event_data
 
 # Set decimal precision for financial calculations
 getcontext().prec = 28
@@ -327,6 +329,67 @@ class GondiEventType(Enum):
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+def decode_event_from_abi(log: Dict, event_abi: Dict, w3: Web3, debug: bool = False) -> Optional[Dict]:
+    """
+    Decode an event log directly using web3.py's get_event_data function.
+
+    This fixes the PropertyCheckingFactory bug where contract.events.EventName
+    returns an event object with abi=None in certain web3.py configurations.
+
+    Args:
+        log: The log entry from transaction receipt
+        event_abi: The ABI entry for the event to decode
+        w3: Web3 instance (used for codec)
+        debug: If True, print debug info
+
+    Returns:
+        Decoded event data as AttributeDict, or None if log doesn't match event
+    """
+    try:
+        # First check if topic0 matches (fast check before expensive decode)
+        expected_topic = event_abi_to_log_topic(event_abi)
+        topics = log.get('topics', [])
+        if not topics:
+            return None
+
+        actual_topic = topics[0]
+        if isinstance(actual_topic, bytes):
+            actual_topic_bytes = actual_topic
+        elif hasattr(actual_topic, 'hex'):
+            actual_topic_bytes = bytes.fromhex(actual_topic.hex().replace('0x', ''))
+        else:
+            actual_topic_bytes = bytes.fromhex(str(actual_topic).replace('0x', ''))
+
+        if debug:
+            print(f"[DEBUG] decode_event_from_abi: event={event_abi.get('name')}")
+            print(f"[DEBUG]   expected_topic: {expected_topic.hex()}")
+            print(f"[DEBUG]   actual_topic:   {actual_topic_bytes.hex()}")
+            print(f"[DEBUG]   match: {actual_topic_bytes == expected_topic}")
+
+        # Check if topic0 matches
+        if actual_topic_bytes != expected_topic:
+            return None
+
+        if debug:
+            print(f"[DEBUG]   Topic matched! Calling get_event_data...")
+
+        # Use web3.py's get_event_data which handles all the complex ABI parsing
+        decoded = get_event_data(w3.codec, event_abi, log)
+
+        if debug:
+            print(f"[DEBUG]   Successfully decoded event: {decoded.get('event')}")
+            print(f"[DEBUG]   Args keys: {list(decoded.get('args', {}).keys())}")
+
+        return decoded
+
+    except Exception as e:
+        if debug:
+            import traceback
+            print(f"[DEBUG] decode_event_from_abi failed for {event_abi.get('name')}: {e}")
+            traceback.print_exc()
+        return None
+
 
 def safe_int(value: Any, default: int = 0) -> int:
     """Safely convert value to int"""
@@ -805,6 +868,13 @@ class GondiEventDecoder:
         try:
             receipt = self.w3.eth.get_transaction_receipt(tx_hash)
             tx = self.w3.eth.get_transaction(tx_hash)
+
+            # DEBUG: Log Web3 instance IDs to check for mismatch
+            print(f"[DEBUG] Decoder w3 id: {id(self.w3)}")
+            if self.contracts:
+                first_contract = next(iter(self.contracts.values()))
+                print(f"[DEBUG] Contract w3 id: {id(first_contract.w3)}")
+
             block_ts = self._get_block_timestamp(receipt['blockNumber'])
             block_ts_int = self._get_block_timestamp_int(receipt['blockNumber'])
 
@@ -859,6 +929,22 @@ class GondiEventDecoder:
                         continue
 
             # First pass: decode events from logs that match specific contracts
+            # DEBUG: Log receipt details to diagnose why events aren't being found
+            print(f"[DEBUG] TX {tx_hash[:16]}... has {len(receipt['logs'])} logs")
+            log_addresses = set(log['address'].lower() for log in receipt['logs'])
+            contract_keys = set(self.contracts.keys())
+            matching = log_addresses & contract_keys
+            print(f"[DEBUG]   Log addresses: {list(log_addresses)[:3]}...")
+            print(f"[DEBUG]   Contract keys: {list(contract_keys)}")
+            print(f"[DEBUG]   Matching: {matching}")
+
+            # DEBUG: Log first log object format to diagnose potential type issues
+            if receipt['logs']:
+                first_log = receipt['logs'][0]
+                print(f"[DEBUG]   Log type: {type(first_log)}, keys: {list(first_log.keys()) if hasattr(first_log, 'keys') else 'N/A'}")
+                topics = first_log.get('topics', [])
+                print(f"[DEBUG]   Topics type: {type(topics)}, first topic type: {type(topics[0]) if topics else 'N/A'}")
+
             for log in receipt['logs']:
                 log_addr = log['address'].lower()
 
@@ -867,18 +953,56 @@ class GondiEventDecoder:
                     contract = self.contracts[log_addr]
                     is_v2 = self._is_v2_contract(log_addr)
 
-                    # Try to decode each event type
+                    # DEBUG: Check contract ABI is attached (only once per TX)
+                    if not hasattr(self, '_debug_logged'):
+                        self._debug_logged = True
+                        print(f"[DEBUG]   Contract object id: {id(contract)}")
+                        print(f"[DEBUG]   Contract.abi type: {type(contract.abi)}, is None: {contract.abi is None}")
+                        if contract.abi:
+                            print(f"[DEBUG]   Contract.abi len: {len(contract.abi)}")
+                            # Find LoanRefinanced in the ABI
+                            loan_ref_abi = [e for e in contract.abi if e.get('type') == 'event' and e.get('name') == 'LoanRefinanced']
+                            print(f"[DEBUG]   LoanRefinanced in contract.abi: {len(loan_ref_abi) > 0}")
+                            if loan_ref_abi:
+                                print(f"[DEBUG]   LoanRefinanced ABI entry: {loan_ref_abi[0]}")
+                        # Check what events ARE available in contract.events
+                        try:
+                            available_events = [e for e in dir(contract.events) if not e.startswith('_')]
+                            print(f"[DEBUG]   Available events in contract.events: {available_events[:10]}...")
+                            # Try directly accessing LoanRefinanced
+                            lr_event = contract.events.LoanRefinanced
+                            print(f"[DEBUG]   contract.events.LoanRefinanced type: {type(lr_event)}")
+                            print(f"[DEBUG]   contract.events.LoanRefinanced.abi: {lr_event.abi}")
+                        except Exception as e2:
+                            print(f"[DEBUG]   Error checking contract.events: {e2}")
+
+                    # DEBUG: Log topics to help diagnose
+                    if receipt['logs']:
+                        first_topic = log['topics'][0].hex() if log.get('topics') else 'NO_TOPICS'
+                        print(f"[DEBUG]   Log[{log.get('logIndex', '?')}] topic0: {first_topic[:18]}...")
+
+                    # Try to decode each event type using direct ABI decoding
+                    # This bypasses web3.py's PropertyCheckingFactory bug
                     for event_type in GondiEventType:
                         try:
-                            event_obj = getattr(contract.events, event_type.value, None)
-                            if event_obj is None:
+                            # Find the event ABI entry
+                            event_abi = None
+                            for abi_entry in contract.abi:
+                                if abi_entry.get('type') == 'event' and abi_entry.get('name') == event_type.value:
+                                    event_abi = abi_entry
+                                    break
+
+                            if event_abi is None:
                                 continue
 
-                            # Use process_log for single log decoding (more reliable across web3.py versions)
-                            try:
-                                decoded_log = event_obj.process_log(log)
-                            except Exception:
-                                # Event signature doesn't match this log - this is expected, continue to next event type
+                            # Use direct ABI decoding - bypasses web3.py's broken event accessor
+                            # Enable debug for first log to diagnose topic matching
+                            debug_this = not hasattr(self, '_decode_debug_done') and event_type.value == 'LoanRefinanced'
+                            decoded_log = decode_event_from_abi(log, event_abi, self.w3, debug=debug_this)
+                            if debug_this:
+                                self._decode_debug_done = True
+                            if decoded_log is None:
+                                # Topic0 didn't match, try next event type
                                 continue
 
                             if decoded_log:
@@ -921,11 +1045,19 @@ class GondiEventDecoder:
 
                     for event_type in GondiEventType:
                         try:
-                            event_obj = getattr(contract.events, event_type.value)
-                            # Use process_log for single log decoding
-                            try:
-                                decoded_log = event_obj.process_log(log)
-                            except Exception:
+                            # Find the event ABI entry
+                            event_abi = None
+                            for abi_entry in contract.abi:
+                                if abi_entry.get('type') == 'event' and abi_entry.get('name') == event_type.value:
+                                    event_abi = abi_entry
+                                    break
+
+                            if event_abi is None:
+                                continue
+
+                            # Use direct ABI decoding - bypasses web3.py's broken event accessor
+                            decoded_log = decode_event_from_abi(log, event_abi, self.w3)
+                            if decoded_log is None:
                                 continue
 
                             if decoded_log:

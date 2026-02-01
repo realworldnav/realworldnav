@@ -1,277 +1,494 @@
+#!/usr/bin/env python
 """
-Production Decoder Test Harness
+Simple CLI Decoder Test Script
 
-Run: python test_decoder.py <tx_hash>
-Or:  python test_decoder.py (uses sample hashes)
+Usage:
+    python test_decoder.py <tx_hash>
+    python test_decoder.py 0xb16a2469c46234198fad56a7e1c2c94044c4fa5cb1be515443b58c059a021546
+    python test_decoder.py --list-accounts   # Show all COA accounts
+    python test_decoder.py --test-blur       # Test a known Blur transaction
+    python test_decoder.py --test-gondi      # Test a known Gondi transaction
 
-Uses the full production decoding engine to test transactions.
+This uses the actual decoder modules for accurate testing.
 """
+
 import os
 import sys
-
-# Fix Windows console encoding
-if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-
-from dotenv import load_dotenv
-from web3 import Web3
-from datetime import datetime, timezone
 import json
-from typing import List, Optional
+import argparse
+from decimal import Decimal
+from datetime import datetime, timezone
+from typing import List
+from dotenv import load_dotenv
+from pprint import pprint
 
-# Load environment
 load_dotenv()
 
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from main_app.services.decoders import (
-    DecoderRegistry,
-    PostingStatus,
-    TransactionCategory,
-)
+def get_web3():
+    """Initialize Web3 connection."""
+    from web3 import Web3
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+    infura_key = os.getenv("INFURA_API_KEY") or os.getenv("WEB3_INFURA_PROJECT_ID")
+    if not infura_key:
+        print("[ERROR] No INFURA_API_KEY found in environment")
+        sys.exit(1)
 
-INFURA_URL = os.getenv("INFURA_HTTP_URL") or f"https://mainnet.infura.io/v3/{os.getenv('INFURA_API_KEY')}"
+    url = f"https://mainnet.infura.io/v3/{infura_key}"
+    w3 = Web3(Web3.HTTPProvider(url))
 
-# Fund wallets to track
-FUND_WALLETS = [
-    "0xf9b64dc47dbe8c75f6ffc573cbc7599404bfe5a7",  # Main fund wallet
-]
+    if not w3.is_connected():
+        print("[ERROR] Failed to connect to Ethereum")
+        sys.exit(1)
 
-# Sample test hashes - update these as needed
-SAMPLE_HASHES = [
-    # Review queue transactions
-    "0x08ca4d21ad40a7a43888e062809112761a7192991872a3d839b2725093ae6331",
-    "0x890015f2c0f143030230c9066e7346b97db99ffcffade54054b35878d329465e",
-    "0x49caa7f7bb01b83f5c18723ce1c8037e89dbfd7e39126cd6876339e8924ae8c8",
-]
+    print(f"[OK] Connected to Ethereum (chain {w3.eth.chain_id})")
+    return w3
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def format_eth(wei_value: int) -> str:
-    """Format wei as ETH with 6 decimal places"""
-    eth = wei_value / 1e18
-    return f"{eth:.6f} ETH"
+def get_eth_price(w3, block_number: int) -> Decimal:
+    """Get ETH price at block (simplified - uses current price for testing)."""
+    # For production, use historical price API
+    # For testing, use a reasonable estimate
+    return Decimal("3300.00")
 
 
-def format_posting_status(status: PostingStatus) -> str:
-    """Format posting status with color indicator"""
-    colors = {
-        PostingStatus.AUTO_POST: "\033[92m",    # Green
-        PostingStatus.REVIEW_QUEUE: "\033[93m",  # Yellow
-        PostingStatus.POSTED: "\033[94m",        # Blue
+def list_coa_accounts():
+    """List all accounts in the Chart of Accounts."""
+    from main_app.services.decoders.accounts import COA
+
+    print("\n" + "=" * 80)
+    print("CHART OF ACCOUNTS (COA)")
+    print("=" * 80)
+
+    # Group by account number prefix
+    groups = {
+        "10xxx": "Assets - Cash & Digital",
+        "11xxx": "Assets - Deposits",
+        "12xxx": "Assets - Receivables",
+        "13xxx": "Assets - Loans & Investments",
+        "14xxx": "Assets - NFTs & Unrealized",
+        "15xxx": "Assets - Prepaid",
+        "18xxx": "Assets - Related Party",
+        "19xxx": "Assets - Intercompany/Suspense",
+        "20xxx": "Liabilities - Payables",
+        "25xxx": "Liabilities - Notes Payable",
+        "29xxx": "Liabilities - Related Party",
+        "30xxx": "Equity",
+        "41xxx": "Income - Other",
+        "80xxx": "Expenses",
+        "89xxx": "Expenses - Management",
+        "90xxx": "Income/Gain-Loss",
     }
-    reset = "\033[0m"
-    return f"{colors.get(status, '')}{status.value}{reset}"
+
+    sorted_accounts = sorted(COA.items(), key=lambda x: x[1][0])
+
+    current_group = None
+    for account_key, (gl_num, gl_name) in sorted_accounts:
+        # Determine group
+        prefix = str(gl_num)[:2] + "xxx"
+        if prefix != current_group:
+            current_group = prefix
+            group_name = groups.get(prefix, "Other")
+            print(f"\n--- {group_name} ({prefix}) ---")
+
+        print(f"  {gl_num:5d}  {account_key:<55} {gl_name}")
+
+    print(f"\nTotal accounts: {len(COA)}")
 
 
-def print_separator(char="=", length=80):
-    print(char * length)
+def decode_transaction(tx_hash: str, fund_wallets: list = None):
+    """Decode a single transaction and show results."""
+    from main_app.services.decoders import DecoderRegistry
+    from main_app.services.decoders.accounts import COA, get_account
 
+    w3 = get_web3()
 
-def print_header(text: str):
-    print_separator()
-    print(f"  {text}")
-    print_separator()
+    # Default fund wallets for testing
+    if fund_wallets is None:
+        fund_wallets = [
+            "0x3b2A51FEC517BBc7fEaf68AcFdb068b57870713F",  # Example wallet
+        ]
 
+    print(f"\n[INFO] Decoding transaction: {tx_hash}")
+    print(f"[INFO] Fund wallets: {fund_wallets[:3]}{'...' if len(fund_wallets) > 3 else ''}")
 
-# ============================================================================
-# MAIN DECODER TEST
-# ============================================================================
+    # Initialize registry
+    registry = DecoderRegistry(w3, fund_wallets)
+    print(f"[OK] Registry initialized")
 
-def test_transaction(w3: Web3, registry: DecoderRegistry, tx_hash: str) -> dict:
-    """
-    Decode a single transaction and print detailed output.
-    Returns the decoded transaction dict for further analysis.
-    """
-    print_header(f"TX: {tx_hash}")
-
+    # Decode (registry fetches tx data internally)
+    print("\n--- DECODING ---")
     try:
-        # First peek at raw transaction for context
-        tx = w3.eth.get_transaction(tx_hash)
-        receipt = w3.eth.get_transaction_receipt(tx_hash)
-
-        print(f"\n📋 RAW TRANSACTION:")
-        print(f"   From: {tx['from']}")
-        print(f"   To:   {tx['to']}")
-        print(f"   Value: {format_eth(tx['value'])}")
-        print(f"   Block: {tx['blockNumber']}")
-        print(f"   Gas Used: {receipt['gasUsed']:,}")
-        print(f"   Status: {'SUCCESS' if receipt['status'] == 1 else 'FAILED'}")
-        print(f"   Logs: {len(receipt['logs'])}")
-
-        if tx['input'] and len(tx['input']) >= 10:
-            selector = tx['input'][:10] if isinstance(tx['input'], str) else '0x' + tx['input'][:4].hex()
-            print(f"   Function: {selector}")
-
-        # Decode using registry (it fetches data internally)
-        print(f"\n🔍 DECODING...")
-        decoded = registry.decode_transaction(tx_hash)
-
-        if not decoded:
-            print("   ❌ Decoder returned None - transaction not recognized")
-            return {"hash": tx_hash, "status": "not_decoded"}
-
-        print(f"\n✅ DECODED RESULT:")
-        print(f"   Status: {decoded.status}")
-        print(f"   Platform: {decoded.platform.value}")
-        print(f"   Category: {decoded.category.value}")
-        print(f"   Posting Status: {format_posting_status(decoded.posting_status)}")
-        print(f"   Function: {decoded.function_name}")
-        print(f"   Value: {float(decoded.value):.6f} ETH")
-        print(f"   Gas Fee: {float(decoded.gas_fee):.6f} ETH")
-
-        if decoded.error:
-            print(f"   ⚠️ Error: {decoded.error}")
-
-        # Events
-        print(f"\n📡 DECODED EVENTS ({len(decoded.events)}):")
-        if decoded.events:
-            for i, evt in enumerate(decoded.events):
-                print(f"   [{i}] {evt.name} @ log {evt.log_index}")
-                for k, v in evt.args.items():
-                    val_str = str(v)
-                    if len(val_str) > 60:
-                        val_str = val_str[:60] + "..."
-                    print(f"       {k}: {val_str}")
-        else:
-            print("   (none)")
-
-        # Journal Entries
-        print(f"\n📒 JOURNAL ENTRIES ({len(decoded.journal_entries)}):")
-        if decoded.journal_entries:
-            for i, je in enumerate(decoded.journal_entries):
-                balanced = "✓" if je.validate() else "✗ IMBALANCED"
-                print(f"\n   Entry {i+1}: {je.description[:60]}")
-                print(f"   Status: {format_posting_status(je.posting_status)} | Balanced: {balanced}")
-                print(f"   Category: {je.category.value if hasattr(je.category, 'value') else je.category}")
-
-                for entry in je.entries:
-                    # Handle both dict and object formats
-                    if isinstance(entry, dict):
-                        entry_type = entry.get('type', 'UNKNOWN')
-                        account = entry.get('account', 'N/A')
-                        amount = entry.get('amount', 0)
-                        asset = entry.get('asset', 'ETH')
-                    else:
-                        entry_type = entry.type.value
-                        account = entry.account
-                        amount = entry.amount
-                        asset = entry.asset
-                    symbol = "+" if entry_type == "DEBIT" else "-"
-                    print(f"      {symbol} {entry_type:6} {account:40} {float(amount):.6f} {asset}")
-        else:
-            print("   ❌ NO JOURNAL ENTRIES - This is why it's in review queue!")
-
-        # Why review queue?
-        if decoded.posting_status == PostingStatus.REVIEW_QUEUE:
-            print(f"\n🔶 REVIEW QUEUE REASON:")
-            if not decoded.journal_entries:
-                print("   - No journal entries generated")
-            else:
-                imbalanced = [je for je in decoded.journal_entries if not je.validate()]
-                if imbalanced:
-                    print(f"   - {len(imbalanced)} imbalanced journal entries")
-                pending = [je for je in decoded.journal_entries if je.posting_status == PostingStatus.REVIEW_QUEUE]
-                if pending:
-                    print(f"   - {len(pending)} entries with REVIEW_QUEUE status")
-
-        return decoded.to_dict()
-
+        result = registry.decode_transaction(tx_hash)
     except Exception as e:
-        print(f"\n❌ ERROR: {e}")
+        print(f"[ERROR] Decoding failed: {e}")
         import traceback
         traceback.print_exc()
-        return {"hash": tx_hash, "error": str(e)}
+        return None
+
+    # Display transaction info from result
+    print("\n--- TRANSACTION INFO ---")
+    print(f"  Block: {result.block}")
+    print(f"  From: {result.from_address}")
+    print(f"  To: {result.to_address}")
+    print(f"  Value: {result.value} ETH")
+    print(f"  Gas Used: {result.gas_used:,}")
+    print(f"  Gas Fee: {result.gas_fee} ETH")
+    print(f"  ETH Price: ${result.eth_price}")
+
+    # Display results
+    print("\n--- DECODED RESULT ---")
+    print(f"  Status: {result.status}")
+    print(f"  Platform: {result.platform.value if hasattr(result.platform, 'value') else result.platform}")
+    print(f"  Category: {result.category.value if hasattr(result.category, 'value') else result.category}")
+    print(f"  Function: {result.function_name}")
+    print(f"  Value: {result.value} ETH")
+    print(f"  Gas Fee: {result.gas_fee} ETH")
+
+    if result.error:
+        print(f"  [ERROR] {result.error}")
+
+    # Events
+    print(f"\n--- DECODED EVENTS ({len(result.events)}) ---")
+    for i, event in enumerate(result.events):
+        print(f"  [{i}] {event.name} @ {event.contract_address[:10]}...")
+        if event.args:
+            for k, v in list(event.args.items())[:5]:
+                print(f"       {k}: {str(v)[:50]}")
+
+    # Journal Entries
+    print(f"\n--- JOURNAL ENTRIES ({len(result.journal_entries)}) ---")
+    for i, je in enumerate(result.journal_entries):
+        print(f"\n  [{i}] {je.entry_id}")
+        print(f"      Date: {je.date}")
+        print(f"      Description: {je.description}")
+        print(f"      Category: {je.category.value if hasattr(je.category, 'value') else je.category}")
+        print(f"      Posting Status: {je.posting_status.value if hasattr(je.posting_status, 'value') else je.posting_status}")
+        print(f"      Balanced: {je.validate()}")
+
+        print(f"      Entries:")
+        for entry in je.entries:
+            dr_cr = "DR" if entry['type'] == 'DEBIT' else "CR"
+            account = entry['account']
+            amount = entry['amount']
+            asset = entry['asset']
+
+            # Look up GL number if account is in COA
+            gl_info = ""
+            if account in COA:
+                gl_num, gl_name = COA[account]
+                gl_info = f" ({gl_num})"
+
+            print(f"        {dr_cr} {account}{gl_info}: {amount} {asset}")
+
+    # Validate all entries use COA accounts
+    print("\n--- ACCOUNT VALIDATION ---")
+    non_coa_accounts = set()
+    for je in result.journal_entries:
+        for entry in je.entries:
+            account = entry['account']
+            if account not in COA:
+                non_coa_accounts.add(account)
+
+    if non_coa_accounts:
+        print(f"  [WARNING] Non-COA accounts found:")
+        for acc in sorted(non_coa_accounts):
+            print(f"    - {acc}")
+    else:
+        print(f"  [OK] All accounts are in COA")
+
+    return result
 
 
-def main(hashes: List[str] = None):
-    """Main entry point"""
+def test_blur():
+    """Test with a known Blur transaction."""
+    # Blur Repay transaction
+    tx_hash = "0x1c16d468e458a30ff42aefc95b3d9ee7a1bbfc8e70326d82a1aad909f3844f87"
+    print("\n" + "=" * 80)
+    print("TESTING BLUR DECODER")
+    print("=" * 80)
+    decode_transaction(tx_hash)
 
-    # Initialize Web3
-    print("🔌 Connecting to Ethereum...")
-    w3 = Web3(Web3.HTTPProvider(INFURA_URL))
-    if not w3.is_connected():
-        print("❌ Failed to connect to Ethereum")
-        sys.exit(1)
-    print(f"   ✓ Connected to chain {w3.eth.chain_id}")
 
-    # Initialize decoder registry
-    print("\n🔧 Initializing decoder registry...")
-    registry = DecoderRegistry(
-        w3=w3,
-        fund_wallets=FUND_WALLETS,
-        fund_id="test_fund"
-    )
-    print(f"   ✓ Registry initialized with {len(registry._decoder_classes)} platform decoders available")
+def test_gondi():
+    """Test with a known Gondi transaction."""
+    # Gondi LoanRepaid transaction
+    tx_hash = "0xdc56082b96e93a06e73e6eb25baff5a9ac0b3b0a8d2c8f0e0e8f9a7d4c3b2a1f"
+    print("\n" + "=" * 80)
+    print("TESTING GONDI DECODER")
+    print("=" * 80)
+    decode_transaction(tx_hash)
 
-    # Use provided hashes or samples
-    test_hashes = hashes if hashes else SAMPLE_HASHES
 
-    print(f"\n📝 Testing {len(test_hashes)} transaction(s)...\n")
+def test_generic():
+    """Test with a generic ERC20 transfer."""
+    tx_hash = "0xb16a2469c46234198fad56a7e1c2c94044c4fa5cb1be515443b58c059a021546"
+    print("\n" + "=" * 80)
+    print("TESTING GENERIC DECODER (ERC20 Transfer)")
+    print("=" * 80)
+    decode_transaction(tx_hash)
+
+
+def fetch_wallet_transactions(wallet_address: str, limit: int = 100) -> List[str]:
+    """
+    Fetch transaction hashes for a wallet from Etherscan.
+    """
+    import requests
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    api_key = os.getenv('ETHERSCAN_API_KEY', '')
+    if not api_key:
+        print("[ERROR] ETHERSCAN_API_KEY not found in environment")
+        return []
+
+    print(f"[INFO] Fetching transactions for wallet: {wallet_address}")
+
+    url = "https://api.etherscan.io/v2/api"
+    params = {
+        'chainid': 1,
+        'module': 'account',
+        'action': 'txlist',
+        'address': wallet_address,
+        'startblock': 0,
+        'endblock': 99999999,
+        'page': 1,
+        'offset': limit,
+        'sort': 'desc',
+        'apikey': api_key
+    }
+
+    try:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == '1':
+                txs = data.get('result', [])
+                hashes = [tx['hash'] for tx in txs]
+                print(f"[OK] Found {len(hashes)} transactions")
+                return hashes
+            else:
+                print(f"[ERROR] API error: {data.get('message', 'Unknown')}")
+        else:
+            print(f"[ERROR] HTTP {response.status_code}")
+    except Exception as e:
+        print(f"[ERROR] {e}")
+
+    return []
+
+
+def decode_wallet(wallet_address: str, limit: int = 50, output_path: str = None):
+    """
+    Fetch and decode all transactions for a wallet.
+    """
+    print("\n" + "=" * 80)
+    print(f"DECODING WALLET: {wallet_address}")
+    print("=" * 80)
+
+    # Fetch transaction hashes
+    tx_hashes = fetch_wallet_transactions(wallet_address, limit)
+    if not tx_hashes:
+        print("[WARN] No transactions found")
+        return
+
+    # Decode all transactions
+    decode_multiple(tx_hashes, fund_wallets=[wallet_address], export_path=output_path)
+
+
+def export_from_registry(output_format: str = "json", output_path: str = None):
+    """
+    Export all decoded transactions from an existing registry.
+    This is useful after running the main app to export what was decoded.
+    """
+    from main_app.services.decoders import DecoderRegistry
+
+    w3 = get_web3()
+
+    # Get fund wallets from s3
+    try:
+        from main_app.s3_utils import load_WALLET_file
+        wallet_df = load_WALLET_file()
+        fund_wallets = wallet_df['wallet_address'].tolist() if not wallet_df.empty else []
+        print(f"[INFO] Loaded {len(fund_wallets)} fund wallets from S3")
+    except Exception as e:
+        print(f"[WARN] Could not load wallets: {e}")
+        fund_wallets = []
+
+    registry = DecoderRegistry(w3, fund_wallets)
+
+    print(f"\n[INFO] Registry has {len(registry.decoded_cache)} cached transactions")
+
+    if len(registry.decoded_cache) == 0:
+        print("[WARN] No transactions in cache. Run the main app first to decode transactions.")
+        return
+
+    # Export
+    if output_format == "json":
+        path = registry.export_decoded_transactions(output_path, format="json")
+    elif output_format == "csv":
+        path = registry.export_decoded_transactions(output_path, format="csv")
+    elif output_format == "journal":
+        path = registry.export_journal_entries(output_path)
+    else:
+        print(f"[ERROR] Unknown format: {output_format}")
+        return
+
+    print(f"[OK] Exported to: {path}")
+
+
+def decode_multiple(tx_hashes: List[str], fund_wallets: list = None, export_path: str = None):
+    """
+    Decode multiple transactions and optionally export results.
+    """
+    from main_app.services.decoders import DecoderRegistry
+    from main_app.services.decoders.accounts import COA
+
+    w3 = get_web3()
+
+    if fund_wallets is None:
+        try:
+            from main_app.s3_utils import load_WALLET_file
+            wallet_df = load_WALLET_file()
+            fund_wallets = wallet_df['wallet_address'].tolist() if not wallet_df.empty else []
+            print(f"[INFO] Loaded {len(fund_wallets)} fund wallets from S3")
+        except:
+            fund_wallets = ["0x3b2A51FEC517BBc7fEaf68AcFdb068b57870713F"]
+
+    registry = DecoderRegistry(w3, fund_wallets)
+    print(f"[OK] Registry initialized")
+    print(f"\n{'='*80}")
+    print(f"DECODING {len(tx_hashes)} TRANSACTIONS")
+    print(f"{'='*80}")
 
     results = []
-    for tx_hash in test_hashes:
-        result = test_transaction(w3, registry, tx_hash)
-        results.append(result)
-        print("\n")
+    errors = []
+    non_coa_accounts = set()
+
+    for i, tx_hash in enumerate(tx_hashes):
+        print(f"\n[{i+1}/{len(tx_hashes)}] Decoding: {tx_hash[:16]}...")
+        try:
+            result = registry.decode_transaction(tx_hash)
+            results.append(result)
+
+            status_symbol = "[OK]" if result.status == "success" else "[ERR]"
+            je_count = len(result.journal_entries)
+            balanced = "balanced" if result.entries_balanced else "IMBALANCED"
+
+            print(f"  {status_symbol} {result.platform.value}/{result.category.value} - {je_count} JEs ({balanced})")
+
+            # Check for non-COA accounts
+            for je in result.journal_entries:
+                for entry in je.entries:
+                    if entry['account'] not in COA:
+                        non_coa_accounts.add(entry['account'])
+
+        except Exception as e:
+            print(f"  [ERR] ERROR: {e}")
+            errors.append((tx_hash, str(e)))
 
     # Summary
-    print_header("SUMMARY")
+    print(f"\n{'='*80}")
+    print(f"SUMMARY")
+    print(f"{'='*80}")
+    print(f"  Total: {len(tx_hashes)}")
+    print(f"  Success: {len(results)}")
+    print(f"  Errors: {len(errors)}")
 
-    auto_post = [r for r in results if r.get('posting_status') == 'auto_post']
-    review = [r for r in results if r.get('posting_status') == 'review_queue']
-    no_entries = [r for r in results if not r.get('journal_entries')]
-    errors = [r for r in results if r.get('error')]
+    if non_coa_accounts:
+        print(f"\n  [WARNING] Non-COA accounts found:")
+        for acc in sorted(non_coa_accounts):
+            print(f"    - {acc}")
 
-    print(f"   Total: {len(results)}")
-    print(f"   Auto-Post Ready: {len(auto_post)}")
-    print(f"   Review Queue: {len(review)}")
-    print(f"   No Journal Entries: {len(no_entries)}")
-    print(f"   Errors: {len(errors)}")
+    # Export if requested
+    if export_path:
+        print(f"\n[INFO] Exporting to {export_path}...")
+        registry.export_journal_entries(export_path)
+        print(f"[OK] Export complete")
 
-    # Group by platform/category for insights
-    print(f"\n   By Platform:")
-    platforms = {}
-    for r in results:
-        p = r.get('platform', 'unknown')
-        platforms[p] = platforms.get(p, 0) + 1
-    for p, count in sorted(platforms.items(), key=lambda x: -x[1]):
-        print(f"      {p}: {count}")
+    return results
 
-    print(f"\n   By Category:")
-    categories = {}
-    for r in results:
-        c = r.get('category', 'unknown')
-        categories[c] = categories.get(c, 0) + 1
-    for c, count in sorted(categories.items(), key=lambda x: -x[1]):
-        print(f"      {c}: {count}")
+
+def load_tx_hashes_from_file(filepath: str) -> List[str]:
+    """Load transaction hashes from a file (one per line or JSON array)."""
+    import json
+    from pathlib import Path
+
+    path = Path(filepath)
+    if not path.exists():
+        print(f"[ERROR] File not found: {filepath}")
+        return []
+
+    content = path.read_text().strip()
+
+    # Try JSON first
+    try:
+        data = json.loads(content)
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict) and 'transactions' in data:
+            return [tx.get('tx_hash', tx.get('hash', '')) for tx in data['transactions']]
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back to line-by-line
+    hashes = []
+    for line in content.split('\n'):
+        line = line.strip()
+        if line and line.startswith('0x'):
+            hashes.append(line)
+
+    return hashes
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Test transaction decoders")
+    parser.add_argument("tx_hash", nargs="?", help="Transaction hash to decode")
+    parser.add_argument("--list-accounts", action="store_true", help="List all COA accounts")
+    parser.add_argument("--test-blur", action="store_true", help="Test Blur decoder")
+    parser.add_argument("--test-gondi", action="store_true", help="Test Gondi decoder")
+    parser.add_argument("--test-generic", action="store_true", help="Test Generic decoder")
+    parser.add_argument("--wallets", nargs="+", help="Fund wallet addresses")
+    parser.add_argument("--export", choices=["json", "csv", "journal"], help="Export format")
+    parser.add_argument("--output", "-o", help="Output file path")
+    parser.add_argument("--file", "-f", help="File containing transaction hashes (one per line or JSON)")
+    parser.add_argument("--batch", action="store_true", help="Process multiple transactions from --file")
+    parser.add_argument("--decode-wallet", help="Fetch and decode all transactions for a wallet address")
+    parser.add_argument("--limit", type=int, default=50, help="Limit number of transactions to fetch (default: 50)")
+
+    args = parser.parse_args()
+
+    if args.decode_wallet:
+        decode_wallet(args.decode_wallet, limit=args.limit, output_path=args.output)
+    elif args.list_accounts:
+        list_coa_accounts()
+    elif args.export:
+        export_from_registry(args.export, args.output)
+    elif args.batch and args.file:
+        tx_hashes = load_tx_hashes_from_file(args.file)
+        if tx_hashes:
+            decode_multiple(tx_hashes, args.wallets, args.output)
+    elif args.file:
+        tx_hashes = load_tx_hashes_from_file(args.file)
+        if tx_hashes:
+            decode_multiple(tx_hashes, args.wallets, args.output)
+    elif args.test_blur:
+        test_blur()
+    elif args.test_gondi:
+        test_gondi()
+    elif args.test_generic:
+        test_generic()
+    elif args.tx_hash:
+        decode_transaction(args.tx_hash, args.wallets)
+    else:
+        parser.print_help()
+        print("\n\nExamples:")
+        print("  python test_decoder.py 0x1234...abcd              # Decode single transaction")
+        print("  python test_decoder.py --test-generic             # Test with known tx")
+        print("  python test_decoder.py --list-accounts            # Show COA")
+        print("  python test_decoder.py --decode-wallet 0xABC...   # Decode all wallet txs")
+        print("  python test_decoder.py --decode-wallet 0xABC... --limit 100 -o results.csv")
+        print("  python test_decoder.py --file tx_hashes.txt -o journal_entries.csv")
 
 
 if __name__ == "__main__":
-    # Get hashes from command line or use samples
-    if len(sys.argv) > 1:
-        # Handle comma-separated or space-separated hashes
-        hashes = []
-        for arg in sys.argv[1:]:
-            # Split on commas if present
-            for h in arg.split(','):
-                h = h.strip()
-                if h:
-                    # Ensure 0x prefix
-                    if not h.startswith('0x'):
-                        h = '0x' + h
-                    hashes.append(h)
-        main(hashes)
-    else:
-        print("Usage: python test_decoder.py <tx_hash1> [tx_hash2] ...")
-        print("       python test_decoder.py (runs sample hashes)")
-        print()
-        main()
+    main()

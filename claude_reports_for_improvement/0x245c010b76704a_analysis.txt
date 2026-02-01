@@ -1,0 +1,146 @@
+================================================================================
+TRANSACTION ANALYSIS REPORT
+================================================================================
+TX Hash: 0x245c010b76704aa95a984bc2d331627035e04156905e6491d265b839babced43
+Platform: Gondi
+Block: 24299558
+Timestamp: 2026-01-23T19:24:47+00:00
+Category: CONTRACT_CALL
+
+================================================================================
+ISSUE SUMMARY: DECODER FAILED - NO EVENTS OR JOURNAL ENTRIES CAPTURED
+================================================================================
+
+SEVERITY: HIGH
+
+The Gondi decoder returned a "success" status but captured zero meaningful data:
+- Function Name: "unknown" (not decoded)
+- Events: [] (empty array)
+- Journal Entries: [] (empty array)
+- Wallet Roles: {} (empty)
+
+This is a silent failure - significant gas was used (136,499 gas) indicating
+real on-chain activity occurred, but the decoder captured nothing.
+
+================================================================================
+ROOT CAUSE ANALYSIS
+================================================================================
+
+The transaction was sent to the GONDI V1 CONTRACT:
+  Address: 0xf41B389E0C1950dc0B16C9498eaE77131CC08A56
+
+The Gondi decoder has THREE contract versions defined in GONDI_CONTRACTS:
+  - V1: 0xf41B389E0C1950dc0B16C9498eaE77131CC08A56 (this transaction)
+  - V2: 0x478f6F994C6fb3cf3e444a489b3AD9edB8cCaE16
+  - V3: 0xf65B99CE6DC5F6c556172BCC0Ff27D3665a7d9A8
+
+PROBLEM: The decoder only AUTO-INSTANTIATES the V2 contract (lines 744-754):
+
+    # v1.7.0: AUTO-INSTANTIATE V2 CONTRACT if not already provided
+    v2_addr = GONDI_MULTI_SOURCE_LOAN_ADDRESS.lower()
+    if v2_addr not in self.contracts:
+        v2_contract = instantiate_v2_contract(self.w3)
+        self.contracts[v2_addr] = v2_contract
+
+There is NO equivalent auto-instantiation for V1 or V3 contracts!
+There is also NO V1_ABI or V3_ABI defined in the decoder.
+
+When a transaction hits the V1 contract:
+1. The decoder doesn't have a contract instance for V1 address
+2. The function selector cannot be decoded -> "unknown"
+3. Event logs from V1 address are skipped (line 866 checks: if log_addr in self.contracts)
+4. No journal entries can be generated
+
+================================================================================
+RECOMMENDED FIXES
+================================================================================
+
+1. ADD V1 AND V3 ABIs:
+   Similar to V2_MULTISOURCE_LOAN_ABI, define:
+   - V1_MULTISOURCE_LOAN_ABI
+   - V3_TRANCHE_LOAN_ABI (or similar name for V3)
+
+   These can likely be fetched from Etherscan for each contract address.
+
+2. ADD AUTO-INSTANTIATION FOR ALL CONTRACTS:
+   In GondiEventDecoder.__init__(), after line 754, add:
+
+   # Auto-instantiate V1 contract
+   v1_addr = GONDI_CONTRACTS["v1"]["address"].lower()
+   if v1_addr not in self.contracts:
+       try:
+           v1_contract = instantiate_v1_contract(self.w3)  # New function needed
+           self.contracts[v1_addr] = v1_contract
+           print(f"  [OK] Auto-instantiated V1 contract: {v1_addr[:12]}...")
+       except Exception as e:
+           print(f"  [!] Could not auto-instantiate V1 contract: {e}")
+
+   # Similar for V3
+
+3. ADD HELPER FUNCTIONS:
+   def instantiate_v1_contract(w3: Web3) -> Any:
+       return w3.eth.contract(
+           address=Web3.to_checksum_address(GONDI_CONTRACTS["v1"]["address"]),
+           abi=V1_MULTISOURCE_LOAN_ABI
+       )
+
+4. ALTERNATIVE - USE UNIFIED ABI:
+   If V1 and V2 share the same event signatures (LoanEmitted, LoanRepaid, etc.),
+   a single combined ABI might work. However, the structs differ:
+   - V1/V3 use Tranche[] with 'floor' field
+   - V2 uses Source[] without 'floor' field
+
+   The decoder already handles this struct difference at runtime (lines 441-547),
+   but it needs the contract instances to even attempt decoding.
+
+================================================================================
+WHAT WE DON'T KNOW (NEEDS INVESTIGATION)
+================================================================================
+
+Without the V1 ABI, we cannot determine:
+1. What function was actually called in this transaction
+2. What events were emitted
+3. The economic substance of the transaction (loan origination? repayment? refinance?)
+
+To investigate further:
+- Use Etherscan to view the transaction:
+  https://etherscan.io/tx/0x245c010b76704aa95a984bc2d331627035e04156905e6491d265b839babced43
+- Fetch the V1 contract ABI from Etherscan's API
+- Manually decode the transaction input and event logs
+
+================================================================================
+ECONOMIC IMPACT
+================================================================================
+
+Because no journal entries were generated:
+- NAV calculations may be incorrect (missing loan activity)
+- Fund accounting may not reflect this transaction
+- Audit trail is incomplete
+
+If this is a common issue (many V1 transactions not decoded), the cumulative
+impact on financial reporting could be significant.
+
+================================================================================
+TESTING RECOMMENDATION
+================================================================================
+
+After implementing the fix:
+1. Re-run this transaction through the decoder
+2. Verify events are captured
+3. Verify journal entries balance
+4. Test with a sample of other V1 contract transactions
+
+================================================================================
+FILES TO MODIFY
+================================================================================
+
+1. main_app/services/decoders/gondi_decoder.py
+   - Add V1_MULTISOURCE_LOAN_ABI constant
+   - Add V3_TRANCHE_LOAN_ABI constant (if needed)
+   - Add instantiate_v1_contract() function
+   - Add instantiate_v3_contract() function
+   - Update __init__() to auto-instantiate all contract versions
+
+================================================================================
+END OF REPORT
+================================================================================

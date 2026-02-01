@@ -112,7 +112,7 @@ class BlurAccounts:
     INVESTMENTS_NFTS_SEIZED = "investments_nfts_seized_collateral"
 
     # Liabilities (for borrower perspective)
-    NOTE_PAYABLE = "note_payable_cryptocurrency_cryptocurrency_blur_pool"
+    NOTE_PAYABLE = "note_payable_cryptocurrency_blur_pool"
     INTEREST_PAYABLE = "interest_payable_cryptocurrency_blur_pool"
 
     # Income
@@ -681,7 +681,145 @@ class BlurEventDecoder:
 
         except Exception as e:
             print(f"[!] Could not decode function input: {e}")
-            return None, None, None
+            # Fallback: Try to manually decode known function selectors
+            return self._fallback_decode_function(tx)
+
+    def _fallback_decode_function(self, tx) -> Tuple[Optional[str], Optional[Dict], Optional[LienData]]:
+        """
+        Fallback manual decoding for functions not in ABI.
+
+        Handles:
+        - seize(LienPointer[] lienPointers) - selector 0x5b43226f
+        - repay(Lien,uint256) - selector 0xc87df1c2
+        """
+        try:
+            input_data = tx.get('input', b'')
+            if isinstance(input_data, bytes):
+                input_hex = input_data.hex()
+            else:
+                input_hex = input_data[2:] if input_data.startswith('0x') else input_data
+
+            if len(input_hex) < 8:
+                return None, None, None
+
+            selector = input_hex[:8].lower()
+
+            # repay((address,address,address,uint256,uint256,uint256,uint256,uint256,uint256),uint256)
+            # selector 0xc87df1c2
+            if selector == 'c87df1c2':
+                print(f"  -> Fallback decoding repay function (c87df1c2)")
+                # Layout: selector(4 bytes) + Lien tuple (9 fields * 32 bytes) + lienId (32 bytes)
+                # Lien: lender, borrower, collection, tokenId, amount, startTime, rate, auctionStartBlock, auctionDuration
+
+                # Skip selector (8 hex chars)
+                data_start = 8
+
+                # Parse Lien struct fields (each 32 bytes = 64 hex chars)
+                lender = '0x' + input_hex[data_start + 24:data_start + 64].lower()
+                borrower = '0x' + input_hex[data_start + 64 + 24:data_start + 128].lower()
+                collection = '0x' + input_hex[data_start + 128 + 24:data_start + 192].lower()
+                token_id = int(input_hex[data_start + 192:data_start + 256], 16)
+                amount = int(input_hex[data_start + 256:data_start + 320], 16)
+                start_time = int(input_hex[data_start + 320:data_start + 384], 16)
+                rate = int(input_hex[data_start + 384:data_start + 448], 16)
+                auction_start_block = int(input_hex[data_start + 448:data_start + 512], 16)
+                auction_duration = int(input_hex[data_start + 512:data_start + 576], 16)
+
+                # lienId is the last parameter (after the 9-field Lien struct)
+                lien_id = int(input_hex[data_start + 576:data_start + 640], 16)
+
+                lien_data = LienData(
+                    lender=lender,
+                    borrower=borrower,
+                    collection=collection,
+                    token_id=token_id,
+                    amount_wei=amount,
+                    start_time=start_time,
+                    rate_bips=rate,
+                    auction_start_block=auction_start_block,
+                    auction_duration=auction_duration,
+                )
+
+                func_params = {
+                    'lien': {
+                        'lender': lender,
+                        'borrower': borrower,
+                        'collection': collection,
+                        'tokenId': token_id,
+                        'amount': amount,
+                        'startTime': start_time,
+                        'rate': rate,
+                        'auctionStartBlock': auction_start_block,
+                        'auctionDuration': auction_duration,
+                    },
+                    'lienId': lien_id,
+                    '_lien_lookup': {lien_id: lien_data}
+                }
+                print(f"  -> Decoded repay: lender={lender[:15]}..., borrower={borrower[:15]}..., lienId={lien_id}")
+
+                return 'repay', func_params, lien_data
+
+            # seize(LienPointer[] lienPointers) - selector 0x5b43226f
+            if selector == '5b43226f':
+                print(f"  -> Fallback decoding seize function")
+                # Parse ABI-encoded dynamic array
+                # Layout: selector(4) + offset(32) + array_length(32) + elements...
+                # Each LienPointer is: Lien(9 fields * 32 bytes = 288) + lienId(32) = 320 bytes
+
+                # Offset to array (skip selector = 8 hex chars)
+                offset_hex = input_hex[8:72]  # 32 bytes = 64 hex chars
+                offset = int(offset_hex, 16)  # Should be 32 (0x20)
+
+                # Array length
+                arr_start = 8 + offset * 2  # Convert byte offset to hex offset
+                arr_len_hex = input_hex[arr_start:arr_start+64]
+                arr_len = int(arr_len_hex, 16)
+
+                if arr_len == 0:
+                    return 'seize', {}, None
+
+                # Parse first LienPointer
+                elem_start = arr_start + 64  # After length
+
+                # Lien struct: lender, borrower, collection, tokenId, amount, startTime, rate, auctionStartBlock, auctionDuration
+                # Each field is 32 bytes (64 hex chars)
+                lien_hex = input_hex[elem_start:elem_start + 9*64]  # 9 fields
+
+                # Extract addresses (last 40 hex chars of each 64-char word)
+                lender = '0x' + lien_hex[24:64].lower()  # First 32 bytes, address is in last 20
+                borrower = '0x' + lien_hex[64+24:64+64].lower()
+                collection = '0x' + lien_hex[128+24:128+64].lower()
+                token_id = int(lien_hex[192:256], 16)
+                amount = int(lien_hex[256:320], 16)
+                start_time = int(lien_hex[320:384], 16)
+                rate = int(lien_hex[384:448], 16)
+                auction_start_block = int(lien_hex[448:512], 16)
+                auction_duration = int(lien_hex[512:576], 16)
+
+                # lienId is after the Lien struct
+                lien_id = int(input_hex[elem_start + 576:elem_start + 640], 16)
+
+                lien_data = LienData(
+                    lender=lender,
+                    borrower=borrower,
+                    collection=collection,
+                    token_id=token_id,
+                    amount_wei=amount,
+                    start_time=start_time,
+                    rate_bips=rate,
+                    auction_start_block=auction_start_block,
+                    auction_duration=auction_duration,
+                )
+
+                func_params = {'_lien_lookup': {lien_id: lien_data}}
+                print(f"  -> Decoded seize: lender={lender[:15]}..., lienId={lien_id}")
+
+                return 'seize', func_params, lien_data
+
+        except Exception as e:
+            print(f"[!] Fallback decoding failed: {e}")
+
+        return None, None, None
 
     def _debug_print_lien_extraction(self, func_name: str, func_params: Dict, lien_data: Optional[LienData]):
         """Debug helper to print lien extraction details"""
@@ -1011,6 +1149,20 @@ class BlurEventDecoder:
             event.lien_id = lien_id_from_event
         except Exception as e:
             print(f"[!] Error decoding Seize event args: {e}")
+            # Fallback: manually decode Seize event
+            # Seize(uint256 lienId, address collection) - lienId in data, collection indexed
+            try:
+                data = log.get('data', b'')
+                if isinstance(data, bytes):
+                    data_hex = data.hex()
+                else:
+                    data_hex = data[2:] if data.startswith('0x') else data
+                if data_hex and len(data_hex) >= 64:
+                    lien_id_from_event = int(data_hex[:64], 16)
+                    event.lien_id = lien_id_from_event
+                    print(f"  -> Manually decoded Seize lienId: {lien_id_from_event}")
+            except Exception as e2:
+                print(f"[!] Fallback Seize decoding failed: {e2}")
 
         # FIXED: Look up correct lien_data for THIS lienId
         if func_params and '_lien_lookup' in func_params and lien_id_from_event is not None:

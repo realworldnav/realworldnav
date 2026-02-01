@@ -930,58 +930,138 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             traceback.print_exc()
             ui.notification_show(f"Posting failed: {str(e)}", type="error")
 
-    @reactive.effect
-    @reactive.event(input.export_decoded_csv)
-    def export_decoded_csv():
-        """Export decoded transactions to CSV"""
+    @render.download(filename="journal_entries_export.csv")
+    def download_decoded_csv():
+        """Download journal entries from decoded transactions as CSV"""
         transactions = filtered_decoded_transactions()
 
         if not transactions:
-            ui.notification_show("No transactions to export", type="warning")
+            # Return empty CSV with headers
+            yield "tx_hash,entry_id,date,platform,category,description,posting_status,type,account_key,gl_acct_number,gl_acct_name,amount,asset,eth_usd_price,amount_usd,in_coa\n"
             return
 
         try:
-            # Flatten transactions for CSV
+            from ...services.decoders.accounts import COA
+
             rows = []
             for tx in transactions:
-                base_row = {
-                    'tx_hash': tx.get('tx_hash'),
-                    'platform': tx.get('platform'),
-                    'category': tx.get('category'),
-                    'timestamp': tx.get('timestamp'),
-                    'block': tx.get('block'),
-                    'from': tx.get('from_address'),
-                    'to': tx.get('to_address'),
-                    'value_eth': tx.get('value'),
-                    'eth_price': tx.get('eth_price'),
-                    'gas_fee': tx.get('gas_fee'),
-                    'function': tx.get('function_name'),
-                    'status': tx.get('status'),
-                }
+                tx_hash = tx.get('tx_hash', '')
+                platform = tx.get('platform', 'unknown')
+                category = tx.get('category', 'UNKNOWN')
+                timestamp = tx.get('timestamp', '')
+                eth_price = float(tx.get('eth_price', 0))
 
-                # Add journal entry summary
-                entries = tx.get('journal_entries', [])
-                base_row['journal_entries_count'] = len(entries)
-                base_row['entries_balanced'] = all(
-                    e.get('entries', []) for e in entries
-                )
+                # Get journal entries
+                journal_entries = tx.get('journal_entries', [])
+                for je in journal_entries:
+                    entry_id = je.get('entry_id', '')
+                    description = je.get('description', '')
+                    posting_status = je.get('posting_status', 'review_queue')
+                    entries = je.get('entries', [])
 
-                rows.append(base_row)
+                    for entry in entries:
+                        entry_type = entry.get('type', '')
+                        account_key = entry.get('account', '')
+                        amount = float(entry.get('amount', 0))
+                        asset = entry.get('asset', 'ETH')
+
+                        # Look up GL account info from COA
+                        gl_acct_number = ''
+                        gl_acct_name = ''
+                        in_coa = False
+                        if account_key in COA:
+                            gl_acct_number, gl_acct_name = COA[account_key]
+                            in_coa = True
+                        else:
+                            # Fallback: account_key might already be the name
+                            gl_acct_name = account_key
+
+                        # Calculate USD amount
+                        stablecoins = {'USDC', 'USDT', 'DAI', 'FRAX', 'LUSD'}
+                        if asset.upper() in stablecoins:
+                            amount_usd = amount
+                        else:
+                            amount_usd = amount * eth_price
+
+                        rows.append({
+                            'tx_hash': tx_hash,
+                            'entry_id': entry_id,
+                            'date': timestamp,
+                            'platform': platform,
+                            'category': category,
+                            'description': description,
+                            'posting_status': posting_status,
+                            'type': entry_type,
+                            'account_key': account_key,
+                            'gl_acct_number': gl_acct_number,
+                            'gl_acct_name': gl_acct_name,
+                            'amount': amount,
+                            'asset': asset,
+                            'eth_usd_price': eth_price,
+                            'amount_usd': amount_usd,
+                            'in_coa': in_coa,
+                        })
+
+            if not rows:
+                yield "tx_hash,entry_id,date,platform,category,description,posting_status,type,account_key,gl_acct_number,gl_acct_name,amount,asset,eth_usd_price,amount_usd,in_coa\n"
+                return
 
             df = pd.DataFrame(rows)
-
-            # For now, show notification (actual download would need file handling)
-            ui.notification_show(
-                f"Export ready: {len(rows)} transactions. Check downloads.",
-                type="success"
-            )
-
-            # TODO: Implement actual CSV download
-            # This would typically use render.download
+            yield df.to_csv(index=False)
+            logger.info(f"Exported {len(rows)} journal entry rows to CSV")
 
         except Exception as e:
             logger.error(f"Failed to export CSV: {e}")
-            ui.notification_show(f"Export failed: {str(e)}", type="error")
+            import traceback
+            traceback.print_exc()
+            yield f"Error exporting: {str(e)}\n"
+
+    @render.download(filename="raw_transactions_export.csv")
+    def download_raw_transactions_csv():
+        """Download raw decoded transactions as CSV (transaction-level summary)"""
+        transactions = filtered_decoded_transactions()
+
+        if not transactions:
+            yield "tx_hash,platform,category,timestamp,block,from_address,to_address,value_eth,eth_price,value_usd,gas_fee,function_name,posting_status,journal_entries_count,status\n"
+            return
+
+        try:
+            rows = []
+            for tx in transactions:
+                eth_price = float(tx.get('eth_price', 0))
+                value_eth = float(tx.get('value', 0))
+
+                # Calculate total value from journal entries if available
+                je_count = len(tx.get('journal_entries', []))
+                posting_status = tx.get('posting_status', 'review_queue')
+
+                rows.append({
+                    'tx_hash': tx.get('tx_hash', ''),
+                    'platform': tx.get('platform', 'unknown'),
+                    'category': tx.get('category', 'UNKNOWN'),
+                    'timestamp': tx.get('timestamp', ''),
+                    'block': tx.get('block', ''),
+                    'from_address': tx.get('from_address', ''),
+                    'to_address': tx.get('to_address', ''),
+                    'value_eth': value_eth,
+                    'eth_price': eth_price,
+                    'value_usd': value_eth * eth_price,
+                    'gas_fee': tx.get('gas_fee', 0),
+                    'function_name': tx.get('function_name', ''),
+                    'posting_status': posting_status,
+                    'journal_entries_count': je_count,
+                    'status': tx.get('status', ''),
+                })
+
+            df = pd.DataFrame(rows)
+            yield df.to_csv(index=False)
+            logger.info(f"Exported {len(rows)} raw transactions to CSV")
+
+        except Exception as e:
+            logger.error(f"Failed to export raw transactions CSV: {e}")
+            import traceback
+            traceback.print_exc()
+            yield f"Error exporting: {str(e)}\n"
 
     # Return a cleanup function (optional)
     return None

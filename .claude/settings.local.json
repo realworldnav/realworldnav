@@ -47,7 +47,9 @@
       "Bash(git push:*)",
       "Bash(more:*)",
       "Bash(del \"C:\\\\Users\\\\charl\\\\Documents\\\\GitHub\\\\realworldnav\\\\debug_decoder_integration.py\")",
-      "Bash(wmic process where \"ProcessId=47288\" delete)"
+      "Bash(wmic process where \"ProcessId=47288\" delete)",
+      "Bash(if not exist \"C:\\\\Users\\\\charl\\\\Documents\\\\GitHub\\\\realworldnav\\\\claude_reports_for_improvement\" mkdir \"C:\\\\Users\\\\charl\\\\Documents\\\\GitHub\\\\realworldnav\\\\claude_reports_for_improvement\")",
+      "WebFetch(domain:docs.chainstack.com)"
     ],
     "deny": [],
     "ask": [],

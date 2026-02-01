@@ -462,9 +462,10 @@ class BaseDecoder(ABC):
     CONTRACT_ADDRESSES: List[str] = []
 
     # Chart of accounts mapping - override in subclasses
+    # Use account keys from centralized COA (see accounts.py)
     ACCOUNTS = {
-        "eth_wallet": "100.30 - ETH Wallet",
-        "gas_expense": "600.10 - Gas Expense",
+        "eth_wallet": "digital_assets_eth",      # 10200
+        "gas_expense": "gas_fee_expense",        # 80001
     }
 
     # Categories that auto-post to GL
@@ -655,6 +656,217 @@ class BaseDecoder(ABC):
 
 
 # ============================================================================
+# BASE DECODER ADAPTER CLASS
+# ============================================================================
+
+class BaseDecoderAdapter(BaseDecoder):
+    """
+    Base class for adapters that wrap notebook decoders.
+
+    Provides:
+    - Consistent initialization pattern with wallet_metadata building
+    - Lazy loading of notebook decoders via _ensure_initialized()
+    - Standard error handling with _create_basic_result()
+    - Health check mechanism for runtime status
+    - Validation method for configuration checking
+
+    Subclasses must implement:
+    - _initialize_decoder() -> bool: Initialize the notebook decoder
+    - can_decode(tx, receipt) -> bool: Check if decoder handles this transaction
+    - decode(tx, receipt, block, eth_price) -> DecodedTransaction: Decode the transaction
+    """
+
+    def __init__(self, w3: Web3, fund_wallets: List[str]):
+        """
+        Initialize the adapter with Web3 and fund wallets.
+
+        Note: We don't call super().__init__() because BaseDecoder's __init__
+        calls _load_abis() immediately, but adapters use lazy initialization.
+        """
+        self.w3 = w3
+        self.fund_wallets = [w.lower() for w in fund_wallets]
+        self.wallet_metadata = self._build_wallet_metadata(fund_wallets)
+        self.positions: Dict[int, LoanPosition] = {}
+        self.contracts_cache: Dict[str, Any] = {}
+        self._notebook_decoder = None
+        self._journal_generator = None
+        self._initialized = False
+        self._initialization_error: Optional[str] = None
+
+    @staticmethod
+    def _build_wallet_metadata(fund_wallets: List[str]) -> Dict[str, Dict]:
+        """
+        Convert fund_wallets list to wallet_metadata dict expected by notebook decoders.
+
+        Args:
+            fund_wallets: List of wallet addresses
+
+        Returns:
+            Dict mapping lowercase address to metadata dict
+        """
+        return {
+            addr.lower(): {
+                'fund_id': 'fund',
+                'wallet_name': f'Wallet {addr[:8]}',
+                'category': 'fund',
+                'wallet_type': 'hot',
+            }
+            for addr in fund_wallets
+        }
+
+    def _load_abis(self):
+        """
+        No-op for adapters - use _ensure_initialized() instead.
+
+        Adapters use lazy initialization via _initialize_decoder() rather than
+        loading ABIs in the constructor.
+        """
+        pass
+
+    @abstractmethod
+    def _initialize_decoder(self) -> bool:
+        """
+        Initialize the notebook decoder. Called lazily on first decode.
+
+        Subclasses should:
+        1. Import the notebook decoder class
+        2. Load required ABIs
+        3. Create contract instances
+        4. Instantiate _notebook_decoder and _journal_generator
+        5. Set _initialization_error if something fails
+        6. Return True on success, False on failure
+
+        Returns:
+            True if initialization succeeded, False otherwise
+        """
+        pass
+
+    def _ensure_initialized(self) -> bool:
+        """
+        Ensure decoder is initialized, performing lazy init if needed.
+
+        Returns:
+            True if decoder is ready to use, False otherwise
+        """
+        if self._initialized:
+            return True
+        if self._initialization_error:
+            return False
+
+        try:
+            success = self._initialize_decoder()
+            self._initialized = success
+            if not success and not self._initialization_error:
+                self._initialization_error = "Initialization returned False"
+            return success
+        except Exception as e:
+            self._initialization_error = str(e)
+            logger.error(f"Failed to initialize {self.PLATFORM.value} decoder: {e}")
+            return False
+
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check decoder health status.
+
+        Returns:
+            Dict with status, initialization state, and component availability
+        """
+        if self._initialized:
+            status = 'healthy'
+        elif self._initialization_error:
+            status = 'error'
+        else:
+            status = 'pending'
+
+        return {
+            'platform': self.PLATFORM.value,
+            'status': status,
+            'initialized': self._initialized,
+            'error': self._initialization_error,
+            'has_notebook_decoder': self._notebook_decoder is not None,
+            'has_journal_generator': self._journal_generator is not None,
+        }
+
+    def validate(self) -> List[str]:
+        """
+        Validate decoder configuration.
+
+        Checks that required dependencies are available and initialization succeeds.
+
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        errors = []
+
+        if not self.w3:
+            errors.append("Web3 instance not provided")
+
+        if not self.fund_wallets:
+            errors.append("No fund wallets configured")
+
+        # Try initialization to check for errors
+        if not self._ensure_initialized():
+            errors.append(f"Initialization failed: {self._initialization_error}")
+
+        return errors
+
+    def _create_basic_result(self, tx: Dict, receipt: Dict, block: Dict,
+                             eth_price: Decimal, error: str = None) -> DecodedTransaction:
+        """
+        Create basic result when decoding fails or decoder not initialized.
+
+        Args:
+            tx: Transaction data
+            receipt: Transaction receipt
+            block: Block data
+            eth_price: ETH/USD price
+            error: Optional error message
+
+        Returns:
+            DecodedTransaction with basic info and error status
+        """
+        tx_hash = self._normalize_tx_hash(tx)
+        timestamp = datetime.fromtimestamp(block.get('timestamp', 0), tz=timezone.utc)
+        gas_fee = calculate_gas_fee(receipt, tx)
+
+        return DecodedTransaction(
+            status="error" if error else "success",
+            tx_hash=tx_hash,
+            platform=self.PLATFORM,
+            category=TransactionCategory.CONTRACT_CALL,
+            block=tx.get('blockNumber', 0),
+            timestamp=timestamp,
+            eth_price=eth_price,
+            gas_used=receipt.get('gasUsed', 0),
+            gas_fee=gas_fee,
+            from_address=tx.get('from', ''),
+            to_address=tx.get('to', '') or '',
+            value=wei_to_eth(tx.get('value', 0)),
+            function_name="unknown",
+            error=error,
+        )
+
+    @staticmethod
+    def _normalize_tx_hash(tx: Dict) -> str:
+        """
+        Normalize transaction hash to always include 0x prefix.
+
+        Args:
+            tx: Transaction data dict
+
+        Returns:
+            Normalized transaction hash string with 0x prefix
+        """
+        raw_hash = tx.get('hash', b'')
+        if isinstance(raw_hash, bytes):
+            hex_str = raw_hash.hex()
+        else:
+            hex_str = str(raw_hash)
+
+        return hex_str if hex_str.startswith('0x') else f"0x{hex_str}"
+
+
+# ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
@@ -756,43 +968,13 @@ def generate_daily_interest_accruals(
         Day 3: Dr Interest Receivable 0.001 / Cr Interest Income 0.001
     """
     from datetime import datetime, timezone, timedelta, time as dt_time
+    from .accounts import get_interest_accrual_accounts
 
     if start_timestamp >= end_timestamp or principal <= 0 or rate_bips <= 0:
         return []
 
-    # Account mappings from COA - matches parquet format exactly
-    # Platform suffix determines which accounts to use
-    platform_lower = platform.lower() if platform else "blur"
-
-    if "blur" in platform_lower:
-        ACCOUNTS = {
-            'interest_receivable': (12500, 'Interest receivable - Cryptocurrency - Blur Pool'),
-            'interest_income': (90500, 'Interest income - Cryptocurrency - Blur Pool'),
-            'interest_expense': (80903, 'Interest expense - Cryptocurrency - Blur Pool'),
-            'interest_payable': (20903, 'Interest payable - Cryptocurrency - Blur Pool'),
-        }
-    elif "weth" in platform_lower:
-        ACCOUNTS = {
-            'interest_receivable': (12510, 'Interest receivable - Cryptocurrency - WETH'),
-            'interest_income': (90510, 'Interest income - Cryptocurrency - WETH'),
-            'interest_expense': (80902, 'Interest expense - Cryptocurrency - WETH'),
-            'interest_payable': (20902, 'Interest payable - Cryptocurrency - WETH'),
-        }
-    elif "usdc" in platform_lower:
-        ACCOUNTS = {
-            'interest_receivable': (12515, 'Interest receivable - Cryptocurrency - USDC'),
-            'interest_income': (90515, 'Interest income - Cryptocurrency - USDC'),
-            'interest_expense': (80900, 'Interest expense - Cryptocurrency - USDC'),
-            'interest_payable': (20900, 'Interest payable - Cryptocurrency - USDC'),
-        }
-    else:
-        # Default to Blur Pool
-        ACCOUNTS = {
-            'interest_receivable': (12500, 'Interest receivable - Cryptocurrency - Blur Pool'),
-            'interest_income': (90500, 'Interest income - Cryptocurrency - Blur Pool'),
-            'interest_expense': (80903, 'Interest expense - Cryptocurrency - Blur Pool'),
-            'interest_payable': (20903, 'Interest payable - Cryptocurrency - Blur Pool'),
-        }
+    # Get account mappings from centralized COA (see accounts.py)
+    ACCOUNTS = get_interest_accrual_accounts(platform)
 
     entries = []
 

@@ -183,11 +183,17 @@ def decoded_transactions_ui():
                 class_="btn-success me-2",
                 icon=ui.span(class_="bi bi-check2-all me-1")
             ),
-            ui.input_action_button(
-                "export_decoded_csv",
-                "Export to CSV",
+            ui.download_button(
+                "download_decoded_csv",
+                "Export Journal Entries to CSV",
                 class_="btn-outline-primary me-2",
                 icon=ui.span(class_="bi bi-download me-1")
+            ),
+            ui.download_button(
+                "download_raw_transactions_csv",
+                "Export Raw Transactions",
+                class_="btn-outline-secondary me-2",
+                icon=ui.span(class_="bi bi-file-earmark-spreadsheet me-1")
             ),
             ui.input_action_button(
                 "clear_decoded_cache",
