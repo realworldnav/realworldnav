@@ -14,6 +14,9 @@ import logging
 # Import the new DecoderRegistry - also lazy
 DECODER_REGISTRY_AVAILABLE = False  # Will be set when needed
 
+# Feature flag for new orchestrator (set via environment variable)
+USE_ORCHESTRATOR = os.getenv("USE_NEW_BLOCKCHAIN_ORCHESTRATOR", "false").lower() == "true"
+
 logger = logging.getLogger(__name__)
 
 # Lazy-loaded module references with background pre-initialization
@@ -104,6 +107,56 @@ def get_decoder_registry():
         return None
 
 
+# New orchestrator lazy loading
+_orchestrator = None
+_orchestrator_init_started = False
+
+
+def get_orchestrator(fund_wallets=None, fund_id=None):
+    """
+    Lazy load and initialize the BlockchainOrchestrator.
+
+    This is only used when USE_ORCHESTRATOR=true.
+    Falls back to the legacy blockchain_service otherwise.
+    """
+    global _orchestrator, _orchestrator_init_started
+
+    if not USE_ORCHESTRATOR:
+        return None
+
+    if _orchestrator is not None:
+        return _orchestrator
+
+    if _orchestrator_init_started:
+        # Already being initialized
+        return None
+
+    _orchestrator_init_started = True
+
+    try:
+        from ...services.blockchain import BlockchainOrchestrator
+        logger.info("Initializing BlockchainOrchestrator...")
+
+        _orchestrator = BlockchainOrchestrator(
+            fund_wallets=fund_wallets or [],
+            fund_id=fund_id or "drip_capital",
+        )
+        logger.info("BlockchainOrchestrator initialized successfully")
+        return _orchestrator
+
+    except Exception as e:
+        logger.error(f"Failed to initialize BlockchainOrchestrator: {e}")
+        _orchestrator_init_started = False
+        return None
+
+
+def reset_orchestrator():
+    """Reset the orchestrator for re-initialization."""
+    global _orchestrator, _orchestrator_init_started
+    _orchestrator = None
+    _orchestrator_init_started = False
+
+
 # NOTE: Background initialization is now triggered by Connect button click
 # instead of automatically on module import. This prevents unnecessary
 # blockchain service initialization when users don't need the listener.
@@ -129,6 +182,10 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     persisted_wallet_selection = reactive.value(None)  # Persist wallet selection across UI re-renders
     MAX_REGISTRY_INIT_ATTEMPTS = 3  # Max retries before giving up
 
+    # Orchestrator-specific reactive values
+    orchestrator_instance = reactive.value(None)  # BlockchainOrchestrator instance when USE_ORCHESTRATOR=true
+    s3_sync_status = reactive.value({"synced": 0, "pending": 0, "last_sync": None})  # S3 sync status
+
     # Register decoder modal outputs
     set_current_tx = register_decoder_modal_outputs(input, output, session, selected_fund)
 
@@ -136,52 +193,45 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     # Pass both registry and local cache for fallback when registry unavailable
     register_decoded_transactions_outputs(output, input, session, decoder_registry, decoded_tx_cache, decoded_refresh_trigger)
 
-    # Connection panel - shows wallet selector and Connect button until clicked
-    @output
-    @render.ui
-    def connection_panel():
-        """Show wallet selector and Connect button until user initiates connection"""
-        if connection_initiated.get():
-            # Already connected - show nothing (content shown in listener_content)
-            return ui.div()
-
-        return ui.div(
-            ui.div(
-                ui.HTML('<i class="bi bi-broadcast" style="font-size: 4rem; color: #6c757d;"></i>'),
-                ui.h3("Connect to Blockchain", class_="mt-3 mb-2"),
-                ui.p(
-                    "Select a wallet and click Connect to start monitoring transactions.",
-                    class_="text-muted mb-4"
-                ),
-                # Wallet selector - shown before connect
-                ui.div(
-                    _build_wallet_selector(),
-                    class_="mb-4",
-                    style="max-width: 400px; margin: 0 auto;"
-                ),
-                ui.input_action_button(
-                    "connect_blockchain",
-                    ui.HTML('<i class="bi bi-plug me-2"></i>Connect'),
-                    class_="btn btn-primary connect-btn"
-                ),
-                ui.p(
-                    "This will connect to Ethereum via Infura/Etherscan to fetch wallet transactions.",
-                    class_="text-muted small mt-3"
-                ),
-                class_="connect-panel"
-            )
-        )
-
-    # Listener content - only shown after Connect button clicked
+    # Unified listener content - handles both connect panel and listener UI
     @output
     @render.ui
     def listener_content():
-        """Main listener UI - only rendered after connection initiated"""
-        if not connection_initiated.get():
-            # Not connected yet - show nothing
-            return ui.div()
+        """Unified UI - shows connect panel OR listener content based on connection state"""
+        # Establish dependency on selected_fund so wallet list updates when fund changes
+        # (This is read outside isolate so it triggers re-render on fund change)
+        _ = selected_fund()
 
-        # Return the full listener UI
+        if not connection_initiated.get():
+            # Not connected - show connection panel
+            return ui.div(
+                ui.div(
+                    ui.HTML('<i class="bi bi-broadcast" style="font-size: 4rem; color: #6c757d;"></i>'),
+                    ui.h3("Connect to Blockchain", class_="mt-3 mb-2"),
+                    ui.p(
+                        "Select a wallet and click Connect to start monitoring transactions.",
+                        class_="text-muted mb-4"
+                    ),
+                    # Wallet selector - shown before connect
+                    ui.div(
+                        _build_wallet_selector(),
+                        class_="mb-4",
+                        style="max-width: 400px; margin: 0 auto;"
+                    ),
+                    ui.input_action_button(
+                        "connect_blockchain",
+                        ui.HTML('<i class="bi bi-plug me-2"></i>Connect'),
+                        class_="btn btn-primary connect-btn"
+                    ),
+                    ui.p(
+                        "This will connect to Ethereum via Infura/Etherscan to fetch wallet transactions.",
+                        class_="text-muted small mt-3"
+                    ),
+                    class_="connect-panel"
+                )
+            )
+
+        # Return the full listener UI with tabbed transaction views
         return ui.div(
             # Combined Monitor Settings & Filters
             ui.card(
@@ -218,19 +268,6 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                         ),
                         col_widths=[6, 3, 3]
                     ),
-                    # Advanced filters toggle
-                    ui.div(
-                        ui.layout_columns(
-                            ui.div(
-                                ui.input_switch("show_filters", "Advanced Filters", value=False),
-                                class_="d-flex align-items-center"
-                            ),
-                            col_widths=[12]
-                        ),
-                        class_="mt-3 pt-3 border-top"
-                    ),
-                    # Filter controls (conditionally shown)
-                    ui.output_ui("filter_controls"),
                     class_="p-3"
                 ),
                 class_="mb-3"
@@ -262,35 +299,21 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 class_="bg-white rounded border mb-3 mx-0"
             ),
 
-            # Transaction Table
-            ui.card(
-                ui.card_header(
-                    ui.layout_columns(
-                        ui.h5("Recent Transactions"),
-                        ui.div(
-                            ui.output_ui("auto_refresh_indicator"),
-                            class_="text-end"
-                        ),
-                        col_widths=[6, 6]
-                    )
+            # Tabbed Transaction Views - Decoded is PRIMARY
+            ui.navset_card_tab(
+                ui.nav_panel(
+                    ui.HTML('<i class="bi bi-code-square me-1"></i> Decoded Transactions'),
+                    ui.output_ui("decoded_transactions_tab_content"),
                 ),
-                ui.div(
-                    ui.output_data_frame("blockchain_transactions_table"),
-                    class_="transaction-table-container"
+                ui.nav_panel(
+                    ui.HTML('<i class="bi bi-list-ul me-1"></i> Raw Transactions'),
+                    ui.output_ui("raw_transactions_tab_content"),
                 ),
-                full_screen=True,
-                class_="mt-4"
+                id="listener_transaction_tabs"
             ),
 
-            # Transaction Details Panel
-            ui.card(
-                ui.card_header("Transaction Details"),
-                ui.div(
-                    ui.output_ui("transaction_details_panel"),
-                    class_="p-3"
-                ),
-                class_="mt-4"
-            )
+            # S3 Sync Panel (only shown when orchestrator is available)
+            ui.output_ui("s3_sync_panel")
         )
 
     # Handle Connect button click
@@ -317,8 +340,12 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     # Helper function to build wallet selector (called directly, not an output)
     def _build_wallet_selector():
         """Build wallet selector dropdown with friendly names filtered by selected fund"""
-        # Get current fund
-        current_fund = selected_fund()
+        # Use reactive.isolate() to prevent establishing dependencies that would
+        # cause re-renders. This function is called from render functions.
+        with reactive.isolate():
+            current_fund = selected_fund()
+            persisted = persisted_wallet_selection.get()
+
         wallet_choices = {}
 
         # Try to load wallet mappings
@@ -360,17 +387,12 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         wallet_choices["custom"] = "+ Enter Custom Address..."
 
         # Use persisted selection if valid, otherwise default to first wallet
-        persisted = persisted_wallet_selection.get()
-        print(f"[WALLET_UI] Rendering wallet_selector_ui - persisted={persisted[:10] if persisted else None}...")
+        # NOTE: Do NOT call .set() here - that causes re-render loops!
+        # The persist_wallet_selection effect handles initialization.
         if persisted and persisted in wallet_choices:
             default_selection = persisted
-            print(f"[WALLET_UI] Using persisted selection: {default_selection[:10]}...")
         else:
             default_selection = next((k for k in wallet_choices.keys() if k not in ["none", "error", "custom", "all_fund"]), "custom")
-            print(f"[WALLET_UI] Persisted not valid, using default: {default_selection[:10] if default_selection != 'custom' else 'custom'}...")
-            # Initialize persisted value if not set
-            if not persisted:
-                persisted_wallet_selection.set(default_selection)
 
         return ui.div(
             ui.p(f"Fund: {current_fund}", class_="text-muted small mb-2"),
@@ -576,6 +598,259 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             ),
             class_="p-3"
         )
+
+    # ==================== NEW TAB CONTENT OUTPUTS ====================
+
+    # Decoded Transactions Tab Content (PRIMARY VIEW)
+    @output
+    @render.ui
+    def decoded_transactions_tab_content():
+        """Render the decoded transactions card grid - this is the primary view"""
+        from .decoded_transactions_ui import (
+            transaction_card_ui, empty_state_ui, PLATFORM_COLORS, CATEGORY_NAMES
+        )
+
+        # Compact inline stats bar
+        stats_bar = ui.div(
+            ui.span(
+                ui.HTML('<i class="bi bi-check-circle-fill text-primary me-1"></i>'),
+                ui.output_text("decoded_total_count"),
+                " Decoded",
+                class_="me-4"
+            ),
+            ui.span(
+                ui.HTML('<i class="bi bi-lightning-fill text-success me-1"></i>'),
+                ui.output_text("decoded_auto_post_count"),
+                " Auto-Post",
+                class_="me-4"
+            ),
+            ui.span(
+                ui.HTML('<i class="bi bi-hourglass-split text-warning me-1"></i>'),
+                ui.output_text("decoded_review_queue_count"),
+                " Review",
+                class_="me-4"
+            ),
+            ui.span(
+                ui.HTML('<i class="bi bi-shield-x text-secondary me-1"></i>'),
+                ui.output_text("decoded_spam_count"),
+                " Spam"
+            ),
+            class_="d-flex align-items-center bg-light rounded px-3 py-2 mb-3"
+        )
+
+        # Filter controls
+        filter_card = ui.card(
+            ui.card_header(
+                ui.div(
+                    ui.span("Filters", class_="fw-semibold"),
+                    ui.input_action_button(
+                        "refresh_decoded",
+                        "Refresh",
+                        class_="btn-sm btn-outline-primary ms-auto",
+                        icon=ui.span(class_="bi bi-arrow-clockwise")
+                    ),
+                    class_="d-flex align-items-center w-100"
+                )
+            ),
+            ui.layout_columns(
+                ui.input_select(
+                    "decoded_platform_filter",
+                    "Platform",
+                    choices={
+                        "all": "All Platforms",
+                        "blur": "Blur",
+                        "arcade": "Arcade",
+                        "nftfi": "NFTfi",
+                        "gondi": "Gondi",
+                        "zharta": "Zharta",
+                        "generic": "Generic"
+                    },
+                    selected="all"
+                ),
+                ui.input_select(
+                    "decoded_category_filter",
+                    "Category",
+                    choices={
+                        "all": "All Categories",
+                        "LOAN_ORIGINATION": "Loan Origination",
+                        "LOAN_REPAYMENT": "Loan Repayment",
+                        "LOAN_REFINANCE": "Refinance",
+                        "ETH_TRANSFER": "ETH Transfer",
+                        "ERC20_TRANSFER": "Token Transfer",
+                        "CONTRACT_CALL": "Contract Call"
+                    },
+                    selected="all"
+                ),
+                ui.input_select(
+                    "decoded_status_filter",
+                    "Posting Status",
+                    choices={
+                        "all": "All Statuses",
+                        "auto_post": "Auto-Post Ready",
+                        "review_queue": "Review Queue",
+                        "posted": "Posted"
+                    },
+                    selected="all"
+                ),
+                col_widths=[4, 4, 4]
+            ),
+            class_="mb-3"
+        )
+
+        # Transaction cards container (uses existing output from decoded_transactions_outputs.py)
+        cards_container = ui.div(
+            ui.output_ui("decoded_transaction_cards"),
+            class_="decoded-cards-container",
+            style="max-height: 500px; overflow-y: auto;"
+        )
+
+        # Bulk actions
+        bulk_actions = ui.div(
+            ui.input_action_button(
+                "post_all_auto",
+                "Post All Auto-Ready",
+                class_="btn-success me-2",
+                icon=ui.span(class_="bi bi-check2-all me-1")
+            ),
+            ui.download_button(
+                "download_decoded_csv",
+                "Export Journal Entries",
+                class_="btn-outline-primary me-2",
+                icon=ui.span(class_="bi bi-download me-1")
+            ),
+            ui.input_action_button(
+                "clear_decoded_cache",
+                "Clear Cache",
+                class_="btn-outline-secondary",
+                icon=ui.span(class_="bi bi-trash me-1")
+            ),
+            class_="mt-3 d-flex"
+        )
+
+        return ui.div(
+            stats_bar,
+            filter_card,
+            cards_container,
+            bulk_actions,
+            class_="p-3"
+        )
+
+    # Raw Transactions Tab Content (SECONDARY VIEW - click opens Etherscan)
+    @output
+    @render.ui
+    def raw_transactions_tab_content():
+        """Render simplified raw transactions table - click any row to open in Etherscan"""
+        df = transaction_data.get()
+
+        if df.empty:
+            return ui.div(
+                ui.div(
+                    ui.span(class_="bi bi-inbox display-4 text-muted"),
+                    class_="text-center mb-3"
+                ),
+                ui.h5("No Transactions", class_="text-muted text-center"),
+                ui.p(
+                    "Transactions will appear here once fetched from the blockchain.",
+                    class_="text-muted text-center small"
+                ),
+                class_="py-5"
+            )
+
+        # Build clickable table rows
+        rows = []
+        network = input.network() if hasattr(input, 'network') else "1"
+        etherscan_base = {
+            "1": "https://etherscan.io",
+            "42161": "https://arbiscan.io",
+            "10": "https://optimistic.etherscan.io",
+            "137": "https://polygonscan.com",
+            "8453": "https://basescan.org"
+        }.get(network, "https://etherscan.io")
+
+        limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
+
+        for _, row in df.head(limit).iterrows():
+            tx_hash = row.get('hash', '')
+            block = row.get('block', 0)
+            from_addr = row.get('from', '')
+            to_addr = row.get('to', '')
+            amount = row.get('amount', 0)
+            token = row.get('token', 'ETH')
+            timestamp = row.get('timestamp', '')
+
+            # Format display values
+            hash_display = f"{tx_hash[:8]}...{tx_hash[-6:]}" if len(tx_hash) > 16 else tx_hash
+            from_display = f"{from_addr[:6]}...{from_addr[-4:]}" if len(from_addr) > 12 else from_addr
+            to_display = f"{to_addr[:6]}...{to_addr[-4:]}" if len(to_addr) > 12 else to_addr
+
+            if isinstance(timestamp, str):
+                time_display = timestamp[:16].replace('T', ' ')
+            else:
+                time_display = str(timestamp)[:16] if timestamp else ""
+
+            etherscan_url = f"{etherscan_base}/tx/{tx_hash}"
+
+            rows.append(
+                ui.tags.tr(
+                    ui.tags.td(
+                        ui.tags.code(hash_display, class_="text-primary"),
+                        style="font-family: monospace;"
+                    ),
+                    ui.tags.td(str(block)),
+                    ui.tags.td(from_display, style="font-family: monospace; font-size: 0.85em;"),
+                    ui.tags.td(ui.HTML("&rarr;"), class_="text-muted"),
+                    ui.tags.td(to_display, style="font-family: monospace; font-size: 0.85em;"),
+                    ui.tags.td(f"{amount:.4f} {token}", class_="text-end"),
+                    ui.tags.td(time_display, class_="text-muted small"),
+                    ui.tags.td(
+                        ui.HTML('<i class="bi bi-box-arrow-up-right"></i>'),
+                        class_="text-primary"
+                    ),
+                    onclick=f"window.open('{etherscan_url}', '_blank')",
+                    style="cursor: pointer;",
+                    class_="raw-tx-row"
+                )
+            )
+
+        table = ui.tags.table(
+            ui.tags.thead(
+                ui.tags.tr(
+                    ui.tags.th("Hash"),
+                    ui.tags.th("Block"),
+                    ui.tags.th("From"),
+                    ui.tags.th(""),
+                    ui.tags.th("To"),
+                    ui.tags.th("Amount", class_="text-end"),
+                    ui.tags.th("Time"),
+                    ui.tags.th(""),  # Etherscan icon column
+                )
+            ),
+            ui.tags.tbody(*rows),
+            class_="table table-hover"
+        )
+
+        return ui.div(
+            ui.p(
+                ui.HTML('<i class="bi bi-info-circle me-1"></i>'),
+                "Click any row to open the transaction on Etherscan",
+                class_="text-muted small mb-3"
+            ),
+            ui.div(
+                table,
+                style="max-height: 500px; overflow-y: auto;"
+            ),
+            ui.tags.style("""
+                .raw-tx-row:hover {
+                    background-color: #f0f7ff !important;
+                }
+                .raw-tx-row:hover td {
+                    color: #0066cc;
+                }
+            """),
+            class_="p-3"
+        )
+
+    # ==================== END NEW TAB CONTENT ====================
 
     # Connection status
     @output
@@ -1452,8 +1727,8 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 registry.decoded_cache.clear()
                 logger.info("Cleared decoded transaction caches for wallet switch")
 
-            # Trigger decoded transactions UI refresh
-            decoded_refresh_trigger.set(decoded_refresh_trigger.get() + 1)
+            # NOTE: Don't trigger refresh here - let auto_decode_transactions() do it
+            # after the new transactions are decoded. This prevents showing stale/empty state.
 
             # Fetch fresh data for the new wallet
             logger.info(f"Fetching transactions for: {get_blockchain_service().wallet_address}")
@@ -1502,3 +1777,153 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                         logger.info(f"Auto-refreshed via {source}: {len(updated_data)} transactions")
             except Exception as e:
                 logger.error(f"Error in periodic refresh: {e}")
+
+    # S3 Sync Panel - only shown when orchestrator is enabled
+    @output
+    @render.ui
+    def s3_sync_panel():
+        """Render S3 sync panel when orchestrator is available"""
+        if not USE_ORCHESTRATOR:
+            return ui.div()  # Empty when orchestrator not enabled
+
+        orch = orchestrator_instance.get()
+        if not orch:
+            return ui.div()
+
+        sync_status = s3_sync_status.get()
+        last_sync = sync_status.get("last_sync")
+        last_sync_str = last_sync.strftime("%Y-%m-%d %H:%M:%S") if last_sync else "Never"
+
+        return ui.card(
+            ui.card_header(
+                ui.layout_columns(
+                    ui.h5("S3 Sync"),
+                    ui.div(
+                        ui.output_ui("orchestrator_status_badge"),
+                        class_="text-end"
+                    ),
+                    col_widths=[6, 6]
+                )
+            ),
+            ui.div(
+                ui.layout_columns(
+                    ui.div(
+                        ui.tags.div("SYNCED", class_="text-muted small mb-1"),
+                        ui.tags.strong(str(sync_status.get("synced", 0)), style="font-size: 1.5em;"),
+                        class_="text-center"
+                    ),
+                    ui.div(
+                        ui.tags.div("PENDING", class_="text-muted small mb-1"),
+                        ui.tags.strong(str(sync_status.get("pending", 0)), style="font-size: 1.5em;"),
+                        class_="text-center"
+                    ),
+                    ui.div(
+                        ui.tags.div("LAST SYNC", class_="text-muted small mb-1"),
+                        ui.tags.span(last_sync_str),
+                        class_="text-center"
+                    ),
+                    ui.div(
+                        ui.input_action_button(
+                            "sync_to_s3",
+                            ui.HTML('<i class="bi bi-cloud-arrow-up me-2"></i>Sync to S3'),
+                            class_="btn btn-outline-primary"
+                        ),
+                        class_="text-center"
+                    ),
+                    col_widths=[3, 3, 3, 3]
+                ),
+                class_="p-3"
+            ),
+            class_="mt-4"
+        )
+
+    @output
+    @render.ui
+    def orchestrator_status_badge():
+        """Show orchestrator connection status"""
+        orch = orchestrator_instance.get()
+        if not orch:
+            return ui.HTML('<span class="badge bg-secondary">Not Initialized</span>')
+
+        if orch.is_connected():
+            status = orch.get_connection_status()
+            mode = status.get("monitoring", {}).get("mode", "idle")
+            if mode == "websocket" or mode == "hybrid":
+                return ui.HTML('<span class="badge bg-success"><i class="bi bi-broadcast me-1"></i>Live (WebSocket)</span>')
+            elif mode == "polling":
+                return ui.HTML('<span class="badge bg-info"><i class="bi bi-arrow-repeat me-1"></i>Polling</span>')
+            else:
+                return ui.HTML('<span class="badge bg-success">Connected</span>')
+        else:
+            return ui.HTML('<span class="badge bg-warning">Disconnected</span>')
+
+    # Handle S3 sync button click
+    @reactive.effect
+    @reactive.event(input.sync_to_s3)
+    async def handle_s3_sync():
+        """Sync decoded transactions to S3"""
+        orch = orchestrator_instance.get()
+        if not orch:
+            logger.error("Cannot sync: orchestrator not initialized")
+            return
+
+        try:
+            logger.info("Starting S3 sync...")
+            result = await orch.sync_decoded_to_s3()
+
+            if result:
+                s3_sync_status.set({
+                    "synced": result.synced,
+                    "pending": 0,
+                    "last_sync": datetime.now(timezone.utc)
+                })
+                logger.info(f"S3 sync complete: {result.synced} synced, {result.skipped} skipped")
+            else:
+                logger.warning("S3 sync returned no result")
+
+        except Exception as e:
+            logger.error(f"S3 sync failed: {e}")
+            error_message.set(f"S3 sync failed: {str(e)}")
+
+    # Initialize orchestrator when using new architecture
+    @reactive.effect
+    @reactive.event(connection_initiated, selected_fund)
+    def initialize_orchestrator():
+        """Initialize BlockchainOrchestrator when USE_ORCHESTRATOR=true"""
+        if not USE_ORCHESTRATOR:
+            return
+
+        if not connection_initiated.get():
+            return
+
+        # Get wallets to monitor
+        wallets = get_monitored_wallets()
+        if not wallets:
+            logger.warning("No wallets to monitor for orchestrator")
+            return
+
+        current_fund = selected_fund()
+
+        # Check if we need to re-initialize
+        existing = orchestrator_instance.get()
+        if existing and hasattr(existing, 'fund_id') and existing.fund_id == current_fund:
+            logger.debug("Orchestrator already initialized for this fund")
+            return
+
+        try:
+            orch = get_orchestrator(fund_wallets=wallets, fund_id=current_fund)
+            if orch:
+                orchestrator_instance.set(orch)
+                logger.info(f"Orchestrator initialized with {len(wallets)} wallets")
+
+                # Update pending sync count
+                registry = decoder_registry.get()
+                if registry and hasattr(registry, 'decoded_cache'):
+                    pending = len(registry.decoded_cache)
+                    s3_sync_status.set({
+                        "synced": 0,
+                        "pending": pending,
+                        "last_sync": None
+                    })
+        except Exception as e:
+            logger.error(f"Failed to initialize orchestrator: {e}")

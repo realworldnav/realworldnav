@@ -13,6 +13,7 @@ Proxy Detection:
 - Custom getImplementation() function
 """
 
+import os
 from web3 import Web3
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
     from ..decoder_fifo_integrator import DecoderFIFOIntegrator
 
 logger = logging.getLogger(__name__)
+
+# Feature flag for 4byte.directory fallback
+ENABLE_4BYTE_FALLBACK = os.getenv("ENABLE_4BYTE_FALLBACK", "true").lower() == "true"
 
 
 def _normalize_tx_hash(tx: Dict) -> str:
@@ -203,6 +207,11 @@ CONTRACT_ROUTING: Dict[str, Platform] = {
     "0x5be916cff5f07870e9aef205960e07d9e287ef27": Platform.ZHARTA,  # Zharta LoansCore (state storage)
     "0x6474ab1b56b47bc26ba8cb471d566b8cc528f308": Platform.ZHARTA,  # Zharta LendingPoolPeripheral
     "0x35b8545ae12d89cd4997d5485e2e68c857df24a8": Platform.ZHARTA,  # Zharta CollateralVaultPeripheral
+    "0x1cf3dab407aa14389f9c79b80b16e48cbc7246ee": Platform.ZHARTA,  # Zharta Loans_WETH_Pool
+    "0x5f19431bc8a3eb21222771c6c867a63a119deda7": Platform.ZHARTA,  # Zharta Loans_USDC_V2
+    "0x8d0f9c9fa4c1b265cd5032fe6ba4fefc9d94badb": Platform.ZHARTA,  # Zharta P2PLendingNfts
+    "0x04fc02deeee6f4fa51e11cc762e2e47ab8873ecc": Platform.ZHARTA,  # Zharta Liquidations
+    "0x7ca34cf45a119bebef4d106318402964a331dfed": Platform.ZHARTA,  # Zharta CollateralVault
 
     # === GENERIC ===
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": Platform.GENERIC,  # WETH
@@ -285,6 +294,7 @@ class DecoderRegistry:
         self.decoders: Dict[Platform, BaseDecoder] = {}
         self.decoded_cache: Dict[str, DecodedTransaction] = {}
         self._proxy_cache: Dict[str, str] = {}  # Cache for proxy -> implementation resolution
+        self._signature_resolver = None  # Lazy-loaded 4byte resolver
         self._initialize_decoders()
 
     def _initialize_decoders(self):
@@ -348,6 +358,17 @@ class DecoderRegistry:
             logger.warning(f"GenericDecoder not available: {e}")
 
         logger.info(f"Initialized decoder registry with {len(self._decoder_classes)} platform decoders")
+
+    def _get_signature_resolver(self):
+        """Lazy-load the 4byte.directory signature resolver."""
+        if self._signature_resolver is None and ENABLE_4BYTE_FALLBACK:
+            try:
+                from .signature_resolver import EnhancedSignatureResolver
+                self._signature_resolver = EnhancedSignatureResolver()
+                logger.info("Initialized 4byte.directory signature resolver")
+            except ImportError as e:
+                logger.warning(f"SignatureResolver not available: {e}")
+        return self._signature_resolver
 
     def _get_decoder(self, platform: Platform) -> Optional[BaseDecoder]:
         """Get or create decoder instance for platform (lazy initialization)"""
@@ -445,15 +466,39 @@ class DecoderRegistry:
                 return platform
             else:
                 logger.debug(f"  [2] Selector not in FUNCTION_SELECTORS")
+
+                # 2b. Try 4byte.directory fallback for unknown selectors
+                resolver = self._get_signature_resolver()
+                if resolver:
+                    try:
+                        match = resolver.resolve_function_selector(selector)
+                        if match:
+                            logger.debug(f"  [2b] 4byte.directory: {selector} -> {match.text_signature}")
+                            # Store resolved signature for later use
+                            tx['_resolved_function'] = match.text_signature
+                            tx['_resolved_function_name'] = match.name
+                            # Check if function name hints at platform
+                            func_lower = match.name.lower()
+                            if any(kw in func_lower for kw in ['loan', 'repay', 'lend', 'borrow', 'refinance']):
+                                logger.debug(f"  [2b] Function name suggests lending, checking log addresses...")
+                                # Will be handled in step 3 with log address matching
+                            elif any(kw in func_lower for kw in ['swap', 'exchange', 'trade']):
+                                logger.debug(f"  [2b] DEX function detected: {match.name}")
+                        else:
+                            logger.debug(f"  [2b] 4byte.directory: no match for {selector}")
+                    except Exception as e:
+                        logger.debug(f"  [2b] 4byte lookup failed: {e}")
         else:
             logger.debug(f"  [2] No input data (empty or too short)")
 
         # 3. Check logs for known event topics
         # Collect all matching platforms, prefer specific over GENERIC
         found_platforms = set()
+        resolved_events = []  # Track resolved event signatures
         logger.debug(f"  [3] Checking {len(receipt.get('logs', []))} logs...")
         for i, log in enumerate(receipt.get('logs', [])):
             log_address = log.get('address', '').lower()
+            topics = log.get('topics', [])
 
             # Direct match
             if log_address in CONTRACT_ROUTING:
@@ -465,6 +510,29 @@ class DecoderRegistry:
                 if impl_address != log_address and impl_address in CONTRACT_ROUTING:
                     found_platforms.add(CONTRACT_ROUTING[impl_address])
                     logger.debug(f"    Log[{i}]: {log_address[:16]}... (proxy) -> {CONTRACT_ROUTING[impl_address].value}")
+
+            # 3b. Try to resolve event topics using 4byte.directory
+            if topics and ENABLE_4BYTE_FALLBACK:
+                resolver = self._get_signature_resolver()
+                if resolver:
+                    try:
+                        topic0 = topics[0]
+                        if isinstance(topic0, bytes):
+                            topic0 = '0x' + topic0.hex()
+                        match = resolver.resolve_event_topic(topic0)
+                        if match:
+                            resolved_events.append({
+                                'log_index': i,
+                                'topic': topic0[:18] + '...',
+                                'event': match.text_signature
+                            })
+                            logger.debug(f"    Log[{i}] Event: {match.name}")
+                    except Exception as e:
+                        pass  # Silent fail for event resolution
+
+        # Store resolved events for debugging
+        if resolved_events:
+            tx['_resolved_events'] = resolved_events
 
         if found_platforms:
             logger.debug(f"  [3] Found platforms from logs: {[p.value for p in found_platforms]}")
@@ -807,7 +875,16 @@ class DecoderRegistry:
             "platforms": platform_counts,
             "decoders_loaded": list(self.decoders.keys()),
             "fifo_enabled": self.fifo_integrator is not None,
+            "fouryte_fallback_enabled": ENABLE_4BYTE_FALLBACK,
         }
+
+        # Add 4byte resolver stats if available
+        if self._signature_resolver:
+            try:
+                resolver_stats = self._signature_resolver.get_cache_stats()
+                stats["fouryte_cache"] = resolver_stats
+            except Exception:
+                pass
 
         # Add FIFO position summary if available
         if self.fifo_integrator:

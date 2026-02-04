@@ -90,10 +90,7 @@ def blockchain_listener_ui():
         ui.h2("Blockchain Transaction Monitor"),
         ui.p("Live monitoring of wallet transactions on the blockchain", class_="text-muted mb-3"),
 
-        # Connection Panel - shows Connect button until clicked
-        ui.output_ui("connection_panel"),
-
-        # All listener content - only shown after Connect button clicked
+        # Unified listener content - shows connect panel or full UI based on connection state
         ui.output_ui("listener_content"),
 
         # Add custom CSS for the listener
@@ -213,6 +210,105 @@ def blockchain_listener_ui():
                 transform: translateY(-2px);
                 box-shadow: 0 4px 12px rgba(0,123,255,0.3);
             }
+
+            /* Decoded transaction card styles */
+            .decoded-card {
+                border: 1px solid #dee2e6;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 10px;
+                background: white;
+                cursor: pointer;
+                transition: all 0.2s ease-out;
+                position: relative;
+                overflow: hidden;
+            }
+            .decoded-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: linear-gradient(135deg, rgba(99, 102, 241, 0.03) 0%, rgba(168, 85, 247, 0.03) 100%);
+                opacity: 0;
+                transition: opacity 0.2s ease-out;
+                pointer-events: none;
+            }
+            .decoded-card:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+                border-color: #a5b4fc;
+            }
+            .decoded-card:hover::before {
+                opacity: 1;
+            }
+            .decoded-card:active {
+                transform: translateY(0px);
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+            }
+            .decoded-card .click-hint {
+                position: absolute;
+                right: 12px;
+                top: 50%;
+                transform: translateY(-50%);
+                opacity: 0;
+                transition: all 0.2s ease-out;
+                color: #6366f1;
+                font-size: 1.2rem;
+            }
+            .decoded-card:hover .click-hint {
+                opacity: 1;
+                transform: translateY(-50%) translateX(-4px);
+            }
+            .decoded-card .platform-badge {
+                font-size: 0.7rem;
+                font-weight: 600;
+            }
+            .decoded-card .category-text {
+                font-size: 0.8rem;
+                color: #6c757d;
+            }
+            .decoded-card .amount-display {
+                font-weight: 600;
+                font-size: 1.1rem;
+                color: #1f2937;
+            }
+            .decoded-card .usd-amount {
+                font-size: 0.8rem;
+                color: #6c757d;
+            }
+            .decoded-card .function-name {
+                font-family: monospace;
+                font-size: 0.85rem;
+                color: #4b5563;
+            }
+            .decoded-card .address-display {
+                font-family: monospace;
+                font-size: 0.75rem;
+                color: #9ca3af;
+            }
+            .decoded-card .timestamp-display {
+                font-size: 0.75rem;
+                color: #9ca3af;
+            }
+            .posting-badge {
+                font-size: 0.7rem;
+                padding: 3px 8px;
+                border-radius: 4px;
+            }
+            .posting-badge.auto-post {
+                background-color: #d1fae5;
+                color: #065f46;
+            }
+            .posting-badge.review-queue {
+                background-color: #fef3c7;
+                color: #92400e;
+            }
+            .posting-badge.posted {
+                background-color: #dbeafe;
+                color: #1e40af;
+            }
         """)
     )
 
@@ -227,9 +323,6 @@ def enhanced_home_ui():
             ui.HTML('<i class="bi bi-broadcast me-1"></i> Blockchain Listener'),
             blockchain_listener_ui()
         ),
-        ui.nav_panel(
-            ui.HTML('<i class="bi bi-code-square me-1"></i> Decoded Transactions'),
-            decoded_transactions_ui()
-        ),
+        # Decoded Transactions is now integrated into Blockchain Listener as a sub-tab
         id="home_tabs"
     )

@@ -71,6 +71,9 @@ ZHARTA_CONTRACTS = {
     "0x1cf3dab407aa14389f9c79b80b16e48cbc7246ee": "Loans_WETH_Pool",
     "0x5f19431bc8a3eb21222771c6c867a63a119deda7": "Loans_USDC_V2",
     "0x8d0f9c9fa4c1b265cd5032fe6ba4fefc9d94badb": "P2PLendingNfts",
+    "0x5be916cff5f07870e9aef205960e07d9e287ef27": "LoansCore_WETH",
+    "0x04fc02deeee6f4fa51e11cc762e2e47ab8873ecc": "Liquidations",
+    "0x7ca34cf45a119bebef4d106318402964a331dfed": "CollateralVault",
 }
 
 
@@ -1104,8 +1107,7 @@ class ZhartaDecoderAdapter(BaseDecoderAdapter):
 
     def __init__(self, w3: Web3, fund_wallets: List[str]):
         super().__init__(w3, fund_wallets)
-        # Zharta decoder expects a set of fund wallets
-        self.fund_wallets_set = set(self.fund_wallets)
+        # fund_wallets is already a list from base class
 
     def _initialize_decoder(self) -> bool:
         """Initialize Zharta decoder."""
@@ -1114,10 +1116,10 @@ class ZhartaDecoderAdapter(BaseDecoderAdapter):
 
             self._notebook_decoder = ZhartaDecoder(
                 w3=self.w3,
-                fund_wallets=self.fund_wallets_set
+                fund_wallets=self.fund_wallets  # List, not Set
             )
             self._journal_generator = ZhartaJournalGenerator(
-                fund_wallets=self.fund_wallets_set
+                fund_wallets=self.fund_wallets  # List, not Set
             )
             logger.info("Zharta adapter initialized successfully")
             return True
@@ -1152,7 +1154,45 @@ class ZhartaDecoderAdapter(BaseDecoderAdapter):
 
         try:
             events = self._notebook_decoder.decode_transaction(tx_hash)
+            logger.info(f"Zharta decoded {len(events) if events else 0} events for tx {tx_hash[:16]}...")
+
+            if events:
+                for e in events:
+                    logger.info(f"  Event: {e.event_type}, loan_id={e.loan_id}, is_fund_borrower={e.is_fund_borrower}, is_fund_lender={e.is_fund_lender}")
+            else:
+                logger.warning(f"  No Zharta events decoded for {tx_hash[:16]}...")
+
             category = self._determine_category(events)
+
+            # Convert ZhartaEvent objects to DecodedEvent objects
+            decoded_events = []
+            if events:
+                for e in events:
+                    decoded_events.append(DecodedEvent(
+                        name=e.event_type,
+                        args=e.to_dict(),
+                        log_index=e.log_index,
+                        contract_address=e.contract_name  # Use contract_name as identifier
+                    ))
+
+            # Generate journal entries using ZhartaJournalGenerator
+            journal_entries = []
+            if events and self._journal_generator:
+                import pandas as pd
+                events_df = pd.DataFrame([e.to_dict() for e in events])
+                if not events_df.empty:
+                    entries_df = self._journal_generator.generate_entries(events_df)
+                    journal_entries = self._convert_journal_entries(entries_df, events, eth_price, timestamp)
+                    logger.info(f"  Generated {len(journal_entries)} journal entries for Zharta tx")
+
+            # Extract wallet roles
+            wallet_roles = {}
+            if events:
+                for e in events:
+                    if e.borrower and e.is_fund_borrower:
+                        wallet_roles[e.borrower.lower()] = 'borrower'
+                    if e.lender and e.is_fund_lender:
+                        wallet_roles[e.lender.lower()] = 'lender'
 
             return DecodedTransaction(
                 status="success",
@@ -1168,14 +1208,16 @@ class ZhartaDecoderAdapter(BaseDecoderAdapter):
                 to_address=tx.get('to', '') or '',
                 value=wei_to_eth(tx.get('value', 0)),
                 function_name=self._get_function_name(events),
-                journal_entries=[],
-                events=[],
-                wallet_roles={},
+                journal_entries=journal_entries,
+                events=decoded_events,
+                wallet_roles=wallet_roles,
                 positions={},
             )
 
         except Exception as e:
             logger.error(f"Error decoding Zharta tx {tx_hash}: {e}")
+            import traceback
+            traceback.print_exc()
             return self._create_basic_result(tx, receipt, block, eth_price, str(e))
 
     def _determine_category(self, events) -> TransactionCategory:
@@ -1186,9 +1228,9 @@ class ZhartaDecoderAdapter(BaseDecoderAdapter):
 
         if 'LoanCreated' in event_types:
             return TransactionCategory.LOAN_ORIGINATION
-        elif 'LoanPaid' in event_types:
+        elif 'LoanPaid' in event_types or 'LoanPayment' in event_types or 'LoanReplaced' in event_types:
             return TransactionCategory.LOAN_REPAYMENT
-        elif 'LoanDefaulted' in event_types:
+        elif 'LoanDefaulted' in event_types or 'LiquidationRemoved' in event_types:
             return TransactionCategory.COLLATERAL_SEIZURE
 
         return TransactionCategory.CONTRACT_CALL
@@ -1197,3 +1239,71 @@ class ZhartaDecoderAdapter(BaseDecoderAdapter):
         if not events:
             return "unknown"
         return events[0].event_type if events else "unknown"
+
+    def _convert_journal_entries(self, entries_df, events, eth_price: Decimal, timestamp: datetime) -> List[JournalEntry]:
+        """Convert Zharta journal entry DataFrame to JournalEntry objects"""
+        if entries_df is None or entries_df.empty:
+            return []
+
+        from collections import defaultdict
+        import uuid
+
+        # Group by (tx_hash, event_type, loan_id)
+        grouped = defaultdict(list)
+        for _, row in entries_df.iterrows():
+            tx_hash = row.get('tx_hash', '')
+            event = row.get('event_type', 'unknown')
+            loan_id = row.get('loan_id', '')
+            key = (tx_hash, event, loan_id)
+            grouped[key].append(row)
+
+        journal_entries = []
+        for (tx_hash, event, loan_id), rows in grouped.items():
+            first_row = rows[0]
+            currency = first_row.get('token_symbol', 'WETH')
+
+            # Determine category
+            if 'Created' in str(event):
+                cat = TransactionCategory.LOAN_ORIGINATION
+            elif 'Paid' in str(event) or 'Payment' in str(event) or 'Replaced' in str(event):
+                cat = TransactionCategory.LOAN_REPAYMENT
+            elif 'Defaulted' in str(event) or 'Liquidation' in str(event):
+                cat = TransactionCategory.COLLATERAL_SEIZURE
+            else:
+                cat = TransactionCategory.CONTRACT_CALL
+
+            # Auto-post for known loan events
+            auto_post_events = {'LoanCreated', 'LoanPaid', 'LoanPayment', 'LoanReplaced'}
+            posting_status = PostingStatus.AUTO_POST if event in auto_post_events else PostingStatus.REVIEW_QUEUE
+
+            # Get date from row or use timestamp
+            entry_date = first_row.get('date', first_row.get('timestamp', timestamp))
+
+            entry = JournalEntry(
+                entry_id=f"zharta_{event}_{loan_id}_{uuid.uuid4().hex[:8]}",
+                date=entry_date,
+                description=f"Zharta {event} - Loan #{loan_id}" if loan_id else f"Zharta {event}",
+                tx_hash=str(tx_hash) if tx_hash else 'unknown',
+                category=cat,
+                platform=Platform.ZHARTA,
+                wallet_address=str(first_row.get('borrower', first_row.get('lender', ''))),
+                wallet_role="lender" if first_row.get('is_fund_lender') else "borrower",
+                eth_usd_price=eth_price,
+                posting_status=posting_status
+            )
+
+            # Add debit/credit entries
+            for row in rows:
+                account = row.get('account_name', 'unknown')
+                debit = Decimal(str(row.get('debit_crypto', 0)))
+                credit = Decimal(str(row.get('credit_crypto', 0)))
+
+                if debit > 0:
+                    entry.add_debit(account, debit, str(currency))
+                if credit > 0:
+                    entry.add_credit(account, credit, str(currency))
+
+            if entry.entries:
+                journal_entries.append(entry)
+
+        return journal_entries

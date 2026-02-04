@@ -122,25 +122,51 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             logger.info("[DEBUG] No transactions found in either cache")
             return []
 
-        # Apply filters
-        platform_filter = input.decoded_platform_filter()
-        category_filter = input.decoded_category_filter()
-        status_filter = input.decoded_status_filter()
+        # Apply filters - wrap in try/except since inputs may not exist yet
+        try:
+            platform_filter = input.decoded_platform_filter()
+        except Exception:
+            platform_filter = "all"
 
-        # Platform filter
+        try:
+            category_filter = input.decoded_category_filter()
+        except Exception:
+            category_filter = "all"
+
+        try:
+            status_filter = input.decoded_status_filter()
+        except Exception:
+            status_filter = "all"
+
+        logger.debug(f"[FILTER] platform={platform_filter}, category={category_filter}, status={status_filter}")
+        logger.debug(f"[FILTER] Before filtering: {len(transactions)} transactions")
+
+        # Platform filter (case-insensitive)
         if platform_filter and platform_filter != "all":
-            transactions = [tx for tx in transactions if tx.get('platform') == platform_filter]
+            before_count = len(transactions)
+            transactions = [
+                tx for tx in transactions
+                if tx.get('platform', '').lower() == platform_filter.lower()
+            ]
+            logger.debug(f"[FILTER] Platform filter '{platform_filter}': {before_count} -> {len(transactions)}")
 
         # Category filter
         if category_filter and category_filter != "all":
-            transactions = [tx for tx in transactions if tx.get('category') == category_filter]
+            before_count = len(transactions)
+            transactions = [
+                tx for tx in transactions
+                if tx.get('category') == category_filter
+            ]
+            logger.debug(f"[FILTER] Category filter '{category_filter}': {before_count} -> {len(transactions)}")
 
         # Status filter - use transaction-level posting_status
         if status_filter and status_filter != "all":
+            before_count = len(transactions)
             transactions = [
                 tx for tx in transactions
                 if tx.get('posting_status') == status_filter
             ]
+            logger.debug(f"[FILTER] Status filter '{status_filter}': {before_count} -> {len(transactions)}")
 
         # Sort by timestamp descending
         transactions.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
