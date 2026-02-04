@@ -196,7 +196,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 from web3 import Web3
 import web3.logs
 from eth_utils import event_abi_to_log_topic

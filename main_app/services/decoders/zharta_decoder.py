@@ -648,8 +648,11 @@ class ZhartaDecoder:
 
         iterator = tx_hashes
         if show_progress:
-            from tqdm import tqdm
-            iterator = tqdm(tx_hashes, desc="Decoding Zharta events")
+            try:
+                from tqdm import tqdm
+                iterator = tqdm(tx_hashes, desc="Decoding Zharta events")
+            except ImportError:
+                pass  # iterator stays as tx_hashes
 
         for tx_hash in iterator:
             try:
