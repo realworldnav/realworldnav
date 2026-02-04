@@ -206,7 +206,7 @@ class BlockchainOrchestrator:
         else:
             try:
                 from ..decoders.registry import DecoderRegistry
-                self.decoder_registry = DecoderRegistry(fund_wallets=self.fund_wallets)
+                self.decoder_registry = DecoderRegistry(w3=self.get_web3(), fund_wallets=self.fund_wallets)
             except Exception as e:
                 logger.error(f"Failed to initialize decoder registry: {e}")
                 self.decoder_registry = None
