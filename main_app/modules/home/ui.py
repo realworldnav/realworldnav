@@ -3,6 +3,67 @@ from datetime import datetime
 from .decoded_transactions_ui import decoded_transactions_ui
 
 
+def single_tx_decoder_ui():
+    """Single Transaction Decoder UI - decode one transaction at a time"""
+    return ui.page_fluid(
+        ui.h2("Single Transaction Decoder"),
+        ui.p("Decode and post individual blockchain transactions", class_="text-muted mb-3"),
+
+        # Input card
+        ui.card(
+            ui.card_header(
+                ui.HTML('<i class="bi bi-search me-2"></i>Enter Transaction Hash')
+            ),
+            ui.card_body(
+                ui.div(
+                    ui.input_text(
+                        "single_tx_hash_input",
+                        None,
+                        placeholder="0x... (paste transaction hash)",
+                        width="100%"
+                    ),
+                    class_="mb-3"
+                ),
+                ui.div(
+                    ui.input_action_button(
+                        "decode_single_tx_btn",
+                        ui.HTML('<i class="bi bi-cpu me-2"></i>Decode Transaction'),
+                        class_="btn-primary"
+                    ),
+                    class_="d-flex"
+                ),
+            )
+        ),
+
+        # Status display
+        ui.output_ui("single_tx_status"),
+
+        # Results display
+        ui.output_ui("single_tx_results"),
+
+        # Decoded events
+        ui.output_ui("single_tx_decoded_events"),
+
+        # Journal entries preview
+        ui.output_ui("single_tx_journal_entries"),
+
+        # Action buttons
+        ui.output_ui("single_tx_actions"),
+
+        # Custom CSS
+        ui.tags.style("""
+            .spin-animation {
+                animation: spin 1s linear infinite;
+                display: inline-block;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        """)
+    )
+
+
 def quick_dashboard_ui():
     """Quick loading dashboard - no blockchain dependencies"""
     return ui.page_fluid(
@@ -323,6 +384,9 @@ def enhanced_home_ui():
             ui.HTML('<i class="bi bi-broadcast me-1"></i> Blockchain Listener'),
             blockchain_listener_ui()
         ),
-        # Decoded Transactions is now integrated into Blockchain Listener as a sub-tab
+        ui.nav_panel(
+            ui.HTML('<i class="bi bi-hash me-1"></i> Single TX'),
+            single_tx_decoder_ui()
+        ),
         id="home_tabs"
     )

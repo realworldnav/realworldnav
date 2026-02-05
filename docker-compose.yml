@@ -1,0 +1,16 @@
+services:
+  claude_sandbox:
+    build: .
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    # Uncomment if using API key auth instead of `claude login`:
+    # environment:
+    #   - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    #
+    # No network by default (maximum safety)
+    # Switch to "bridge" if Claude needs internet (S3, auth, pip install, etc.)
+    # NOTE: "bridge" is required for first run so `claude login` can authenticate
+    network_mode: "bridge"

@@ -9,6 +9,7 @@ import os
 from .decoder_modal_ui import decoder_modal_ui, decoder_modal_styles
 from .decoder_modal_outputs import register_decoder_modal_outputs
 from .decoded_transactions_outputs import register_decoded_transactions_outputs
+from .single_tx_outputs import register_single_tx_outputs
 import logging
 
 # Import the new DecoderRegistry - also lazy
@@ -193,6 +194,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     # Pass both registry and local cache for fallback when registry unavailable
     register_decoded_transactions_outputs(output, input, session, decoder_registry, decoded_tx_cache, decoded_refresh_trigger)
 
+    # Register single transaction decoder outputs (Single TX tab)
+    register_single_tx_outputs(input, output, session, selected_fund)
+
     # Unified listener content - handles both connect panel and listener UI
     @output
     @render.ui
@@ -209,12 +213,30 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                     ui.HTML('<i class="bi bi-broadcast" style="font-size: 4rem; color: #6c757d;"></i>'),
                     ui.h3("Connect to Blockchain", class_="mt-3 mb-2"),
                     ui.p(
-                        "Select a wallet and click Connect to start monitoring transactions.",
+                        "Select a wallet and configure how many transactions to fetch.",
                         class_="text-muted mb-4"
                     ),
                     # Wallet selector - shown before connect
                     ui.div(
                         _build_wallet_selector(),
+                        class_="mb-3",
+                        style="max-width: 400px; margin: 0 auto;"
+                    ),
+                    # Transaction limit selector - shown before connect
+                    ui.div(
+                        ui.input_select(
+                            "transaction_limit",
+                            "Transactions to Fetch:",
+                            {
+                                "25": "Last 25",
+                                "50": "Last 50 (Recommended)",
+                                "100": "Last 100",
+                                "200": "Last 200",
+                                "500": "Last 500",
+                            },
+                            selected="50",
+                            width="100%"
+                        ),
                         class_="mb-4",
                         style="max-width: 400px; margin: 0 auto;"
                     ),
@@ -247,11 +269,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                                 "transaction_limit",
                                 "Display Limit:",
                                 {
+                                    "25": "Last 25",
                                     "50": "Last 50",
                                     "100": "Last 100",
                                     "200": "Last 200",
+                                    "500": "Last 500",
                                 },
-                                selected="100",
+                                selected="50",
                                 width="100%"
                             ),
                         ),
@@ -448,7 +472,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
     # Background task for fetching transactions (non-blocking)
     @reactive.extended_task
-    async def fetch_transactions_task(wallet_address: str, limit: int = 100):
+    async def fetch_transactions_task(wallet_address: str, limit: int = 50):
         """Fetch transactions in background thread to avoid blocking UI"""
         loop = asyncio.get_event_loop()
         # Run the blocking call in a thread pool
@@ -489,8 +513,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             if primary_wallet:
                 # Set status to loading and trigger background fetch
                 initialization_status.set("loading")
-                logger.info(f"Starting background fetch for wallet {primary_wallet[:10]}...")
-                fetch_transactions_task(primary_wallet, 100)
+                # Get the user-selected transaction limit (default 50)
+                try:
+                    limit = int(input.transaction_limit())
+                except:
+                    limit = 50
+                logger.info(f"Starting background fetch for wallet {primary_wallet[:10]}... (limit: {limit})")
+                fetch_transactions_task(primary_wallet, limit)
 
             last_refresh.set(datetime.now(timezone.utc))
 
@@ -767,7 +796,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             "8453": "https://basescan.org"
         }.get(network, "https://etherscan.io")
 
-        limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
+        limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 50
 
         for _, row in df.head(limit).iterrows():
             tx_hash = row.get('hash', '')
@@ -1218,7 +1247,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         display_df = pd.DataFrame(display_data)
 
         # Limit to selected number of transactions
-        limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
+        limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 50
         display_df = display_df.head(limit)
 
         return render.DataGrid(
@@ -1630,7 +1659,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
         try:
             wallet = input.wallet_address() if hasattr(input, 'wallet_address') else get_blockchain_service().wallet_address
-            limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 100
+            limit = int(input.transaction_limit()) if hasattr(input, 'transaction_limit') else 50
 
             # Re-initialize if wallet changed
             if wallet != get_blockchain_service().wallet_address:
@@ -1732,7 +1761,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
             # Fetch fresh data for the new wallet
             logger.info(f"Fetching transactions for: {get_blockchain_service().wallet_address}")
-            fresh_data = get_blockchain_service().fetch_historical_transactions(limit=int(input.transaction_limit() if hasattr(input, 'transaction_limit') else 100))
+            fresh_data = get_blockchain_service().fetch_historical_transactions(limit=int(input.transaction_limit() if hasattr(input, 'transaction_limit') else 50))
 
             if not fresh_data.empty:
                 transaction_data.set(fresh_data)

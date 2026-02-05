@@ -1,0 +1,112 @@
+# ============================================================
+# REAL WORLD NAV — GENERIC DECODING → ACCOUNTING PIPELINE
+# ============================================================
+# Raw CSV → DecodedTransaction → OnchainEvent → EconomicEvent
+#          → JournalEntryLine (journal_entries.csv)
+# ============================================================
+
+import os
+import json
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
+from decimal import Decimal, getcontext
+from datetime import datetime
+
+import pandas as pd
+from tqdm.auto import tqdm
+from web3 import Web3
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Set high precision for money
+getcontext().prec = 28
+
+# ------------------------------------------------------------
+# 0. USER CONFIG
+# ------------------------------------------------------------
+
+# Your historical CSV (update if your path is different)
+HISTORICAL_FILE = (
+    "/content/drive/MyDrive/Drip_Capital/accounting_records/cache_v1/historical_20240709_20250930_fully_linked_final_ETH_USD.csv"
+)
+
+# Where to store per-tx decoded JSON
+DECODED_CACHE_DIR = (
+    "/content/drive/MyDrive/Drip_Capital/accounting_records/20240709_20250930/decoded_cache"
+)
+os.makedirs(DECODED_CACHE_DIR, exist_ok=True)
+
+# Where to write final journal entries
+JOURNAL_ENTRIES_OUT = (
+    "/content/drive/MyDrive/Drip_Capital/accounting_records/20240709_20250930/"
+    "journal_entries_template.csv"
+)
+
+# RPC endpoints (put your real keys)
+#INFURA_API_KEY = "YOUR_INFURA_KEY_HERE"  # <-- REPLACE
+INFURA_URL  = f"https://mainnet.infura.io/v3/{INFURA_API_KEY}"
+ALCHEMY_URL = f"https://eth-mainnet.g.alchemy.com/v2/mmhv6R8fVVR6JnSoHSHD3KRsAWxuTPJV"  # <-- REPLACE
+
+w3_infura = Web3(Web3.HTTPProvider(INFURA_URL))
+w3_alchemy = Web3(Web3.HTTPProvider(ALCHEMY_URL))
+
+assert w3_infura.is_connected(),  "Infura not connected"
+assert w3_alchemy.is_connected(), "Alchemy not connected"
+
+# ERC20 Transfer topic (no 0x because we used .hex() earlier)
+ERC20_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+BLUR_EVENT_SIGS = {
+    # Loan originated (old & new)
+    "0x3f46e04eeebf1f650ed12c743bbef88b9aa5f3d9952b69eb614631beb3db0f74": "LOAN_OFFER_TAKEN",
+    "0xa80d9c4ae87df18eafb281daba3a0990353d363df23883228c166a4630bf8c29": "LOAN_STARTED",
+
+    # Refinance existing loan
+    "0xf11b7c4df4760a57232ece2b2043614d00f90e1aaff42ebc37f450b7b26eaa2d": "REFINANCE",
+
+    # Repayment
+    "0x9566e7e0c79fd1f3e2961abe6a4f13569c822ab15aeaa87b8fbdd7e5d142e507": "LOAN_REPAID",
+
+    # Collateral seizure
+    "0xe787db5c0bf2d6417382eef52c5f59c2e39f8a61f5bf299c24c45ea1ab696648": "SEIZE_COLLATERAL",
+
+    # Auction cycle
+    "0xf033b05f39b1e2a543bd5e9b2f3c23fee43c1430e9fcb2d80d790c5c442122d3": "START_AUCTION",
+    "0xc6adef0b9b0b14c9d87f69760867a82915ce3dd258808360835b22bc95e3e63c": "END_AUCTION",
+}
+
+
+# ------------------------------------------------------------
+# 1. LOAD HISTORICAL CSV + TX → TIMESTAMP MAPPING
+# ------------------------------------------------------------
+
+print("📥 Loading historical CSV...")
+df = pd.read_csv(HISTORICAL_FILE, parse_dates=["timestamp"], low_memory=False)
+print(f"Loaded {len(df):,} rows")
+
+df['from_address'] = df['from'].str.lower()
+df['to_address'] = df['to'].str.lower()
+df['tx_hash'] = df['hash']
+df['block_number'] = df['block']
+
+
+# ------------------------------------------------------------
+# BUILD TIMESTAMP MAP (GLOBAL) FOR ALL TX HASHES
+# ------------------------------------------------------------
+print("Building timestamp map...")
+
+# df MUST contain: tx_hash, timestamp
+tx_timestamp_map = (
+    df[["tx_hash", "timestamp"]]
+    .dropna()
+    .drop_duplicates("tx_hash")
+    .set_index("tx_hash")["timestamp"]
+    .to_dict()
+)
+
+print(f"Built timestamp map for {len(tx_timestamp_map):,} unique hashes")
+
+
+# ------------------------------------------------------------
+# 2. DECODE-ONCE ENGINE (WITH CACHE)
+# ------------------------------------------------------------
+

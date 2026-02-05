@@ -718,6 +718,9 @@ class DecodedGondiEvent:
     is_fund_borrower: bool = False
     old_is_fund_borrower: bool = False  # For refinancing - was old loan fund as borrower
 
+    # Computed: Fund triggered the transaction (for LoanSentToLiquidator)
+    is_fund_originator: bool = False  # True if tx sender is a fund wallet
+
     # Contract that emitted the event
     contract_address: Optional[str] = None
 
@@ -746,6 +749,7 @@ class DecodedGondiEvent:
             'old_fund_tranches': [t.to_dict() for t in self.old_fund_tranches] if self.old_fund_tranches else [],
             'is_fund_borrower': self.is_fund_borrower,
             'old_is_fund_borrower': self.old_is_fund_borrower,
+            'is_fund_originator': self.is_fund_originator,
             'contract_address': self.contract_address,
         }
 
@@ -873,6 +877,9 @@ class GondiEventDecoder:
             receipt = self.w3.eth.get_transaction_receipt(tx_hash)
             tx = self.w3.eth.get_transaction(tx_hash)
 
+            # Get transaction sender for originator check
+            tx_sender = tx['from'].lower() if tx.get('from') else None
+
             # DEBUG: Log Web3 instance IDs to check for mismatch
             print(f"[DEBUG] Decoder w3 id: {id(self.w3)}")
             if self.contracts:
@@ -928,8 +935,16 @@ class GondiEventDecoder:
                         else:
                             input_loan, input_old_loan = self._extract_loans_from_input(params, function_name, is_v2)
 
+                        # DEBUG: Log successful function decode
+                        print(f"[DEBUG] Function decoded: {function_name}")
+                        print(f"[DEBUG]   input_loan extracted: {input_loan is not None}")
+                        if input_loan:
+                            print(f"[DEBUG]   Loan has {len(input_loan.tranches)} tranches")
+                            for i, t in enumerate(input_loan.tranches):
+                                print(f"[DEBUG]     Tranche {i}: lender={t.lender}")
                         break  # Success, stop trying
-                    except Exception:
+                    except Exception as e:
+                        print(f"[DEBUG] Function decode failed for contract {contract_addr[:16]}: {e}")
                         continue
 
             # First pass: decode events from logs that match specific contracts
@@ -1019,7 +1034,8 @@ class GondiEventDecoder:
                                     input_loan,
                                     input_old_loan,
                                     function_name,
-                                    is_v2
+                                    is_v2,
+                                    tx_sender
                                 )
                                 if decoded:
                                     decoded_events.append(decoded)
@@ -1074,7 +1090,8 @@ class GondiEventDecoder:
                                     input_loan,
                                     input_old_loan,
                                     function_name,
-                                    log_is_v2
+                                    log_is_v2,
+                                    tx_sender
                                 )
                                 if decoded:
                                     decoded_events.append(decoded)
@@ -1206,7 +1223,8 @@ class GondiEventDecoder:
         input_loan: Optional[Loan],
         input_old_loan: Optional[Loan],
         function_name: Optional[str],
-        is_v2: bool = False
+        is_v2: bool = False,
+        tx_sender: Optional[str] = None
     ) -> Optional[DecodedGondiEvent]:
         """Decode a single event log"""
         args = dict(log['args'])
@@ -1298,10 +1316,29 @@ class GondiEventDecoder:
         elif event_type == GondiEventType.LOAN_SENT_TO_LIQUIDATOR.value:
             event.liquidator = safe_address(args.get('liquidator', ''))
             event.loan = input_loan
+            # Check if fund triggered the liquidation (tx sender is a fund wallet)
+            if tx_sender and tx_sender in self.fund_wallet_list:
+                event.is_fund_originator = True
+            # DEBUG: Log LoanSentToLiquidator details
+            print(f"[DEBUG] LoanSentToLiquidator event decoded:")
+            print(f"[DEBUG]   loan_id: {event.loan_id}")
+            print(f"[DEBUG]   liquidator: {event.liquidator}")
+            print(f"[DEBUG]   tx_sender: {tx_sender}")
+            print(f"[DEBUG]   is_fund_originator: {event.is_fund_originator}")
+            print(f"[DEBUG]   input_loan is None: {input_loan is None}")
+            if input_loan:
+                print(f"[DEBUG]   input_loan.tranches count: {len(input_loan.tranches)}")
 
         # Filter for fund wallet tranches (fund as LENDER)
         # NOTE: Must lowercase t.lender since fund_wallet_list contains lowercase addresses
         if event.loan:
+            # DEBUG: Log tranche filtering for LoanSentToLiquidator
+            if event_type == GondiEventType.LOAN_SENT_TO_LIQUIDATOR.value:
+                print(f"[DEBUG]   Filtering tranches - fund_wallet_list has {len(self.fund_wallet_list)} addresses")
+                print(f"[DEBUG]   fund_wallet_list sample: {self.fund_wallet_list[:5]}")
+                for t in event.loan.tranches:
+                    matches = t.lender.lower() in self.fund_wallet_list
+                    print(f"[DEBUG]     Tranche lender {t.lender} matches fund: {matches}")
             event.fund_tranches = [
                 t for t in event.loan.tranches
                 if t.lender.lower() in self.fund_wallet_list
@@ -2667,6 +2704,111 @@ class GondiJournalEntryGenerator:
         return pd.DataFrame(journal_rows)
 
     # =========================================================================
+    # LOAN SENT TO LIQUIDATOR - NFT Seizure (same treatment as foreclosure)
+    # =========================================================================
+
+    def generate_loan_sent_to_liquidator_entries(
+        self,
+        events: List[DecodedGondiEvent]
+    ) -> pd.DataFrame:
+        """
+        Generate journal entries for LoanSentToLiquidator events.
+
+        This event fires when the fund seizes NFT collateral on a defaulted loan.
+        Accounting treatment is identical to LoanForeclosed.
+
+        From lender's perspective (per tranche):
+        - Dr investments_nfts_seized_collateral (principal - NFT cost basis)
+        - Dr bad_debt_expense_{currency} (interest write-off)
+        - Cr loan_receivable_cryptocurrency_{currency} (principal)
+        - Cr interest_receivable_cryptocurrency_{currency} (interest)
+        """
+        journal_rows = []
+
+        for event in events:
+            if event.event_type != GondiEventType.LOAN_SENT_TO_LIQUIDATOR.value:
+                continue
+
+            if not event.loan:
+                print(f"[DEBUG] LoanSentToLiquidator loan_id={event.loan_id}: loan is None, skipping")
+                continue
+
+            # Determine which tranches to use for JE generation
+            # If fund is the originator (called liquidateLoan) but not a direct tranche lender,
+            # use ALL tranches - fund likely lends through a pool/vault
+            if event.fund_tranches:
+                tranches_to_process = event.fund_tranches
+                print(f"[DEBUG] LoanSentToLiquidator loan_id={event.loan_id}: using {len(tranches_to_process)} fund_tranches")
+            elif event.is_fund_originator and event.loan.tranches:
+                tranches_to_process = event.loan.tranches
+                print(f"[DEBUG] LoanSentToLiquidator loan_id={event.loan_id}: fund is originator, using ALL {len(tranches_to_process)} tranches")
+            else:
+                print(f"[DEBUG] LoanSentToLiquidator loan_id={event.loan_id}: fund_tranches=0, is_fund_originator={event.is_fund_originator}, skipping")
+                continue
+
+            loan = event.loan
+            block_ts_int = int(event.timestamp.timestamp())
+            currency_suffix = get_account_suffix(loan.cryptocurrency)
+
+            for tranche in tranches_to_process:
+                common = self._build_common_metadata(event, tranche, loan)
+                common['transaction_type'] = 'investments_foreclosures'
+
+                # Calculate interest to write off (carried + current period net)
+                total_interest, _ = calculate_tranche_interest(
+                    tranche,
+                    block_ts_int,
+                    loan.protocolFee
+                )
+
+                # 1) Dr investments_nfts_seized_collateral (principal as cost basis)
+                journal_rows.append({
+                    **common,
+                    'account_name': 'investments_nfts_seized_collateral',
+                    'debit': tranche.principalAmount,
+                    'credit': 0,
+                    'principal': tranche.principalAmount,
+                    'payoff_amount': tranche.principalAmount,  # NFT received at principal value
+                })
+
+                # 2) Dr bad_debt_expense (interest write-off)
+                if total_interest > 0:
+                    journal_rows.append({
+                        **common,
+                        'account_name': f'bad_debt_expense_{currency_suffix}',
+                        'debit': total_interest,
+                        'credit': 0,
+                        'principal': tranche.principalAmount,
+                        'payoff_amount': tranche.principalAmount,
+                    })
+
+                # 3) Cr loan_receivable (principal)
+                journal_rows.append({
+                    **common,
+                    'account_name': f'loan_receivable_cryptocurrency_{currency_suffix}',
+                    'debit': 0,
+                    'credit': tranche.principalAmount,
+                    'principal': tranche.principalAmount,
+                    'payoff_amount': tranche.principalAmount,
+                })
+
+                # 4) Cr interest_receivable (interest)
+                if total_interest > 0:
+                    journal_rows.append({
+                        **common,
+                        'account_name': f'interest_receivable_cryptocurrency_{currency_suffix}',
+                        'debit': 0,
+                        'credit': total_interest,
+                        'principal': tranche.principalAmount,
+                        'payoff_amount': tranche.principalAmount,
+                    })
+
+        if not journal_rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(journal_rows)
+
+    # =========================================================================
     # LOAN LIQUIDATED - Multi-Tranche Liquidation (Auction)
     # =========================================================================
 
@@ -3251,6 +3393,7 @@ class GondiJournalEntryGenerator:
             GondiEventType.LOAN_REPAID.value,
             GondiEventType.LOAN_FORECLOSED.value,
             GondiEventType.LOAN_LIQUIDATED.value,
+            GondiEventType.LOAN_SENT_TO_LIQUIDATOR.value,
         }
 
         refinance_events = {
@@ -3970,6 +4113,12 @@ class GondiJournalEntryGenerator:
         if not df_foreclosures.empty:
             results['foreclosures'] = df_foreclosures
             print(f"[OK] Generated {len(df_foreclosures)} foreclosure journal entries")
+
+        # LoanSentToLiquidator (NFT seizure - same treatment as foreclosure)
+        df_sent_to_liquidator = self.generate_loan_sent_to_liquidator_entries(events)
+        if not df_sent_to_liquidator.empty:
+            results['sent_to_liquidator'] = df_sent_to_liquidator
+            print(f"[OK] Generated {len(df_sent_to_liquidator)} sent-to-liquidator journal entries")
 
         # Liquidations
         df_liquidations = self.generate_loan_liquidated_entries(events)

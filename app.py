@@ -25,4 +25,4 @@ app = App(app_ui, server, static_assets=STATIC_DIR)
 
 if __name__ == "__main__":
     logger.info(f"RealWorldNAV starting - Client: {CLIENT}, Fund: {FUND}")
-    app.run(host="127.0.0.1", port=8001, launch_browser=False)
+    app.run(host="127.0.0.1", port=8001, launch_browser=True)
