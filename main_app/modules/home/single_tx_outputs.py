@@ -353,6 +353,76 @@ def register_single_tx_outputs(input, output, session, selected_fund):
         posting_status.set("idle")
 
     # =========================================================================
+    # EXPORT CSV HANDLER
+    # =========================================================================
+
+    @render.download(filename=lambda: f"journal_entries_{(decoded_single_tx.get() or {}).get('tx_hash', 'export')[:10]}.csv")
+    def download_single_tx_csv():
+        """Download journal entries from decoded single transaction as CSV"""
+        result = decoded_single_tx.get()
+        if not result or not result.get('journal_entries'):
+            yield "tx_hash,date,account_name,debit_crypto,credit_crypto,cryptocurrency,debit_usd,credit_usd,eth_price,gl_acct_number,gl_acct_name,in_coa\n"
+            return
+
+        try:
+            from ...services.decoders.accounts import COA
+
+            journal_entries = result['journal_entries']
+            tx_hash = result.get('tx_hash', '')
+            timestamp = result.get('timestamp', '')
+            eth_price = float(result.get('eth_price', 0))
+
+            rows = []
+            for je in journal_entries:
+                account_name = je.get('account_name', '')
+                debit_val = float(je.get('debit_crypto', 0) or je.get('debit', 0) or 0)
+                credit_val = float(je.get('credit_crypto', 0) or je.get('credit', 0) or 0)
+                crypto = je.get('cryptocurrency', je.get('asset', 'ETH'))
+
+                # COA lookup
+                gl_acct_number = ''
+                gl_acct_name = ''
+                in_coa = False
+                for key, (num, name) in COA.items():
+                    if name == account_name:
+                        gl_acct_number = num
+                        gl_acct_name = name
+                        in_coa = True
+                        break
+
+                # Calculate USD amounts
+                stablecoins = {'USDC', 'USDT', 'DAI', 'FRAX', 'LUSD'}
+                if crypto.upper() in stablecoins:
+                    debit_usd = debit_val
+                    credit_usd = credit_val
+                else:
+                    debit_usd = debit_val * eth_price
+                    credit_usd = credit_val * eth_price
+
+                rows.append({
+                    'tx_hash': tx_hash,
+                    'date': timestamp,
+                    'account_name': account_name,
+                    'debit_crypto': debit_val if debit_val > 0 else '',
+                    'credit_crypto': credit_val if credit_val > 0 else '',
+                    'cryptocurrency': crypto,
+                    'debit_usd': f"{debit_usd:.2f}" if debit_val > 0 else '',
+                    'credit_usd': f"{credit_usd:.2f}" if credit_val > 0 else '',
+                    'eth_price': eth_price,
+                    'gl_acct_number': gl_acct_number,
+                    'gl_acct_name': gl_acct_name,
+                    'in_coa': in_coa,
+                })
+
+            df = pd.DataFrame(rows)
+            yield df.to_csv(index=False)
+            logger.info(f"Exported {len(rows)} journal entries from single TX to CSV")
+
+        except Exception as e:
+            logger.error(f"Failed to export single TX CSV: {e}", exc_info=True)
+            yield f"Error exporting: {str(e)}\n"
+
+    # =========================================================================
     # UI OUTPUTS
     # =========================================================================
 
@@ -570,6 +640,15 @@ def register_single_tx_outputs(input, output, session, selected_fund):
                         class_="btn-success me-2"
                     )
                 )
+
+            # Export CSV button
+            buttons.append(
+                ui.download_button(
+                    "download_single_tx_csv",
+                    ui.HTML('<i class="bi bi-download me-2"></i>Export to CSV'),
+                    class_="btn-outline-primary me-2"
+                )
+            )
 
         # Clear button
         buttons.append(

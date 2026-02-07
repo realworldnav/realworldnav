@@ -488,7 +488,8 @@ class GondiDecoderAdapter(BaseDecoderAdapter):
                 # Combine all journal entry DataFrames from result
                 import pandas as pd
                 entry_keys = ['new_loans', 'repayments', 'refinances', 'foreclosures',
-                              'liquidations', 'interest_accruals', 'accrual_reversals']
+                              'liquidations', 'interest_accruals', 'accrual_reversals',
+                              'sent_to_liquidator']
                 all_entries = []
                 for key in entry_keys:
                     if key in result and isinstance(result[key], pd.DataFrame) and not result[key].empty:

@@ -1,0 +1,1656 @@
+================================================================================
+  REALWORLDNAV — CRYPTO ACCOUNTING PIPELINE: END-TO-END TECHNICAL DESIGN
+================================================================================
+
+  Document Type:    Internal Design Document (Production-Grade)
+  Audience:         Engineers, Fund Accountants, Auditors
+  System:           RealWorldNAV v2.x
+  Primary Chain:    Ethereum Mainnet (EVM-compatible expansion planned)
+  Last Updated:     2026-02-05
+
+================================================================================
+  TABLE OF CONTENTS
+================================================================================
+
+  1.  Executive Summary
+  2.  Blockchain Listener Layer
+  3.  Transaction Decoding Engine
+  4.  Journal Entry Generation
+  5.  Posting to the General Ledger
+  6.  Crypto Inventory Tracker Integration (FIFO Engine)
+  7.  NFT Accounting & Tracking
+  8.  System Architecture & Data Flow
+  9.  Operational Considerations
+  10. Future Enhancements
+  A.  Appendix: Chart of Accounts (Condensed)
+  B.  Appendix: GL Parquet Schema
+  C.  Appendix: Worked Examples
+
+================================================================================
+  1. EXECUTIVE SUMMARY
+================================================================================
+
+RealWorldNAV is a fund-accounting system purpose-built for crypto-native
+investment funds that participate in NFT-collateralized lending, DeFi yield
+strategies, and digital asset custody. The pipeline converts raw Ethereum
+blockchain activity into GAAP-aligned double-entry journal entries, maintains
+FIFO cost basis lots, and produces standard financial statements (trial balance,
+income statement, balance sheet, NAV waterfall).
+
+The pipeline has five primary stages:
+
+  On-Chain Activity
+       |
+       v
+  [1] Blockchain Listener Layer        — Detects wallet activity
+       |
+       v
+  [2] Transaction Decoding Engine      — ABI decodes + classifies
+       |
+       v
+  [3] Journal Entry Generation         — Double-entry bookkeeping
+       |
+       v
+  [4] GL Posting + FIFO Integration    — Idempotent ledger writes + cost basis
+       |
+       v
+  [5] Reporting (NAV, Financials)      — Trial balance, income stmt, balance sheet
+
+Each stage is described in detail below.
+
+
+================================================================================
+  2. BLOCKCHAIN LISTENER LAYER
+================================================================================
+
+2.1  SUPPORTED CHAINS AND WALLETS
+---------------------------------
+
+  Chain:          Ethereum Mainnet (chainId 1)
+  Expansion:      Arbitrum One planned (bridge accounts already in COA: 10301-10303)
+
+  Wallets are configured in an S3-hosted Excel file:
+    s3://realworldnav-beta-1/drip_capital/drip_capital_wallets.xlsx
+
+  Each wallet row contains:
+    - wallet_address   (0x-prefixed, checksummed)
+    - fund_id          (e.g., "holdings_class_B_ETH")
+    - friendly_name    (human-readable label)
+    - category         (e.g., "fund", "operations", "treasury")
+    - wallet_type      ("hot" or "cold")
+
+  At startup, the listener loads this file and monitors all listed addresses.
+  Only transactions involving at least one fund wallet produce journal entries.
+
+  Assumption: The system does not manage private keys. It is read-only against
+  the blockchain. Transaction signing happens externally (Gnosis Safe, hardware
+  wallets, etc.).
+
+
+2.2  INFRASTRUCTURE: MULTI-ENDPOINT RPC WITH CIRCUIT BREAKERS
+--------------------------------------------------------------
+
+The BlockchainOrchestrator (main_app/services/blockchain/orchestrator.py) is the
+central coordinator. It manages:
+
+  Component               | File                          | Purpose
+  -------------------------+-------------------------------+-----------------------------
+  EndpointManager          | endpoint_manager.py           | Multi-RPC failover
+  HybridMonitor            | websocket_manager.py          | WS + polling combined
+  EventDeduplicator        | event_deduplicator.py         | Prevents double-processing
+  CacheManager             | cache_manager.py              | Tiered caching (L1/L2/L3)
+
+  EndpointManager Details:
+  - Maintains multiple RPC endpoints (Infura, Alchemy, etc.) with priority ordering.
+  - Each endpoint is wrapped in an EndpointConfig:
+      { name, http_url, websocket_url, priority, rate_limit, timeout }
+  - Health tracked via EndpointHealth dataclass:
+      { success_count, failure_count, consecutive_failures, circuit_state }
+  - Circuit breaker pattern with three states:
+      CLOSED   → Normal operation, all requests allowed.
+      OPEN     → Consecutive failures exceeded threshold; requests blocked.
+      HALF_OPEN → After cooldown, one probe request allowed; success resets to CLOSED.
+  - When all endpoints are OPEN, AllEndpointsFailedError is raised.
+  - Requests are routed to the highest-priority CLOSED endpoint.
+
+
+2.3  EVENT DETECTION LOGIC
+--------------------------
+
+The HybridMonitor combines two detection strategies:
+
+  Strategy 1: WebSocket Subscription (primary, ~1s latency)
+  - Subscribes to `newPendingTransactions` and `logs` for monitored addresses.
+  - Auto-reconnects on disconnect with configurable retry interval (default 60s).
+  - Emits events to the processing pipeline immediately.
+
+  Strategy 2: Polling Fallback (backup, ~12s latency)
+  - Polls eth_getBlockByNumber every polling_interval (default 12s).
+  - Scans each block's transactions for fund wallet involvement.
+  - Used when WebSocket is unavailable or as supplementary confirmation.
+
+  Detected Activity Types:
+  - ETH transfers (value > 0 to/from fund wallets)
+  - ERC-20 token transfers (Transfer events with fund wallet as from/to)
+  - Contract interactions (function calls to known protocol contracts)
+  - NFT mints/transfers (ERC-721/ERC-1155 Transfer events)
+  - Internal transactions (traced via debug_traceTransaction when available)
+
+  The monitor does NOT attempt to decode transactions at this layer. It emits
+  raw transaction hashes to the decoding pipeline.
+
+
+2.4  HANDLING REORGS, CONFIRMATIONS, AND IDEMPOTENCY
+-----------------------------------------------------
+
+  Reorgs:
+  - The system waits for a configurable confirmation depth before final processing.
+  - During the confirmation window, transactions are held in a "pending" buffer.
+  - If a reorg is detected (block hash mismatch on re-poll), pending transactions
+    from the orphaned chain are discarded and the canonical chain is re-scanned.
+  - Assumption: The confirmation depth is set to 12 blocks (~2.4 minutes) for
+    Ethereum Mainnet, which makes reorg-induced data corruption extremely unlikely.
+
+  Idempotency:
+  - The EventDeduplicator maintains a bounded LRU cache keyed on (tx_hash, log_index).
+  - Maximum cache size: 10,000 events (configurable via OrchestratorConfig).
+  - Events older than max_age_hours (default 24h) are evicted.
+  - Thread-safe via threading.Lock for concurrent WebSocket + polling access.
+  - Before processing any event, the pipeline calls:
+      if deduplicator.is_duplicate(tx_hash, log_index): skip
+  - This prevents double-processing when both WebSocket and polling detect the
+    same transaction, or during reconnection replay.
+
+  Retries:
+  - RPC call failures trigger automatic retry on the next available endpoint.
+  - Decode failures (e.g., ABI mismatch) are logged and the transaction is routed
+    to the review queue (PostingStatus.REVIEW_QUEUE) rather than retried blindly.
+  - Persistent failures after all endpoints are exhausted raise an alert.
+
+
+2.5  DATA STRUCTURES EMITTED BY THE LISTENER
+---------------------------------------------
+
+The listener emits a raw transaction envelope to the decoding engine:
+
+  {
+    "tx_hash":        "0xabc123...",
+    "block_number":   19234567,
+    "block_timestamp": 1709123456,          // Unix epoch
+    "from_address":   "0xf9b64dc4...",
+    "to_address":     "0x29469395...",
+    "value_wei":      0,
+    "input_data":     "0x1a2b3c4d...",      // Raw calldata
+    "gas_used":       245000,
+    "gas_price_wei":  15000000000,
+    "effective_gas_price": 15000000000,     // EIP-1559
+    "receipt": {
+      "status":       1,                    // 1 = success, 0 = revert
+      "logs":         [ ... ],              // Raw log entries
+    },
+    "detection_source": "websocket" | "polling",
+    "detected_wallets": ["0xf9b64dc4..."],  // Which fund wallets were involved
+  }
+
+
+================================================================================
+  3. TRANSACTION DECODING ENGINE
+================================================================================
+
+3.1  ARCHITECTURE OVERVIEW
+--------------------------
+
+The decoding engine converts raw transaction data into structured, classified
+DecodedTransaction objects. The pipeline is:
+
+  Raw TX ──> DecoderRegistry ──> Platform Adapter ──> Notebook Decoder
+                                       |
+                                       v
+                              DecodedEvent[] + JournalEntry[]
+                                       |
+                                       v
+                              DecodedTransaction (final output)
+
+Key files:
+  - registry.py           Central router (~1164 lines)
+  - decoder_adapters.py   Adapter wrappers (~1311 lines)
+  - base.py               Data models and base classes (~1186 lines)
+  - Platform decoders:    gondi_decoder.py, blur_decoder.py, nftfi_decoder.py,
+                          arcade_decoder.py, zharta_decoder.py, generic_decoder.py
+
+
+3.2  PLATFORM ROUTING (DecoderRegistry)
+----------------------------------------
+
+The registry routes transactions to the correct platform decoder using a 5-tier
+priority system:
+
+  Priority 1: Direct Contract Match
+    CONTRACT_ROUTING maps ~40 known contract addresses to Platform enums.
+    Example:
+      "0x29469395eaf6f95920e59f858042f0e28d98a20b" → Platform.BLUR  (Blend Proxy)
+      "0xf41b389e0c1950dc0b16c9498eae77131cc08a56" → Platform.GONDI (V1)
+      "0x59e0b87e3dcfb5d34c06c71c3fbf7f6b7d77a4ff" → Platform.GONDI (MultiSourceLoan)
+
+  Priority 2: Proxy Resolution
+    Many DeFi contracts use upgradeable proxies. The registry resolves proxies via:
+      a) EIP-1967 — Read storage slot 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc
+      b) EIP-1967 Beacon — Read beacon slot, then call implementation()
+      c) EIP-1167 Minimal Proxy — Parse bytecode for embedded implementation address
+      d) Custom — Call getImplementation() function
+    Results are cached in self._proxy_cache for the registry's lifetime.
+
+  Priority 3: Function Selector Match
+    FUNCTION_SELECTORS maps ~20 4-byte selectors to (Platform, function_name).
+    The first 4 bytes of input_data are compared against this table.
+
+  Priority 4: Log Address Match
+    If no match from the above, the registry scans all log entries in the receipt.
+    If any log address matches a known contract, that platform handles the TX.
+
+  Priority 5: can_decode() Fallback
+    Each adapter's can_decode(tx, receipt) method is called. The first adapter
+    that returns True wins.
+
+  Default:
+    If no platform claims the transaction, the GenericDecoder handles it.
+
+
+3.3  SUPPORTED PLATFORMS
+------------------------
+
+  Platform   | Decoder File        | Status   | Protocol Description
+  -----------+---------------------+----------+------------------------------------
+  Blur       | blur_decoder.py     | COMPLETE | Blend callable loans, continuous
+             |                     |          | compounding (e^(r*t)), lien-based
+  Gondi      | gondi_decoder.py    | COMPLETE | Multi-source lending V1/V2/V3,
+             |                     |          | tranche-based, delta payoff
+  NFTfi      | nftfi_decoder.py    | COMPLETE | Fixed-term lending V2/V2.1/V2.3/V3,
+             |                     |          | refinancing with aggregator support
+  Arcade     | arcade_decoder.py   | COMPLETE | Promissory note loans V1/V3,
+             |                     |          | separate LoanCore/Origination/Repayment
+  Zharta     | zharta_decoder.py   | COMPLETE | Peer-to-pool and P2P lending,
+             |                     |          | WETH and USDC pools
+  Generic    | generic_decoder.py  | COMPLETE | WETH wrap/unwrap, ETH transfers,
+             |                     |          | ERC-20 transfers, Seaport NFT trades,
+             |                     |          | Gnosis Safe executions
+
+
+3.4  ABI DECODING AND EVENT EXTRACTION
+---------------------------------------
+
+Each platform adapter follows the BaseDecoderAdapter pattern:
+
+  1. Lazy Initialization (_ensure_initialized):
+     - ABIs are loaded from S3 (primary) or Etherscan (fallback).
+       Path: s3://realworldnav-beta-1/abis/{contract_address}.json
+     - Web3 contract instances are created and cached in self.contracts_cache.
+     - The notebook decoder and journal generator are instantiated.
+
+  2. Event Decoding (_decode_events_by_names):
+     - For each event name in the platform's known event list:
+       a) Get the event class from contract.events.{EventName}
+       b) Call event_instance.process_receipt(receipt) (NOT process_log for receipts)
+       c) Convert decoded args to JSON-safe format (bytes→hex, int→str)
+       d) Wrap in DecodedEvent dataclass:
+          { name, args, log_index, contract_address, topic }
+     - Events are sorted by log_index for deterministic ordering.
+
+  3. Function Input Decoding:
+     - contract.decode_function_input(input_data) extracts function name + params.
+     - Used for extracting lien data from Blur calldata, loan terms from NFTfi, etc.
+
+  Critical Pattern: process_receipt() is used for batch decoding all logs in a
+  receipt. process_log() is used for individual log decoding (used inside some
+  notebook decoders). The deprecated _decode_logs() method is kept for backwards
+  compatibility but returns an empty list.
+
+
+3.5  TRANSACTION CLASSIFICATION
+-------------------------------
+
+Transactions are classified via the TransactionCategory enum (18 categories):
+
+  Category                | Description                        | Auto-Post?
+  ------------------------+------------------------------------+-----------
+  LOAN_ORIGINATION        | New loan issued                    | Yes
+  LOAN_REPAYMENT          | Loan repaid (principal + interest) | Yes
+  LOAN_REFINANCE          | Existing loan replaced             | Yes
+  LOAN_EXTENSION          | Loan duration extended             | Yes
+  LOAN_AUCTION            | Collateral auction started         | No (review)
+  LOAN_LIQUIDATION        | Loan liquidated by protocol        | No (review)
+  COLLATERAL_SEIZURE      | NFT collateral seized by lender    | No (review)
+  INTEREST_ACCRUAL        | Daily interest recognition         | Yes
+  ETH_TRANSFER            | Native ETH movement                | Yes
+  ERC20_TRANSFER          | ERC-20 token transfer              | Yes
+  NFT_TRANSFER            | ERC-721/1155 transfer              | No (review)
+  WETH_WRAP               | ETH → WETH conversion              | Yes
+  WETH_UNWRAP             | WETH → ETH conversion              | Yes
+  SEAPORT_TRADE           | OpenSea/Seaport NFT purchase/sale  | No (review)
+  GNOSIS_SAFE             | Multi-sig execution wrapper         | No (review)
+  CONTRACT_CALL           | Unclassified contract interaction   | No (review)
+  SPAM                    | Phishing/airdrop/dust attack       | Filtered
+  UNKNOWN                 | Could not classify                 | No (review)
+
+  Classification logic is platform-specific. For example, GondiDecoder maps:
+    LoanEmitted              → LOAN_ORIGINATION
+    LoanRepaid               → LOAN_REPAYMENT
+    LoanRefinancedFromNewOffers → LOAN_REFINANCE
+    LoanForeclosed           → COLLATERAL_SEIZURE
+    LoanLiquidated           → LOAN_LIQUIDATION
+
+
+3.6  SPAM FILTERING
+-------------------
+
+The SpamFilter (spam_filter.py) runs before decoding and checks 6 heuristics:
+
+  Check                    | Threshold           | Confidence Weight
+  -------------------------+---------------------+------------------
+  Too Many Events          | >50 suspicious,     | 0.3 (suspicious)
+                           | >100 almost certain | 0.8 (certain)
+  Airdrop Pattern          | >10 unique recipients| 0.4
+  Known Phishing Contract  | Blacklist match     | 1.0
+  Suspicious Token Name    | Pattern match       | 0.3
+  Unverified Token         | Not in VERIFIED_TOKENS | 0.2
+  Dust Attack              | Tiny value + unknown token | 0.3
+
+  If combined confidence >= 0.6, the transaction is marked SPAM_FILTERED.
+  The SpamCheckResult contains: { is_spam, confidence, reasons[], details{} }.
+  Spam transactions are never posted to the GL.
+
+  VERIFIED_TOKENS is a hardcoded set of ~15 known-good token addresses (WETH,
+  USDC, USDT, DAI, Blur Pool, wstETH, stETH, cbETH, rETH, WBTC, LINK, UNI, AAVE).
+
+
+3.7  EDGE CASES
+---------------
+
+  Multi-Leg Swaps:
+  - A single transaction may contain multiple Transfer events across DEX routers.
+  - The GenericDecoder groups related transfers by tracing token flows through
+    intermediary contracts (routers, pools).
+  - Each leg is recorded but only the net effect on fund wallets is journalized.
+
+  Bridges:
+  - Cross-chain bridges are detected by known bridge contract addresses.
+  - The sending side records: DR Digital Assets - Bridge - {Chain} / CR Digital Assets - ETH.
+  - The receiving side (when supported) reverses this.
+  - COA accounts 10301-10303 are dedicated to bridge assets (Arbitrum, Orbiter, LiFi).
+
+  Failed Transactions (receipt.status == 0):
+  - The gas fee is still journalized (DR Gas Fee Expense / CR Digital Assets - ETH).
+  - No other journal entries are generated.
+  - The transaction is marked with status="error" and category=CONTRACT_CALL.
+
+  Gas Refunds:
+  - EIP-3529 gas refunds reduce the effective gas cost.
+  - Gas fee calculation uses effectiveGasPrice * gasUsed, which already accounts
+    for refunds via EIP-1559 pricing.
+    Formula: gas_fee_eth = wei_to_eth(receipt.gasUsed * receipt.effectiveGasPrice)
+
+  DeFi Vault Interactions:
+  - The GenericDecoder maintains a DEFI_VAULT_CONTRACTS set.
+  - Transfers to/from these addresses are classified as investment movements
+    (DR/CR yield pool accounts) rather than income/expense.
+  - This prevents false income recognition from vault deposit/withdrawal tokens.
+
+  Continuation Accounting (Gondi V1.7.1):
+  - When a Gondi loan is refinanced, the new loan may have a different principal.
+  - The decoder uses delta-based payoff: only the difference between old and new
+    principal flows through deemed_cash. The portion that "rolls over" stays in
+    loan_receivable without touching cash.
+
+  Refinancing via Aggregator (NFTfi):
+  - NFTfi's Refinancing contract (0x4BC5Fa56...) repays the old loan and
+    originates a new one in a single transaction.
+  - The decoder sees 3 events: LoanRepaid, LoanStarted, Refinanced.
+  - Journal entries are only generated for events where the fund is a party.
+  - The Refinanced event is a linkage-only event (no accounting impact).
+
+
+3.8  NORMALIZED OUTPUT: DecodedTransaction
+------------------------------------------
+
+Every decoded transaction produces a DecodedTransaction dataclass:
+
+  DecodedTransaction {
+    status:           "success" | "error" | "spam"
+    tx_hash:          "0x..."
+    platform:         Platform enum (BLUR, GONDI, NFTFI, ARCADE, ZHARTA, GENERIC)
+    category:         TransactionCategory enum
+    block:            int
+    timestamp:        datetime (UTC)
+    eth_price:        Decimal (ETH/USD at block time)
+    gas_used:         int
+    gas_fee:          Decimal (ETH)
+    from_address:     str
+    to_address:       str
+    value:            Decimal (ETH sent with TX)
+    function_name:    str
+    function_params:  dict
+    events:           List[DecodedEvent]
+    journal_entries:  List[JournalEntry]
+    wallet_roles:     Dict[address → "lender" | "borrower" | "sender" | "recipient"]
+    positions:        Dict[lien_id → LoanPosition]
+    raw_data:         dict (original TX + receipt for audit trail)
+    error:            Optional[str]
+    _posting_status_override: Optional[PostingStatus] (for spam, etc.)
+  }
+
+  Computed Properties:
+    .is_success       → status == "success"
+    .is_spam          → status == "spam" or category == SPAM
+    .entries_balanced → all(entry.validate() for entry in journal_entries)
+    .posting_status   → Aggregated from journal entries or override
+
+
+================================================================================
+  4. JOURNAL ENTRY GENERATION
+================================================================================
+
+4.1  DOUBLE-ENTRY ACCOUNTING LOGIC
+-----------------------------------
+
+Every on-chain event that affects fund economics must produce balanced journal
+entries (total debits == total credits per asset class).
+
+The JournalEntry dataclass (base.py) contains:
+  - entry_id:       Unique identifier
+  - date:           Transaction timestamp (UTC)
+  - description:    Human-readable description
+  - tx_hash:        On-chain transaction hash (traceability)
+  - category:       TransactionCategory
+  - platform:       Platform
+  - entries:        List of {type: "DEBIT"|"CREDIT", account: str, amount: float, asset: str}
+  - posting_status: AUTO_POST | REVIEW_QUEUE
+  - eth_usd_price:  ETH/USD price at transaction time
+  - fund_id:        Fund identifier
+  - wallet_address: Primary fund wallet involved
+  - wallet_role:    "lender" | "borrower" | "sender" | etc.
+
+  Validation Rule (JournalEntry.validate()):
+  - Groups entries by asset class.
+  - ETH and WETH are treated as equivalent (ETH_EQUIVALENT_ASSETS = {'ETH', 'WETH'}).
+  - For each asset group: |debits - credits| must be < tolerance (0.000001 ETH).
+  - Entries that fail validation are routed to REVIEW_QUEUE.
+
+
+4.2  TRANSACTION-TO-JOURNAL MAPPINGS
+--------------------------------------
+
+Each transaction category has a defined journal entry template. Only transactions
+where a fund wallet is a party generate entries.
+
+  LOAN ORIGINATION (Fund is Lender):
+    DR  Loan Receivable - Crypto - {Pool}     (principal amount)
+    CR  Deemed Cash - USD                      (principal amount)
+    // Gas fee (if fund initiated the TX):
+    DR  Gas Fee Expense                        (gas_fee)
+    CR  Digital Assets - ETH                   (gas_fee)
+
+  LOAN ORIGINATION (Fund is Borrower):
+    DR  Deemed Cash - USD                      (principal amount)
+    CR  Note Payable - Crypto - {Pool}         (principal amount)
+
+  LOAN REPAYMENT (Fund is Lender, receiving repayment):
+    DR  Deemed Cash - USD                      (total payoff)
+    CR  Loan Receivable - Crypto - {Pool}      (original principal)
+    CR  Interest Receivable - Crypto - {Pool}  (accrued interest)
+    // Accrual reversal handled via daily interest entries (see 4.4)
+
+  LOAN REPAYMENT (Fund is Borrower, repaying):
+    DR  Note Payable - Crypto - {Pool}         (original principal)
+    DR  Interest Expense - Crypto - {Pool}     (interest portion)
+    CR  Deemed Cash - USD                      (total payoff)
+
+  LOAN REFINANCE:
+    // Close old loan + open new loan in same entry:
+    DR  Loan Receivable - Crypto - {Pool}      (new principal)
+    CR  Deemed Cash - USD                      (net cash out/in)
+    CR  Interest Income - Crypto - {Pool}      (protocol fee received, if any)
+    // Gondi continuation accounting: only delta flows through cash
+
+  COLLATERAL SEIZURE (Fund is Lender):
+    DR  Investments - NFTs - Seized Collateral (fair value of NFT)
+    CR  Loan Receivable - Crypto - {Pool}      (outstanding principal)
+    CR  Interest Receivable - Crypto - {Pool}  (accrued interest)
+    // Difference goes to:
+    DR/CR  Change in Fair Value - {Pool}       (gain or loss)
+
+  ETH TRANSFER (inbound to fund):
+    DR  Digital Assets - ETH                   (amount)
+    CR  Deemed Cash - USD                      (amount)
+
+  ETH TRANSFER (outbound from fund):
+    DR  Deemed Cash - USD                      (amount)
+    CR  Digital Assets - ETH                   (amount)
+
+  WETH WRAP:
+    DR  Digital Assets - WETH                  (amount)
+    CR  Digital Assets - ETH                   (amount)
+    // No P&L impact — asset class equivalence
+
+  WETH UNWRAP:
+    DR  Digital Assets - ETH                   (amount)
+    CR  Digital Assets - WETH                  (amount)
+
+  GAS FEE (always journalized for fund-initiated transactions):
+    DR  Gas Fee Expense (80001)                (gas_fee in ETH)
+    CR  Digital Assets - ETH (10200)           (gas_fee in ETH)
+
+
+4.3  CHART OF ACCOUNTS INTEGRATION
+------------------------------------
+
+All journal entries reference accounts from the centralized COA defined in
+main_app/services/decoders/accounts.py. This file is the single source of truth.
+
+  COA Structure:
+    Account Range | Category          | Examples
+    10000-19999   | Assets            | Digital Assets, Loans Receivable, NFTs
+    20000-29999   | Liabilities       | Notes Payable, Interest Payable, Accrued Exp
+    30000-31999   | Equity/Capital    | Contributions, Distributions, GP Allocation
+    40000-42999   | Other Income      | Other income, Origination fee income
+    80000-89999   | Expenses          | Gas fees, Management fees, Bad debt, Interest
+    90000-90999   | Income            | Interest income, Realized gain/loss, Unrealized
+
+  The COA dict maps account_key → (GL_Acct_Number, GL_Acct_Name).
+  Example: "loan_receivable_cryptocurrency_weth" → (13510, "Loan receivable - Cryptocurrency - WETH")
+
+  Platform-Specific Account Classes:
+    BlurAccounts    → Uses Blur Pool accounts (13500, 12500, 90500, etc.)
+    WETHAccounts    → Used by Gondi, Arcade, NFTfi (13510, 12510, 90510, etc.)
+    USDCAccounts    → Used for USDC-denominated lending (13515, 12515, 90515, etc.)
+    GenericAccounts → Used for transfers, wraps, yield pools
+
+  When a journal entry is converted to GL records (to_gl_records()), the COA map
+  is used to populate GL_Acct_Number and GL_Acct_Name columns. If no match is
+  found, the entry uses the raw account_name string and GL_Acct_Number = None
+  (triggers review queue during posting).
+
+  The Suspense account (19999) is used as a safe default when get_account_safe()
+  cannot find a match. Any entries hitting Suspense must be manually reclassified.
+
+
+4.4  INTEREST ACCRUAL METHODOLOGY
+-----------------------------------
+
+Interest on NFT-collateralized loans uses continuous compounding:
+
+  Formula: interest = principal * (e^(rate * time_in_years) - 1)
+
+  Where:
+    principal      = Loan amount in ETH (Decimal)
+    rate           = Annual rate in basis points / 10000 (e.g., 1500 bps = 15%)
+    time_in_years  = (end_timestamp - start_timestamp) / 31,536,000
+    e^(r*t)        = math.exp(float(rate * time))
+
+The generate_daily_interest_accruals() function (base.py) produces daily
+bucketed accrual entries from loan start to repayment/refinance:
+
+  1. Total interest is computed for the entire loan period.
+  2. Total interest is converted to Wei (integer) for precise allocation.
+  3. For each calendar day:
+     a) Slice_seconds is calculated (midnight-to-midnight, or partial for first/last day).
+     b) Wei-precise allocation: slice_wei = (total_wei * slice_secs + leftover) // total_secs
+     c) Leftover is carried forward to avoid rounding drift.
+  4. Any remaining Wei from integer division is added to the last day's entry.
+  5. Each day produces a balanced pair:
+     - Lender: DR Interest Receivable / CR Interest Income
+     - Borrower: DR Interest Expense / CR Interest Payable
+
+  This approach ensures:
+  - Total accrued interest exactly matches the continuous compounding formula.
+  - No rounding errors accumulate across days (Wei-precise allocation).
+  - Each day's entry is independently auditable.
+  - Row keys include the date for deduplication: "{tx_hash}:{acct_num}:{type}:{date}:DR"
+
+
+4.5  COST BASIS METHODOLOGY
+----------------------------
+
+The system supports FIFO (First In, First Out) as the primary cost basis method,
+with architecture supporting Specific ID and Average Cost as alternatives.
+
+See Section 6 (Crypto Inventory Tracker) for full details.
+
+  FIFO Rules:
+  - Oldest lot is consumed first when disposing of an asset.
+  - Each lot tracks: purchase_date, original_quantity, remaining_quantity,
+    cost_basis_eth, cost_basis_usd, source_tx_hash.
+  - Realized gain/loss = proceeds - cost_basis of consumed lots.
+
+  Gas Fee Treatment:
+  - Gas fees are expensed immediately (DR Gas Fee Expense / CR Digital Assets - ETH).
+  - Gas fees do NOT increase the cost basis of acquired assets.
+  - This is consistent with IRS guidance for crypto transaction costs.
+  - Rationale: Gas is an operating expense of the fund, not a direct cost of
+    acquiring a specific asset.
+
+  Slippage:
+  - DEX slippage is captured in the difference between expected and actual amounts.
+  - No separate slippage account exists. The actual on-chain amounts are used.
+  - The journal entry reflects the real amounts transferred, not the quoted amounts.
+
+  Protocol Fees:
+  - Platform origination fees (e.g., Gondi refinance fees) are recognized as
+    interest income to the lender at the time of the event.
+  - Example: Gondi refinance with 0.006 ETH fee:
+    CR Interest Income - Crypto - WETH  0.006
+
+  Rewards:
+  - Staking rewards and yield pool income are classified as Other Income (41000)
+    or Interest Income - Yield Pools (90511), depending on source.
+  - Rewards increase the asset balance and cost basis at the spot price when received.
+
+
+4.6  REVERSALS, CORRECTIONS, AND LATE-ARRIVING DATA
+-----------------------------------------------------
+
+  Interest Accrual Reversals:
+  - When a loan is repaid, the accrued interest entries (Dr Interest Receivable /
+    Cr Interest Income) have already been posted daily.
+  - The repayment entry reverses the receivable: CR Interest Receivable.
+  - No separate reversal entries are needed because the repayment entry netted
+    against the receivable balance.
+
+  Corrections:
+  - Manual corrections are made through the GL edit interface (general_ledger module).
+  - An audit log entry is appended to S3 for each manual edit via append_audit_log().
+  - Correcting entries are posted as new journal entries (never mutate historical data).
+
+  Late-Arriving Data:
+  - Transactions discovered during backfill are processed through the same pipeline.
+  - The row_key deduplication mechanism prevents double-posting.
+  - Late interest accruals are backdated to the correct calendar dates.
+  - Financial reports automatically reflect backdated entries when recalculated.
+
+  Assumption: The system does not support voiding posted entries. Corrections are
+  always additive (reversing entries + new correct entries).
+
+
+================================================================================
+  5. POSTING TO THE GENERAL LEDGER
+================================================================================
+
+5.1  POSTING WORKFLOW
+---------------------
+
+The posting workflow is a hybrid model: known transaction types auto-post while
+unknown or unusual transactions queue for human review.
+
+  Posting Status Flow:
+    Transaction Decoded
+         |
+         v
+    determine_posting_status(category, value)
+         |
+         +---> AUTO_POST:     Known type + value < 1000 ETH
+         |                    → Post immediately to GL
+         |
+         +---> REVIEW_QUEUE:  Unknown type, large value, or unusual pattern
+         |                    → Queue for manual review in UI
+         |
+         +---> SPAM_FILTERED: Spam filter flagged with confidence >= 0.6
+                              → Discard (never posted)
+
+  Auto-Post Eligible Categories (from BaseDecoder.AUTO_POST_CATEGORIES):
+    LOAN_ORIGINATION, LOAN_REPAYMENT, LOAN_REFINANCE, INTEREST_ACCRUAL,
+    ETH_TRANSFER, WETH_WRAP, WETH_UNWRAP, ERC20_TRANSFER
+
+  Max Auto-Post Threshold: 1000 ETH per transaction. Any transaction exceeding
+  this value is routed to REVIEW_QUEUE regardless of category.
+
+
+5.2  VALIDATION RULES PRIOR TO POSTING
+---------------------------------------
+
+Before any journal entry is written to the GL, these validations run:
+
+  1. Balance Check:
+     - JournalEntry.validate() ensures debits == credits per asset group.
+     - Tolerance: 0.000001 ETH (~$0.003 at $3000/ETH).
+     - ETH and WETH are treated as equivalent for balance checking.
+
+  2. Required Fields:
+     - tx_hash must be non-empty.
+     - date must be a valid datetime.
+     - At least one debit and one credit entry must exist.
+     - wallet_address must be in the fund's wallet list.
+
+  3. Account Validation:
+     - All account names must resolve to a GL_Acct_Number via the COA map.
+     - Entries hitting Suspense (19999) are flagged for review.
+
+  4. Duplicate Check:
+     - The row_key ({tx_hash}:{gl_acct}:{category}:{DR|CR}) is checked against
+       existing GL records.
+     - If a matching row_key already exists, the entry is skipped.
+
+  5. Fund ID Validation:
+     - The fund_id must be non-empty and match a configured fund.
+     - If missing, it is derived from wallet_to_fund_map.
+
+
+5.3  IDEMPOTENT POSTING GUARANTEES
+------------------------------------
+
+Idempotency is enforced at two levels:
+
+  Level 1: Event Deduplication (processing stage)
+  - EventDeduplicator prevents the same (tx_hash, log_index) from being decoded twice.
+
+  Level 2: GL Row Key Deduplication (posting stage)
+  - Each GL record includes a deterministic row_key:
+      Format: "{tx_hash}:{GL_Acct_Number or account_name}:{category}:{DR|CR}"
+  - For interest accruals, the date is also included:
+      Format: "{tx_hash}:{acct_num}:{type}:{YYYY-MM-DD}:{DR|CR}"
+  - Before appending to the GL Parquet file, existing row_keys are checked.
+  - Duplicate row_keys are silently skipped.
+
+  This means the same transaction can be processed any number of times and the
+  GL will contain exactly one set of entries. This is critical for:
+  - Backfill reprocessing (Section 9.1)
+  - Restart recovery after crashes
+  - Overlapping WebSocket + polling detection
+
+
+5.4  GL STORAGE FORMAT
+-----------------------
+
+The General Ledger is stored as Apache Parquet on S3:
+  s3://realworldnav-beta-1/drip_capital/all_posted_journal_entries.parquet
+
+Schema (32 columns):
+  Column                | Type     | Description
+  ----------------------+----------+------------------------------------------
+  date                  | datetime | Entry date (UTC)
+  fund_id               | string   | Fund identifier
+  limited_partner_ID    | string   | LP identifier (nullable)
+  wallet_id             | string   | Wallet address
+  transaction_type      | string   | TransactionCategory value
+  cryptocurrency        | string   | Asset symbol (ETH, WETH, USDC, etc.)
+  account_name          | string   | Normalized account key (lowercase, underscored)
+  GL_Acct_Number        | int      | Chart of accounts number
+  GL_Acct_Name          | string   | Chart of accounts name
+  debit_crypto          | float64  | Debit amount in crypto
+  credit_crypto         | float64  | Credit amount in crypto
+  eth_usd_price         | float64  | ETH/USD price at transaction time
+  debit_USD             | float64  | Debit amount in USD
+  credit_USD            | float64  | Credit amount in USD
+  event                 | string   | Blockchain event name (nullable)
+  function              | string   | Contract function name (nullable)
+  hash                  | string   | Transaction hash (0x-prefixed)
+  loan_id               | string   | Loan identifier (nullable)
+  lender                | string   | Lender address (nullable)
+  borrower              | string   | Borrower address (nullable)
+  from                  | string   | TX from address (nullable)
+  to                    | string   | TX to address (nullable)
+  contract_address      | string   | Interacted contract (nullable)
+  collateral_address    | string   | NFT collection address (nullable)
+  token_id              | string   | NFT token ID (nullable)
+  principal_crypto      | float64  | Loan principal in crypto (nullable)
+  principal_USD         | float64  | Loan principal in USD (nullable)
+  annual_interest_rate  | float64  | Annual rate in bps (nullable)
+  payoff_amount_crypto  | float64  | Total payoff in crypto (nullable)
+  payoff_amount_USD     | float64  | Total payoff in USD (nullable)
+  loan_due_date         | datetime | Loan maturity date (nullable)
+  end_of_day_ETH_USD    | float64  | EOD ETH/USD price (nullable)
+  row_key               | string   | Deterministic deduplication key
+
+  Financial columns (debit_crypto, credit_crypto, debit_USD, credit_USD) are
+  stored as float64 in Parquet but loaded as Decimal in Python for precision.
+  The safe_to_decimal() function handles edge cases (NaN, None, empty strings).
+
+
+5.5  AUDIT TRAILS AND TRACEABILITY
+------------------------------------
+
+Every GL entry is traceable back to its on-chain source:
+
+  GL Record (row_key: "0xabc:13510:LOAN_ORIGINATION:DR")
+       |
+       +--- hash:             0xabc123...  (Ethereum transaction hash)
+       +--- event:            LoanEmitted  (decoded event name)
+       +--- function:         emitLoan     (contract function called)
+       +--- contract_address: 0xf41b38...  (protocol contract)
+       +--- loan_id:          7507         (protocol-assigned loan ID)
+       +--- platform:         via transaction_type category
+
+  An auditor can trace any GL entry to:
+  1. The raw Ethereum transaction via Etherscan (hash field).
+  2. The specific contract event that triggered it (event field).
+  3. The protocol and loan it relates to (platform, loan_id).
+  4. The wallet and fund affected (wallet_id, fund_id).
+
+  Manual edits are tracked via the audit log:
+  - append_audit_log() records: timestamp, user, action, old_value, new_value, row_key.
+  - The audit log is stored as a separate Parquet file on S3.
+
+
+5.6  ERROR HANDLING AND RECONCILIATION
+---------------------------------------
+
+  Decoding Errors:
+  - If a decoder throws an exception, a DecodedTransaction with status="error"
+    is created and the error message is recorded.
+  - The transaction is added to the REVIEW_QUEUE for manual decoding.
+  - No journal entries are posted.
+
+  Validation Failures:
+  - Imbalanced entries → REVIEW_QUEUE (with error details in logs).
+  - Missing COA mapping → Suspense account (19999) used, flagged for reclassification.
+  - Missing fund_id → Entry blocked from posting until wallet mapping is updated.
+
+  Reconciliation Workflow:
+  1. Daily: Compare total GL debit balances vs credit balances (must equal zero net).
+  2. Weekly: Compare digital asset balances in GL vs on-chain wallet balances
+     (eth_getBalance + ERC-20 balanceOf calls).
+  3. Monthly: Full trial balance generation + sign-off.
+  4. Discrepancies are logged as reconciliation items with severity levels.
+
+  The review queue is surfaced in the Shiny UI (Home → Single TX Decoder tab and
+  Blockchain Listener tab) where accountants can:
+  - Inspect decoded events
+  - Approve auto-post suggestions
+  - Reject spam/irrelevant transactions
+  - Manually edit and post journal entries
+
+
+================================================================================
+  6. CRYPTO INVENTORY TRACKER INTEGRATION (FIFO ENGINE)
+================================================================================
+
+6.1  ARCHITECTURE
+-----------------
+
+The FIFO cost basis system has three components:
+
+  Component                   | File                              | Purpose
+  ----------------------------+-----------------------------------+------------------
+  CostBasisTracker            | fifo_tracker.py                   | Core FIFO logic
+  FIFOEngine                  | crypto_tracker/fifo_engine.py     | S3-persistent engine
+  DecoderFIFOIntegrator       | decoder_fifo_integrator.py        | Decoder→FIFO bridge
+
+  The CostBasisTracker maintains in-memory FIFO queues keyed on
+  (fund_id, wallet_address, asset). Each queue is a deque of TaxLot objects.
+
+  The FIFOEngine wraps the tracker with:
+  - S3 persistence (PersistenceManager)
+  - Duplicate detection (DuplicateDetector)
+  - Progress tracking (ProgressTracker)
+  - Historical snapshots (PortfolioSnapshot)
+
+
+6.2  HOW INVENTORY BALANCES ARE MAINTAINED
+-------------------------------------------
+
+  Acquisition (adding lots):
+  - When a fund wallet receives an asset (CR deemed_cash = cash out = asset in):
+    1. A new TaxLot is created:
+       { lot_id, fund_id, wallet_id, asset, purchase_date,
+         original_quantity, remaining_quantity, cost_basis_eth, cost_basis_usd,
+         source_tx_hash }
+    2. The lot is appended to the back of the FIFO queue for (wallet, asset).
+
+  Disposal (consuming lots):
+  - When a fund wallet sends an asset (DR deemed_cash = cash in = asset out):
+    1. The FIFO queue for (wallet, asset) is iterated front-to-back (oldest first).
+    2. Each lot's remaining_quantity is consumed until the disposal quantity is filled.
+    3. Partially consumed lots have their remaining_quantity reduced.
+    4. Fully consumed lots are removed from the queue.
+    5. A DisposalEvent is recorded:
+       { disposed_lots: [{lot_id, quantity_consumed, cost_basis}],
+         total_proceeds, total_cost_basis, realized_gain_loss }
+
+  The DecoderFIFOIntegrator bridges decoded transactions to the FIFO tracker:
+  - It identifies cash flow direction by looking at deemed_cash entries:
+      CR deemed_cash = Cash OUT = Asset ACQUISITION → tracker.add_acquisition()
+      DR deemed_cash = Cash IN  = Asset DISPOSAL    → tracker.process_disposal()
+  - ETH-equivalent assets (ETH, WETH, stETH, wstETH, cbETH, rETH, BLUR_POOL)
+    all use ETH price for USD conversion.
+
+
+6.3  RELATIONSHIP BETWEEN LOTS AND JOURNAL ENTRIES
+----------------------------------------------------
+
+  Each TaxLot has a source_tx_hash that links back to the originating transaction.
+  Each DisposalEvent produces additional journal entries for realized gain/loss:
+
+    If gain > 0:
+      DR  Deemed Cash - USD                          (proceeds)
+      CR  Digital Assets - {Asset}                   (cost basis)
+      CR  Realized Gain/Loss - Cryptocurrency (90520) (gain)
+
+    If loss < 0:
+      DR  Deemed Cash - USD                          (proceeds)
+      DR  Realized Gain/Loss - Cryptocurrency (90520) (|loss|)
+      CR  Digital Assets - {Asset}                   (cost basis)
+
+  The lot_id is stored in the journal entry metadata for full traceability:
+  lot_id → TaxLot → source_tx_hash → original acquisition transaction.
+
+
+6.4  REAL-TIME VS END-OF-PERIOD VALUATION
+-------------------------------------------
+
+  Real-Time Valuation:
+  - As transactions are processed, lot balances update immediately.
+  - The FIFOEngine provides get_portfolio_snapshot() for current state:
+    { total_assets, total_cost_basis_eth, total_cost_basis_usd,
+      unrealized_gains, active_lots, transaction_count }
+
+  End-of-Period Valuation:
+  - At period end (monthly/quarterly), the system marks-to-market all holdings.
+  - For each asset with active lots:
+    1. Fetch current market price (ETH/USD from price_service.py).
+    2. Calculate: unrealized_gain = (current_price - cost_basis) * quantity
+    3. Post mark-to-market entries:
+       DR/CR  Unrealized Gain/Loss - Cryptocurrencies (14900)
+       CR/DR  Net Change in Unrealized Appreciation/Depreciation (90599)
+
+  Assumption: Mark-to-market is run manually at period-end. Automated daily
+  mark-to-market is a planned enhancement (Section 10).
+
+
+6.5  UNREALIZED VS REALIZED GAINS
+-----------------------------------
+
+  Realized Gains:
+  - Recognized at the moment of disposal (sale, swap, or transfer out).
+  - Calculated as: proceeds - cost_basis of consumed FIFO lots.
+  - Posted to Realized Gain/Loss accounts (90520-90540).
+  - Holding period (short-term vs long-term) determined by comparing:
+    disposal_date - lot.purchase_date vs 365 days.
+
+  Unrealized Gains:
+  - Calculated at period-end for all remaining lots.
+  - Stored in separate GL accounts (14900 for balance sheet, 90599 for income statement).
+  - Reversed at the start of next period (or adjusted via delta approach).
+
+  Tax Lot Tracking:
+  - Each disposal records which lots were consumed and the holding period.
+  - This supports tax reporting (Form 8949 equivalent) with:
+    date_acquired, date_sold, proceeds, cost_basis, gain_or_loss, holding_period.
+
+
+6.6  HOW THE INVENTORY TRACKER FEEDS REPORTING
+------------------------------------------------
+
+  NAV Calculation (fund_accounting module):
+  - NAV = Total Assets - Total Liabilities
+  - Total Assets includes: digital asset balances (from FIFO lots at fair value) +
+    loan receivables + interest receivables + NFT investments.
+  - The NAV waterfall (nav_changes module) shows:
+    Beginning NAV + Contributions + Distributions + Net Income = Ending NAV.
+
+  Income Statement (account_statement module):
+  - Interest Income (90500-90515) from daily accruals.
+  - Realized Gain/Loss (90520-90540) from FIFO disposals.
+  - Unrealized Gain/Loss (90590-90599) from period-end mark-to-market.
+  - Gas Fee Expense (80001) from transaction costs.
+  - Change in Fair Value (80501-80512) from loan provisions.
+
+  Trial Balance (trial_balance module):
+  - Generated from GL data grouped by GL_Acct_Number.
+  - Supports MTD, QTD, YTD, ITD period comparisons.
+  - Uses sign conventions: Assets/Expenses have debit normal balances;
+    Liabilities/Equity/Income have credit normal balances.
+
+  Balance Sheet (assets_liabilities module):
+  - Assets: Digital Assets + Loans Receivable (net of provisions) + NFTs
+  - Liabilities: Notes Payable + Interest Payable + Accrued Expenses
+  - Partners' Capital = Assets - Liabilities
+  - Sister account netting: Provision accounts (e.g., 13501) are netted against
+    their parent (13500) for presentation.
+
+  S3 Persistence:
+  - FIFO state is saved as Parquet files via save_fifo_ledger_file():
+    transactions.parquet, positions.parquet, journal.parquet, metadata.parquet
+  - State is reloaded on engine initialization for crash recovery.
+
+
+================================================================================
+  7. NFT ACCOUNTING & TRACKING
+================================================================================
+
+7.1  NFT IDENTIFICATION AND METADATA
+--------------------------------------
+
+  NFTs are identified by the tuple: (collection_address, token_id).
+  This is globally unique on Ethereum.
+
+  Metadata tracked per NFT:
+  - collection_address:  ERC-721 contract address
+  - token_id:           Unique token identifier within the collection
+  - collection_name:    Human-readable name (from Etherscan/OpenSea metadata)
+  - current_owner:      Address holding the NFT
+  - acquisition_date:   When the fund acquired it
+  - acquisition_method: "purchase", "seized_collateral", "mint", "transfer_in"
+  - cost_basis_eth:     Acquisition cost in ETH
+  - cost_basis_usd:     Acquisition cost in USD
+  - last_valuation_eth: Most recent fair value estimate
+  - last_valuation_date: Date of last valuation
+
+  NFT data is stored in the NFT Ledger:
+    s3://realworldnav-beta-1/drip_capital/nft_ledger.parquet
+  Loaded via load_NFT_LEDGER_file() in s3_utils.py.
+
+
+7.2  COST BASIS AND VALUATION STRATEGIES
+------------------------------------------
+
+  NFT Acquisition Cost Basis:
+  - Purchase (Seaport trade): Cost basis = purchase price + gas fee.
+  - Seized Collateral: Cost basis = outstanding loan balance (principal + accrued interest)
+    at the time of seizure. This is the "fair value" attributed to the NFT when it
+    replaces the loan receivable on the balance sheet.
+  - Mint: Cost basis = mint price + gas fee.
+  - Transfer In (gift/airdrop): Cost basis = fair market value at time of receipt.
+
+  Valuation Methods:
+  - Primary: Last sale price of identical token (if available).
+  - Secondary: Collection floor price (from OpenSea/Blur API).
+  - Tertiary: Independent appraisal for high-value or unique NFTs.
+  - Assumption: NFTs are currently valued at cost until sale. Mark-to-market
+    for NFTs is a planned enhancement (requires reliable price feeds).
+
+
+7.3  ACCOUNTING TREATMENT BY EVENT TYPE
+-----------------------------------------
+
+  NFT Purchase (via Seaport/OpenSea):
+    DR  Investments - NFTs (14000)                   (purchase price)
+    CR  Deemed Cash - USD                            (purchase price)
+    DR  Gas Fee Expense (80001)                      (gas)
+    CR  Digital Assets - ETH (10200)                 (gas)
+
+  NFT Sale:
+    DR  Deemed Cash - USD                            (sale proceeds)
+    CR  Investments - NFTs (14000)                   (cost basis)
+    CR/DR  Realized Gain/Loss - NFTs (90540)         (gain or loss)
+
+  NFT Seized as Collateral (Fund is Lender, loan defaulted):
+    DR  Investments - NFTs - Seized Collateral (14010) (loan balance)
+    CR  Loan Receivable - Crypto - {Pool}              (principal)
+    CR  Interest Receivable - Crypto - {Pool}          (accrued interest)
+
+  NFT Royalties Received:
+    DR  Deemed Cash - USD                            (royalty amount)
+    CR  Other Income (41000)                         (royalty amount)
+
+  NFT Transfer (internal, between fund wallets):
+    DR  Investments - NFTs (14000) [destination wallet] (cost basis)
+    CR  Investments - NFTs (14000) [source wallet]      (cost basis)
+    // No P&L impact — same fund, same cost basis carries over.
+
+  NFT Mint:
+    DR  Investments - NFTs (14000)                   (mint cost)
+    CR  Deemed Cash - USD                            (mint cost)
+
+
+7.4  NFT COEXISTENCE WITH FUNGIBLE TOKENS
+-------------------------------------------
+
+  NFTs and fungible tokens share the same GL structure but use different
+  account ranges:
+
+    Fungible Tokens:  10100-10399 (Digital Assets), 13500-13704 (Investments/Yield)
+    NFTs:             14000-14010 (Investments - NFTs)
+
+  In the investments module UI, NFTs appear in the "NFT Portfolio" tab while
+  fungible tokens appear in the "Cryptocurrencies" tab. Both contribute to:
+  - Total Assets on the balance sheet
+  - NAV calculation
+  - Realized/unrealized gain/loss on the income statement
+
+  The loan portfolio view links NFTs to their role as collateral:
+  - Each loan shows collateral_address + token_id
+  - Seized collateral moves from Loan Receivable (13xxx) to NFT Investments (14010)
+  - The NFT Ledger tracks this transition for auditing
+
+
+================================================================================
+  8. SYSTEM ARCHITECTURE & DATA FLOW
+================================================================================
+
+8.1  HIGH-LEVEL ARCHITECTURE
+-----------------------------
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                          ETHEREUM MAINNET                                │
+  └────────────────────────────┬─────────────────────────────────────────────┘
+                               │ JSON-RPC / WebSocket
+                               │
+  ┌────────────────────────────▼─────────────────────────────────────────────┐
+  │  BLOCKCHAIN LISTENER LAYER                                               │
+  │                                                                          │
+  │  EndpointManager ──► HybridMonitor (WS + Polling)                       │
+  │       │                    │                                             │
+  │  Circuit Breaker      EventDeduplicator                                  │
+  │  (per endpoint)       (tx_hash + log_index)                              │
+  │       │                    │                                             │
+  │       └─────────┬──────────┘                                             │
+  │                 │                                                        │
+  │           CacheManager (L1 in-memory → L2 larger → L3 S3)               │
+  └─────────────────┬────────────────────────────────────────────────────────┘
+                    │ Raw TX envelope
+                    │
+  ┌─────────────────▼────────────────────────────────────────────────────────┐
+  │  TRANSACTION DECODING ENGINE                                             │
+  │                                                                          │
+  │  SpamFilter ──► DecoderRegistry ──► Platform Adapter ──► Notebook Decoder│
+  │                   │                                                      │
+  │                   ├─ BlurDecoderAdapter    (blur_decoder.py)             │
+  │                   ├─ GondiDecoderAdapter   (gondi_decoder.py)            │
+  │                   ├─ NFTfiDecoderAdapter   (nftfi_decoder.py)            │
+  │                   ├─ ArcadeDecoderAdapter  (arcade_decoder.py)           │
+  │                   ├─ ZhartaDecoderAdapter  (zharta_decoder.py)           │
+  │                   └─ GenericDecoder        (generic_decoder.py)          │
+  │                                                                          │
+  │  Output: DecodedTransaction + JournalEntry[]                             │
+  └─────────────────┬────────────────────────────────────────────────────────┘
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+  ┌───────▼───────┐  ┌───────▼──────────┐
+  │ GL POSTING    │  │ FIFO ENGINE      │
+  │               │  │                  │
+  │ Validate      │  │ Add Acquisition  │
+  │ Dedup (row_key)│ │ Process Disposal │
+  │ Write Parquet │  │ Realized G/L     │
+  │ Audit Log     │  │ Persist to S3    │
+  └───────┬───────┘  └───────┬──────────┘
+          │                   │
+          └─────────┬─────────┘
+                    │
+  ┌─────────────────▼────────────────────────────────────────────────────────┐
+  │  AWS S3 (realworldnav-beta-1)                                            │
+  │                                                                          │
+  │  drip_capital/                                                           │
+  │  ├── all_posted_journal_entries.parquet    (General Ledger)              │
+  │  ├── drip_capital_COA.csv                 (Chart of Accounts)           │
+  │  ├── drip_capital_wallets.xlsx            (Wallet Registry)             │
+  │  ├── nft_ledger.parquet                   (NFT Inventory)               │
+  │  ├── fifo/                                                               │
+  │  │   ├── transactions.parquet             (FIFO transaction log)        │
+  │  │   ├── positions.parquet                (Active FIFO lots)            │
+  │  │   └── metadata.parquet                 (Engine state)                │
+  │  ├── fund/holdings_class_B_ETH/                                         │
+  │  │   └── master_tb/                       (Trial Balance snapshots)     │
+  │  ├── abis/                                (Contract ABIs)               │
+  │  └── audit_log.parquet                    (Edit audit trail)            │
+  └─────────────────┬────────────────────────────────────────────────────────┘
+                    │
+  ┌─────────────────▼────────────────────────────────────────────────────────┐
+  │  REPORTING LAYER (Python Shiny UI)                                       │
+  │                                                                          │
+  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
+  │  │ Fund         │  │ Financial    │  │ General      │                   │
+  │  │ Accounting   │  │ Reporting    │  │ Ledger       │                   │
+  │  │              │  │              │  │              │                   │
+  │  │ - NAV Dash   │  │ - Income Stmt│  │ - Journal    │                   │
+  │  │ - KPIs       │  │ - Balance Sht│  │   Entries    │                   │
+  │  │ - Trends     │  │ - Trial Bal  │  │ - COA        │                   │
+  │  │              │  │ - NAV Changes│  │ - Analytics  │                   │
+  │  │              │  │ - Mgmt Fees  │  │ - Crypto     │                   │
+  │  │              │  │ - Excel Export│ │   Tracker    │                   │
+  │  └──────────────┘  └──────────────┘  └──────────────┘                   │
+  │                                                                          │
+  │  ┌──────────────┐  ┌──────────────┐                                     │
+  │  │ Investments  │  │ Home         │                                     │
+  │  │              │  │              │                                     │
+  │  │ - Loan Port. │  │ - Blockchain │                                     │
+  │  │ - NFT Port.  │  │   Listener   │                                     │
+  │  │ - Crypto     │  │ - Single TX  │                                     │
+  │  │ - Staking    │  │   Decoder    │                                     │
+  │  └──────────────┘  └──────────────┘                                     │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+8.2  DATA CONTRACTS BETWEEN SERVICES
+--------------------------------------
+
+  Listener → Decoder:
+    Input:   Raw TX envelope (see Section 2.5)
+    Contract: tx dict must have keys: hash, blockNumber, from, to, value, input, gasPrice
+              receipt dict must have keys: status, gasUsed, effectiveGasPrice, logs[]
+              block dict must have key: timestamp
+
+  Decoder → GL Posting:
+    Input:   DecodedTransaction.journal_entries[].to_gl_records()
+    Contract: Each record must be a dict with 32 columns matching the Parquet schema (Section 5.4).
+              row_key must be deterministic and non-null.
+
+  Decoder → FIFO Engine:
+    Input:   DecodedTransaction passed to DecoderFIFOIntegrator.process_decoded_transaction()
+    Contract: Journal entries must have deemed_cash entries for cash flow identification.
+              eth_usd_price must be > 0 for USD conversion.
+
+  FIFO Engine → GL Posting:
+    Input:   Realized gain/loss journal entries
+    Contract: Same 32-column Parquet schema.
+
+  GL → Reporting:
+    Input:   GL Parquet file loaded via load_GL_file()
+    Contract: All financial columns are Decimal after loading.
+              date column is timezone-aware datetime.
+              GL_Acct_Number is the primary grouping key for financial reports.
+
+
+8.3  STORAGE MODELS
+--------------------
+
+  Data Type          | Format   | Storage Location                      | Update Freq
+  -------------------+----------+---------------------------------------+------------
+  Raw Transactions   | In-memory| CacheManager (L1/L2/L3)              | Real-time
+  Decoded Txs        | Dict/JSON| In-memory cache + S3 (L3)            | Real-time
+  GL Entries         | Parquet  | all_posted_journal_entries.parquet    | Per TX
+  Chart of Accounts  | CSV      | drip_capital_COA.csv                 | Manual
+  Wallet Registry    | Excel    | drip_capital_wallets.xlsx             | Manual
+  FIFO Lots          | Parquet  | fifo/positions.parquet               | Per TX
+  FIFO Transactions  | Parquet  | fifo/transactions.parquet            | Per TX
+  NFT Ledger         | Parquet  | nft_ledger.parquet                   | Per TX
+  Trial Balance      | CSV      | fund/holdings_class_B_ETH/master_tb/ | Period-end
+  Contract ABIs      | JSON     | abis/{address}.json                  | On-demand
+  Audit Log          | Parquet  | audit_log.parquet                    | On edit
+
+
+8.4  SECURITY, ACCESS CONTROL, AND KEY MANAGEMENT
+---------------------------------------------------
+
+  AWS S3 Access:
+  - All S3 operations use IAM roles (not hardcoded credentials).
+  - The application loads AWS credentials from environment variables or EC2 instance
+    metadata.
+  - Bucket policy restricts access to the application's IAM role.
+  - S3 versioning is enabled for disaster recovery.
+
+  RPC Endpoint API Keys:
+  - Infura/Alchemy API keys are stored in environment variables.
+  - Keys are loaded via blockchain_config.py and never logged.
+  - Rate limiting is enforced per-endpoint to avoid key revocation.
+
+  Application Security:
+  - The application is read-only against the blockchain (no private keys).
+  - No wallet signing capabilities exist in the codebase.
+  - The Shiny UI runs server-side; no sensitive data is sent to the browser.
+  - .env files are gitignored.
+
+  Data Classification:
+  - All blockchain data is public (by definition of public blockchains).
+  - Fund wallet addresses are semi-sensitive (operational security).
+  - Financial calculations and GL data are confidential (fund performance).
+  - LP commitment data is strictly confidential (investor information).
+
+
+================================================================================
+  9. OPERATIONAL CONSIDERATIONS
+================================================================================
+
+9.1  BACKFILLS AND HISTORICAL REPROCESSING
+-------------------------------------------
+
+  Backfill scenarios:
+  1. New wallet added — all historical transactions for that wallet must be processed.
+  2. New decoder deployed — transactions previously routed to GenericDecoder should be
+     re-decoded with the correct platform decoder.
+  3. Bug fix — corrected decoder logic requires reprocessing affected transactions.
+
+  Backfill procedure:
+  1. Query Etherscan/RPC for all transactions involving the target wallet(s) in the
+     target date range.
+  2. Feed each transaction through the standard decode pipeline.
+  3. Idempotency guarantees (row_key dedup) ensure no double-posting.
+  4. For re-decoding with corrected logic:
+     a) Identify affected row_keys in the GL.
+     b) Post reversing entries for the incorrect records.
+     c) Reprocess transactions to generate correct entries (new row_keys).
+
+  Tools:
+  - batch_decode.py: Batch decode multiple transactions, outputs summary.
+  - batch_decode_detailed.py: Same but with full event and entry details.
+  - explore_tx.py: Debug single transaction decoding.
+  - debug_decoder.py: Interactive decoder development and testing.
+
+
+9.2  MONITORING, ALERTING, AND EXCEPTION QUEUES
+-------------------------------------------------
+
+  Monitoring:
+  - EndpointHealth tracks per-endpoint success/failure rates.
+  - MonitoringState tracks: is_monitoring, mode, last_block, transactions_processed,
+    events_processed, duplicates_skipped, errors, started_at.
+  - Health check endpoint: Each decoder adapter exposes health_check() returning:
+    { platform, status, initialized, error, has_notebook_decoder, has_journal_generator }
+
+  Alerting (recommended thresholds):
+  - All endpoints in OPEN state → Critical alert (no RPC connectivity).
+  - >10 consecutive decode errors → Warning (possible ABI change).
+  - Review queue depth > 50 → Warning (backlog building).
+  - GL imbalance detected → Critical (accounting integrity issue).
+  - Missing ETH/USD price → Warning (financial calculations incomplete).
+
+  Exception Queues:
+  - REVIEW_QUEUE: Transactions that need human review before posting.
+    Surfaced in the Shiny UI with full decoded event details.
+  - SPAM_FILTERED: Transactions filtered as spam. Viewable but not postable.
+  - Error transactions: Failed decodes stored with error messages for debugging.
+
+
+9.3  MANUAL OVERRIDE WORKFLOWS
+-------------------------------
+
+  Single Transaction Decoding (Home → Single TX Decoder tab):
+  - Accountant pastes a transaction hash.
+  - System fetches TX from chain, runs through full decode pipeline.
+  - Displays: platform, category, decoded events, generated journal entries.
+  - Accountant can approve (post to GL) or reject.
+
+  Manual Journal Entry:
+  - The GL module supports adding entries directly via the edit interface.
+  - Manual entries are tagged with transaction_type = "manual_adjustment".
+  - An audit log entry records the change.
+
+  Review Queue Workflow:
+  - Transactions in REVIEW_QUEUE are listed in the Blockchain Listener tab.
+  - For each transaction, the accountant can:
+    a) Approve as-is → moves to POSTED, entries written to GL.
+    b) Edit entries → modify accounts/amounts, then approve.
+    c) Reject → moves to REJECTED, no GL entries posted.
+    d) Re-decode → re-run through decoder (e.g., after ABI update).
+
+
+9.4  SCALABILITY AND PERFORMANCE
+---------------------------------
+
+  Caching:
+  - CacheManager implements tiered caching:
+    L1: In-memory, 1000 entries, fastest access.
+    L2: In-memory, 10,000 entries, moderate access.
+    L3: S3-backed, unlimited, slowest access.
+  - ABI loading uses @lru_cache to avoid repeated S3 reads.
+  - Proxy resolution cache persists for registry lifetime.
+
+  Parquet Performance:
+  - GL data is stored in Parquet (columnar, compressed).
+  - Typical GL file: 10K-100K rows, <10MB compressed.
+  - Column pruning: Only required columns are loaded for specific reports.
+  - Assumption: Current fund size (single fund, ~50K transactions) fits comfortably
+    in memory. For multi-fund scaling, partition by fund_id.
+
+  Decoder Performance:
+  - Each transaction requires 1-3 RPC calls (getTx, getReceipt, getBlock).
+  - Batch operations minimize RPC round-trips.
+  - Lazy initialization ensures decoders are only loaded when needed.
+  - The orchestrator processes transactions sequentially within a fund but
+    could be parallelized across funds.
+
+  Current Bottleneck: RPC call latency (~100-500ms each). Mitigated by caching
+  and batch processing during backfills.
+
+
+================================================================================
+  10. FUTURE ENHANCEMENTS
+================================================================================
+
+10.1  MULTI-ENTITY / MULTI-FUND SUPPORT
+-----------------------------------------
+
+  Current state: Single fund (holdings_class_B_ETH) with global reactive state.
+  Planned:
+  - Fund selector already exists in the UI (CLIENT_DATA, FUND_DATA in server.py).
+  - GL Parquet is already fund_id-aware (column exists).
+  - FIFO engine already accepts fund_id parameter.
+  - Remaining work:
+    a) Partition GL Parquet by fund_id for performance.
+    b) Per-fund wallet registries.
+    c) Intercompany transfer detection and elimination for consolidated reporting.
+    d) Fund-level access control (which users can see which funds).
+  - COA already has intercompany account (19990: "Intercompany funds in transit").
+
+
+10.2  CROSS-CHAIN AGGREGATION
+------------------------------
+
+  Current state: Ethereum Mainnet only.
+  Planned:
+  - Bridge accounts (10301-10303) already in the COA for Arbitrum, Orbiter, LiFi.
+  - Chain-specific endpoint configuration in EndpointConfig.
+  - Cross-chain transaction linking: bridge TX on chain A → deposit TX on chain B.
+  - Unified wallet balance view across chains.
+  - Challenge: Different block times, different finality guarantees, different
+    event formats across EVM chains.
+
+
+10.3  FAIR-VALUE PRICING FEEDS
+-------------------------------
+
+  Current state: ETH/USD price fetched per-transaction from price_service.py.
+  Planned:
+  - Automated end-of-day pricing for all held assets.
+  - Multiple price sources (CoinGecko, Chainlink on-chain oracles, exchange APIs).
+  - Price consensus: median of 3+ sources to prevent manipulation.
+  - NFT floor price feeds (OpenSea, Blur, Reservoir).
+  - Automated daily mark-to-market entries.
+  - Historical price backfill for missing periods.
+
+
+10.4  COMPLIANCE AND AUDIT READINESS
+--------------------------------------
+
+  Current state: Full traceability from GL entry → on-chain TX hash.
+  Planned:
+  - Automated reconciliation reports (GL balance vs on-chain balance).
+  - Tax lot reporting (Form 8949 equivalent).
+  - GAAP/IFRS compliance annotations on journal entries.
+  - Read-only auditor role with filtered access.
+  - Immutable GL snapshot at period-end (signed and timestamped).
+  - SOC 2 Type II readiness: access logs, change management, data retention.
+  - Integration with external audit tools (export to standard audit formats).
+
+
+10.5  ADDITIONAL PROTOCOL SUPPORT
+-----------------------------------
+
+  - Layer 2 lending protocols (Arbitrum-native, Base-native).
+  - DeFi yield aggregators (Yearn, Convex, Pendle).
+  - Liquid staking derivatives (accounting for staking rewards, validator penalties).
+  - Perpetual futures and options protocols.
+  - DAO treasury management integrations.
+
+
+================================================================================
+  APPENDIX A: CHART OF ACCOUNTS (CONDENSED)
+================================================================================
+
+  10000  Deemed Cash - USD (clearing account)
+  10001  Operating Account - USD
+  10100  Digital Assets - USDC
+  10200  Digital Assets - ETH
+  10201  Digital Assets - WETH
+  10202  Digital Assets - Blur Pool
+  10301  Digital Assets - Arbitrum - ETH
+  12500  Interest Receivable - Cryptocurrency - Blur Pool
+  12510  Interest Receivable - Cryptocurrency - WETH
+  12515  Interest Receivable - Cryptocurrency - USDC
+  13500  Loan Receivable - Cryptocurrency - Blur Pool
+  13501  Provision for Change in Fair Value - Blur Pool
+  13510  Loan Receivable - Cryptocurrency - WETH
+  13511  Provision for Change in Fair Value - WETH
+  13515  Loan Receivable - Cryptocurrency - USDC
+  13600  Investments - MetaStreet Pool Staking
+  13700  Investments - Aave Yield Token - WETH
+  14000  Investments - NFTs
+  14010  Investments - NFTs - Seized Collateral
+  14900  Unrealized Gain/Loss - ETH
+  19999  Suspense
+  20200  Management Fee Payable
+  20900  Interest Payable - USDC
+  20901  Interest Payable - ETH
+  20902  Interest Payable - WETH
+  25000  Note Payable - USDC
+  25001  Note Payable - ETH
+  25002  Note Payable - WETH
+  30110  Capital Contributions - Property - ETH
+  30210  Capital Distributions - Property - ETH
+  41000  Other Income
+  80001  Gas Fee Expense
+  80501  Change in Fair Value - Blur Pool
+  80511  Change in Fair Value - WETH
+  80901  Interest Expense - ETH
+  80902  Interest Expense - WETH
+  89001  Management Fee Expense
+  90500  Interest Income - Cryptocurrency - Blur Pool
+  90510  Interest Income - Cryptocurrency - WETH
+  90515  Interest Income - Cryptocurrency - USDC
+  90520  Realized Gain/Loss - Cryptocurrency
+  90540  Realized Gain/Loss - NFTs
+  90590  Change in Unrealized Gain/Loss - Cryptocurrencies
+  90599  Net Change in Unrealized Appreciation/Depreciation
+
+
+================================================================================
+  APPENDIX B: GL PARQUET SCHEMA (COLUMN ORDER)
+================================================================================
+
+  Col  Name                     Type       Nullable  Notes
+  ---  ----                     ----       --------  -----
+   1   date                     datetime   No        UTC
+   2   fund_id                  string     No
+   3   limited_partner_ID       string     Yes
+   4   wallet_id                string     No        0x-prefixed
+   5   transaction_type         string     No        TransactionCategory.value
+   6   cryptocurrency           string     No        ETH, WETH, USDC, etc.
+   7   account_name             string     No        Normalized lowercase
+   8   GL_Acct_Number           int        Yes       From COA lookup
+   9   GL_Acct_Name             string     Yes       From COA lookup
+  10   debit_crypto             float64    No        0.0 if credit
+  11   credit_crypto            float64    No        0.0 if debit
+  12   eth_usd_price            float64    No        Price at TX time
+  13   debit_USD                float64    No        crypto * price
+  14   credit_USD               float64    No        crypto * price
+  15   event                    string     Yes       Blockchain event name
+  16   function                 string     Yes       Contract function name
+  17   hash                     string     No        TX hash (0x-prefixed)
+  18   loan_id                  string     Yes       Protocol loan ID
+  19   lender                   string     Yes       Lender address
+  20   borrower                 string     Yes       Borrower address
+  21   from                     string     Yes       TX from
+  22   to                       string     Yes       TX to
+  23   contract_address         string     Yes       Protocol contract
+  24   collateral_address       string     Yes       NFT collection
+  25   token_id                 string     Yes       NFT token ID
+  26   principal_crypto         float64    Yes       Loan principal
+  27   principal_USD            float64    Yes       Loan principal USD
+  28   annual_interest_rate     float64    Yes       Rate in bps
+  29   payoff_amount_crypto     float64    Yes       Total payoff
+  30   payoff_amount_USD        float64    Yes       Total payoff USD
+  31   loan_due_date            datetime   Yes       Maturity date
+  32   end_of_day_ETH_USD       float64    Yes       EOD price
+  33   row_key                  string     No        Dedup key (unique)
+
+
+================================================================================
+  APPENDIX C: WORKED EXAMPLES
+================================================================================
+
+C.1  GONDI LOAN REFINANCE
+--------------------------
+
+  Transaction: 0x965d0335...
+  Platform:    Gondi (routed via CONTRACT_ROUTING → 0xf41b389e...)
+  Category:    LOAN_REFINANCE
+
+  Decoded Event: LoanRefinancedFromNewOffers
+    loan_id:           7507
+    old_loan_id:       3862
+    fee:               0.006024 ETH
+    fund_tranches:     [{loanId: 7507, principal: 1.000000 ETH}]
+    transfer_outflows: {fund_wallet: 0.994880 ETH}
+
+  Journal Entry 1 — Refinance Origination:
+    DR  Loan Receivable - WETH (13510)               1.000000 WETH
+    CR  Deemed Cash - USD (10000)                     0.993976 WETH
+    CR  Interest Income - WETH (90510)                0.006024 WETH
+
+  Journal Entry 2 — Daily Interest Accruals (example for 3 days):
+    Day 1: DR Interest Receivable - WETH (12510)      0.000349 WETH
+            CR Interest Income - WETH (90510)          0.000349 WETH
+    Day 2: DR Interest Receivable - WETH (12510)      0.000349 WETH
+            CR Interest Income - WETH (90510)          0.000349 WETH
+    Day 3: DR Interest Receivable - WETH (12510)      0.000349 WETH
+            CR Interest Income - WETH (90510)          0.000349 WETH
+
+  Verification: Total Debits = 1.001047 ETH = Total Credits. BALANCED.
+
+
+C.2  NFTFI REFINANCING VIA AGGREGATOR
+---------------------------------------
+
+  Transaction: 0xb99d958c...
+  Platform:    NFTfi (routed via CONTRACT_ROUTING → 0x4BC5Fa56...)
+  Category:    LOAN_ORIGINATION (fund enters as lender on new loan)
+
+  Three events decoded:
+    1. LoanRepaid  (loan 10994) — old lender NOT our fund → skip
+    2. LoanStarted (loan 12230) — our fund IS lender → generate entries
+    3. Refinanced  (linkage)    — informational only → skip
+
+  Journal Entry:
+    DR  Loan Receivable - WETH (13510)               0.350000 WETH
+    CR  Deemed Cash - USD (10000)                     0.350000 WETH
+
+  Verification: Debits = Credits = 0.350000. BALANCED.
+
+
+C.3  BLUR COLLATERAL SEIZURE
+------------------------------
+
+  Transaction: 0x... (hypothetical)
+  Platform:    Blur
+  Category:    COLLATERAL_SEIZURE
+
+  Event: Seize
+    lien_id:    12345
+    principal:  5.000000 ETH (Blur Pool)
+    accrued:    0.150000 ETH
+    NFT:        BoredApeYachtClub #4832
+
+  Journal Entry:
+    DR  Investments - NFTs - Seized Collateral (14010)  5.150000 Blur Pool
+    CR  Loan Receivable - Blur Pool (13500)              5.000000 Blur Pool
+    CR  Interest Receivable - Blur Pool (12500)          0.150000 Blur Pool
+
+  FIFO Impact: No FIFO lot created (NFTs are tracked in NFT Ledger, not FIFO).
+  The NFT is added to the NFT Ledger at cost basis = 5.150000 ETH.
+
+
+================================================================================
+  STATED ASSUMPTIONS
+================================================================================
+
+  1. Single blockchain: Ethereum Mainnet only (Layer 2 support is planned, not built).
+  2. Read-only: The system does not sign transactions or manage private keys.
+  3. ETH-denominated fund: Primary accounting is in ETH, with USD as reporting currency.
+  4. Continuous compounding: All NFT lending platforms use e^(r*t) interest model.
+     Platforms with different interest models (e.g., simple interest) would need
+     decoder-level overrides.
+  5. Gas fees are operating expenses: Not capitalized into asset cost basis.
+  6. FIFO is the default cost basis method: Specific ID is architecturally supported
+     but not yet implemented in the UI.
+  7. NFTs are valued at cost: Mark-to-market for NFTs requires reliable price feeds
+     that are not yet integrated.
+  8. Single-entity: The system currently manages one fund entity. Multi-entity
+     support is partially implemented (fund_id exists in GL) but not complete.
+  9. Decimal precision: 28-digit precision (Python Decimal) for all financial calculations.
+     Wei precision (18 decimals) for on-chain amounts. Tolerance of 0.000001 ETH for
+     journal entry balance validation.
+  10. Parquet as primary storage: The GL is append-only Parquet on S3. No relational
+      database is used. This is sufficient for current scale (<100K GL entries) but
+      may need migration for multi-fund/high-volume scenarios.
+
+================================================================================
+  END OF DOCUMENT
+================================================================================

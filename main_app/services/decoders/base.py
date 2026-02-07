@@ -696,14 +696,39 @@ class BaseDecoderAdapter(BaseDecoder):
     @staticmethod
     def _build_wallet_metadata(fund_wallets: List[str]) -> Dict[str, Dict]:
         """
-        Convert fund_wallets list to wallet_metadata dict expected by notebook decoders.
+        Build wallet_metadata from S3 wallet file for proper fund identification.
+        Falls back to dummy metadata if S3 load fails.
 
         Args:
-            fund_wallets: List of wallet addresses
+            fund_wallets: List of wallet addresses (used as fallback)
 
         Returns:
             Dict mapping lowercase address to metadata dict
         """
+        try:
+            # Import here to avoid circular imports
+            from ...s3_utils import load_WALLET_file
+            wallet_df = load_WALLET_file()
+
+            if wallet_df is not None and not wallet_df.empty:
+                metadata = {}
+                for _, row in wallet_df.iterrows():
+                    addr = str(row.get('wallet_address', '')).strip().lower()
+                    if addr:
+                        metadata[addr] = {
+                            'fund_id': str(row.get('fund_id', '')).strip(),
+                            'friendly_name': str(row.get('friendly_name', '')).strip(),
+                            'category': str(row.get('category', '')).strip(),
+                            'wallet_type': str(row.get('wallet_type', 'hot')).strip(),
+                        }
+                if metadata:
+                    logger.info(f"Loaded wallet_metadata for {len(metadata)} wallets from S3")
+                    return metadata
+        except Exception as e:
+            logger.warning(f"Could not load wallet metadata from S3: {e}")
+
+        # Fallback to dummy metadata
+        logger.warning("Using fallback dummy wallet_metadata")
         return {
             addr.lower(): {
                 'fund_id': 'fund',

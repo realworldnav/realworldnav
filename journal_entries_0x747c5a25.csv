@@ -1,0 +1,5 @@
+tx_hash,date,account_name,debit_crypto,credit_crypto,cryptocurrency,debit_usd,credit_usd,eth_price,gl_acct_number,gl_acct_name,in_coa
+0x747c5a2587a31508d7eaa5c650ce691dbf39a9ad375dae7da1f1078f0a88fcfe,2026-02-06T21:49:23+00:00,deemed_cash_usd,0.11115002865296804,,WETH,202.36,,1820.5693215574129,,,False
+0x747c5a2587a31508d7eaa5c650ce691dbf39a9ad375dae7da1f1078f0a88fcfe,2026-02-06T21:49:23+00:00,loan_receivable_cryptocurrency_weth,,0.11,WETH,,200.26,1820.5693215574129,,,False
+0x747c5a2587a31508d7eaa5c650ce691dbf39a9ad375dae7da1f1078f0a88fcfe,2026-02-06T21:49:23+00:00,interest_receivable_cryptocurrency_weth,,0.001150028652968036,WETH,,2.09,1820.5693215574129,,,False
+0x747c5a2587a31508d7eaa5c650ce691dbf39a9ad375dae7da1f1078f0a88fcfe,2026-02-06T21:49:23+00:00,,,,ETH,,,1820.5693215574129,,,False
