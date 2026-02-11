@@ -13,6 +13,7 @@ from .modules.general_ledger_v2 import general_ledger_v2_ui, register_gl2_output
 from .modules.investments.loan_portfolio import register_outputs as register_loan_portfolio_outputs
 from .modules.investments.nft_portfolio import register_nft_portfolio_outputs
 from .modules.investments.cryptocurrency_portfolio import register_cryptocurrency_portfolio_outputs
+from .modules.investments.crypto_subledger import register_crypto_subledger_outputs
 from .modules.investments.dashboard_calculations import create_investment_dashboard_calculations
 from .modules.home.blockchain_listener import register_blockchain_listener_outputs
 
@@ -320,6 +321,7 @@ def server(input, output, session):
             ("general_ledger", "General Ledger", "bi-journal-text"),
             ("general_ledger_v2", "General Ledger 2", "bi-book"),
             ("financial_reporting", "Financial Reporting", "bi-file-earmark-bar-graph"),
+            ("crypto_subledger", "Crypto Subledger", "bi-cpu"),
         ]
 
         links = []
@@ -377,6 +379,8 @@ def server(input, output, session):
 
     register_cryptocurrency_portfolio_outputs(output, input, session, selected_fund)
 
+    register_crypto_subledger_outputs(output, input, session, selected_fund)
+
     # Dynamic content area based on navigation selection
     @output
     @render.ui
@@ -396,6 +400,9 @@ def server(input, output, session):
             return general_ledger_v2_ui()
         elif section == "financial_reporting":
             return enhanced_financial_reporting_ui()
+        elif section == "crypto_subledger":
+            from .modules.investments.crypto_subledger import crypto_subledger_ui
+            return crypto_subledger_ui()
         else:
             return enhanced_home_ui()  # Default fallback to home
 

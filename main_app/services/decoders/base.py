@@ -392,6 +392,7 @@ class DecodedTransaction:
     positions: Dict[int, LoanPosition] = field(default_factory=dict)
     raw_data: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    formatted_journal_df: Optional[Any] = None  # pd.DataFrame with 37-column CSV schema (from format_journal_entries_csv)
     _posting_status_override: Optional[PostingStatus] = None  # For spam/special cases
 
     @property
@@ -422,6 +423,26 @@ class DecodedTransaction:
             return PostingStatus.AUTO_POST
         return PostingStatus.REVIEW_QUEUE
 
+    def _get_formatted_journal_summary(self) -> Optional[Dict]:
+        """Extract summary info from formatted_journal_df for card display."""
+        if self.formatted_journal_df is None:
+            return None
+        try:
+            df = self.formatted_journal_df
+            if df.empty:
+                return None
+            return {
+                'row_count': len(df),
+                'total_debit': float(df['debit_crypto'].sum()) if 'debit_crypto' in df.columns else 0,
+                'total_credit': float(df['credit_crypto'].sum()) if 'credit_crypto' in df.columns else 0,
+                'loan_ids': [str(x) for x in df['loan_id'].dropna().unique().tolist()] if 'loan_id' in df.columns else [],
+                'event_types': list(df['event'].dropna().unique().tolist()) if 'event' in df.columns else [],
+                'fund_role': str(df['fund_role'].iloc[0]) if 'fund_role' in df.columns and len(df) > 0 and df['fund_role'].iloc[0] else '',
+                'cryptocurrency': str(df['cryptocurrency'].iloc[0]) if 'cryptocurrency' in df.columns and len(df) > 0 else 'ETH',
+            }
+        except Exception:
+            return None
+
     def to_dict(self) -> dict:
         return {
             'status': self.status,
@@ -443,8 +464,10 @@ class DecodedTransaction:
             'wallet_roles': self.wallet_roles,
             'positions': {k: v.to_dict() for k, v in self.positions.items()},
             'error': self.error,
-            'posting_status': self.posting_status.value,  # Transaction-level posting status
+            'posting_status': self.posting_status.value,
             'entries_balanced': self.entries_balanced,
+            'has_formatted_journal': self.formatted_journal_df is not None and not self.formatted_journal_df.empty if self.formatted_journal_df is not None else False,
+            'formatted_journal_summary': self._get_formatted_journal_summary(),
         }
 
 

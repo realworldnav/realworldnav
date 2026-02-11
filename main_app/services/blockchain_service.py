@@ -43,7 +43,7 @@ class EtherscanClient:
 
         self.base_url = "https://api.etherscan.io/v2/api"
         self.base_url_v1 = "https://api.etherscan.io/api"  # Fallback to v1 for some endpoints
-        self.rate_limit_delay = 0.2  # 5 requests per second max
+        self.rate_limit_delay = 0.35  # ~3 requests per second (Etherscan free tier limit)
         self.last_request_time = 0
 
         # Log API key status (mask the actual key for security)

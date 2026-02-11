@@ -205,7 +205,7 @@ def blockchain_listener_ui():
             }
 
             .status-failed {
-                background-color: #dc3545;
+                background-color: #b45309;
                 color: #fff;
             }
 
@@ -215,7 +215,7 @@ def blockchain_listener_ui():
             }
 
             .connection-inactive {
-                color: #dc3545;
+                color: #b45309;
             }
 
             @keyframes pulse {

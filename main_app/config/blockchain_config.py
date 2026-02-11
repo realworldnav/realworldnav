@@ -11,14 +11,19 @@ from decimal import Decimal
 INFURA_API_KEY = os.environ.get("INFURA_API_KEY", "")
 INFURA_URL = f"https://mainnet.infura.io/v3/{INFURA_API_KEY}"
 ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
-ETHERSCAN_BASE_URL = "https://api.etherscan.io/api"
+ETHERSCAN_BASE_URL = "https://api.etherscan.io/v2/api"
 
 # Event Topic0 Hash Mappings
 TOPIC0_HASH_MAP = {
     "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef": "Transfer",
     "0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c": "Deposit",
-    "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65": "Withdraw"
+    "0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65": "Withdraw",
+    "0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62": "TransferSingle",
+    "0x4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb": "TransferBatch",
 }
+
+# WETH contract address (canonical, mainnet)
+WETH_CONTRACT = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 
 # Verified Token Contract Addresses - Fully Trusted
 VERIFIED_TOKENS = {

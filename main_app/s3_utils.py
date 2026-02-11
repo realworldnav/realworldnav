@@ -281,6 +281,18 @@ def save_GL_file(df: pd.DataFrame, key: str = GL_KEY):
             # Convert Decimal/object to float64
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')
 
+    # Normalize datetime columns to ISO strings for parquet compatibility
+    for dt_col in ['date', 'loan_due_date']:
+        if dt_col in df.columns:
+            df[dt_col] = df[dt_col].apply(
+                lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x) if pd.notna(x) else ''
+            )
+
+    # Coerce all non-numeric object columns to string to avoid mixed-type parquet errors
+    for col in df.columns:
+        if col not in numeric_cols and df[col].dtype == 'object':
+            df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) else '')
+
     # Save to Parquet
     buffer = BytesIO()
     df.to_parquet(buffer, index=False)
@@ -337,48 +349,17 @@ def load_GL_file(key: str = GL_KEY) -> pd.DataFrame:
 def get_gl2_schema_columns():
     """
     Return the schema columns for GL2 parquet file.
-    Matches production parquet schema - columns 1-31 + 37, excluding 32-36.
+    Matches the canonical 37-column CSV format + row_key for deduplication.
     """
     return [
-        # Core identifiers (1-4)
-        'date',
-        'fund_id',
-        'limited_partner_ID',
-        'wallet_id',
-        # Transaction info (5-7)
-        'transaction_type',
-        'cryptocurrency',
-        'account_name',
-        # GL Account info (8-9)
-        'GL_Acct_Number',
-        'GL_Acct_Name',
-        # Amounts (10-14)
-        'debit_crypto',
-        'credit_crypto',
-        'eth_usd_price',
-        'debit_USD',
-        'credit_USD',
-        # Event info (15-17)
-        'event',
-        'function',
-        'hash',
-        # Loan details (18-31)
-        'loan_id',
-        'lender',
-        'borrower',
-        'from',
-        'to',
-        'contract_address',
-        'collateral_address',
-        'token_id',
-        'principal_crypto',
-        'principal_USD',
-        'annual_interest_rate',
-        'payoff_amount_crypto',
-        'payoff_amount_USD',
-        'loan_due_date',
-        # End of day price (37)
-        'end_of_day_ETH_USD',
+        'date', 'transaction_type', 'platform', 'fund_id', 'counterparty_fund_id',
+        'wallet_id', 'cryptocurrency', 'account_name', 'debit_crypto', 'credit_crypto',
+        'eth_usd_price', 'debit_USD', 'credit_USD', 'hash', 'event', 'loan_id',
+        'lender', 'borrower', 'from', 'to', 'contract_address', 'payable_currency',
+        'collateral_address', 'token_id', 'principal_crypto', 'principal_USD',
+        'payoff_amount_crypto', 'payoff_amount_USD', 'annual_interest_rate',
+        'loan_due_date', 'tranche_floor', 'tranche_index', 'fund_role',
+        'origination_fee', 'net_origination_fee', 'source_file', 'notes',
         # Internal deduplication key
         'row_key',
     ]
@@ -392,42 +373,17 @@ def create_empty_GL2(key: str = GL2_KEY) -> bool:
         columns = get_gl2_schema_columns()
         df = pd.DataFrame(columns=columns)
 
-        # Set proper dtypes matching parquet schema
-        df = df.astype({
-            'date': 'object',
-            'fund_id': 'object',
-            'limited_partner_ID': 'object',
-            'wallet_id': 'object',
-            'transaction_type': 'object',
-            'cryptocurrency': 'object',
-            'account_name': 'object',
-            'GL_Acct_Number': 'object',
-            'GL_Acct_Name': 'object',
-            'debit_crypto': 'float64',
-            'credit_crypto': 'float64',
-            'eth_usd_price': 'float64',
-            'debit_USD': 'float64',
-            'credit_USD': 'float64',
-            'event': 'object',
-            'function': 'object',
-            'hash': 'object',
-            'loan_id': 'object',
-            'lender': 'object',
-            'borrower': 'object',
-            'from': 'object',
-            'to': 'object',
-            'contract_address': 'object',
-            'collateral_address': 'object',
-            'token_id': 'object',
-            'principal_crypto': 'float64',
-            'principal_USD': 'float64',
-            'annual_interest_rate': 'float64',
-            'payoff_amount_crypto': 'float64',
-            'payoff_amount_USD': 'float64',
-            'loan_due_date': 'object',
-            'end_of_day_ETH_USD': 'float64',
-            'row_key': 'object'
-        })
+        # Set proper dtypes matching 37-column CSV format + row_key
+        float_cols = [
+            'debit_crypto', 'credit_crypto', 'eth_usd_price', 'debit_USD', 'credit_USD',
+            'principal_crypto', 'principal_USD', 'payoff_amount_crypto', 'payoff_amount_USD',
+            'annual_interest_rate',
+        ]
+        type_map = {col: 'float64' for col in float_cols if col in df.columns}
+        for col in columns:
+            if col not in type_map:
+                type_map[col] = 'object'
+        df = df.astype(type_map)
 
         # Save to parquet
         buffer = BytesIO()
@@ -466,8 +422,7 @@ def load_GL2_file(key: str = GL2_KEY) -> pd.DataFrame:
         # Cast financial columns to Decimal for precision
         decimal_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
                         'eth_usd_price', 'principal_crypto', 'principal_USD',
-                        'annual_interest_rate', 'payoff_amount_crypto', 'payoff_amount_USD',
-                        'end_of_day_ETH_USD']
+                        'annual_interest_rate', 'payoff_amount_crypto', 'payoff_amount_USD']
         for col in decimal_cols:
             if col in df.columns:
                 df[col] = df[col].apply(safe_to_decimal)
@@ -493,11 +448,22 @@ def save_GL2_file(df: pd.DataFrame, key: str = GL2_KEY) -> bool:
         # Normalize numeric columns to float64 for parquet compatibility
         numeric_cols = ['debit_crypto', 'credit_crypto', 'debit_USD', 'credit_USD',
                         'eth_usd_price', 'principal_crypto', 'principal_USD',
-                        'annual_interest_rate', 'payoff_amount_crypto', 'payoff_amount_USD',
-                        'end_of_day_ETH_USD']
+                        'annual_interest_rate', 'payoff_amount_crypto', 'payoff_amount_USD']
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').astype('float64')
+
+        # Normalize datetime columns to ISO strings for parquet compatibility
+        for dt_col in ['date', 'loan_due_date']:
+            if dt_col in df.columns:
+                df[dt_col] = df[dt_col].apply(
+                    lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x) if pd.notna(x) else ''
+                )
+
+        # Coerce all non-numeric object columns to string to avoid mixed-type parquet errors
+        for col in df.columns:
+            if col not in numeric_cols and df[col].dtype == 'object':
+                df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) else '')
 
         # Save to Parquet
         buffer = BytesIO()
@@ -599,9 +565,11 @@ def load_NFT_LEDGER_file(key: str = NFT_LEDGER_KEY) -> pd.DataFrame:
         
         return df
         
+    except get_s3_client().exceptions.NoSuchKey:
+        print("[I] No NFT ledger found in S3 - returning empty DataFrame")
+        return pd.DataFrame()
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        print(f"[E] Error loading NFT ledger: {e}")
         return pd.DataFrame()
 
 def get_current_nft_holdings(fund_id: str = None) -> pd.DataFrame:

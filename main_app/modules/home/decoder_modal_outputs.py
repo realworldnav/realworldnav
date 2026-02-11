@@ -166,7 +166,7 @@ def register_decoder_modal_outputs(input, output, session, selected_fund):
                         ui.HTML('<div style="font-size: 0.875rem; color: var(--bs-secondary);"><i class="bi bi-check-circle me-1"></i>Balance Check</div>'),
                         ui.div(
                             "Balanced" if result.get('summary', {}).get('all_balanced', True) else "Imbalanced",
-                            style=f"font-size: 1.5rem; font-weight: 600; color: {'var(--bs-success)' if result.get('summary', {}).get('all_balanced', True) else 'var(--bs-danger)'};"
+                            style=f"font-size: 1.5rem; font-weight: 600; color: {'var(--bs-success)' if result.get('summary', {}).get('all_balanced', True) else 'var(--bs-warning)'};"
                         )
                     ),
                     col_widths=[4, 4, 4]

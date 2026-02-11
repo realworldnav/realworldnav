@@ -315,47 +315,47 @@ class DecoderRegistry:
             from .decoder_adapters import BlurDecoderAdapter
             self._decoder_classes[Platform.BLUR] = BlurDecoderAdapter
             logger.info("Loaded Blur adapter v1.0.0")
-        except ImportError as e:
-            logger.warning(f"BlurDecoderAdapter not available: {e}")
+        except Exception as e:
+            logger.warning(f"BlurDecoderAdapter not available: {type(e).__name__}: {e}")
 
         # === ARCADE (v2.0.0 via adapter) ===
         try:
             from .decoder_adapters import ArcadeDecoderAdapter
             self._decoder_classes[Platform.ARCADE] = ArcadeDecoderAdapter
             logger.info("Loaded Arcade adapter v2.0.0")
-        except ImportError as e:
-            logger.warning(f"ArcadeDecoderAdapter not available: {e}")
+        except Exception as e:
+            logger.warning(f"ArcadeDecoderAdapter not available: {type(e).__name__}: {e}")
 
         # === NFTFI (v2.0.0 via adapter) ===
         try:
             from .decoder_adapters import NFTfiDecoderAdapter
             self._decoder_classes[Platform.NFTFI] = NFTfiDecoderAdapter
             logger.info("Loaded NFTfi adapter v2.0.0")
-        except ImportError as e:
-            logger.warning(f"NFTfiDecoderAdapter not available: {e}")
+        except Exception as e:
+            logger.warning(f"NFTfiDecoderAdapter not available: {type(e).__name__}: {e}")
 
         # === GONDI (v1.7.1 via adapter) ===
         try:
             from .decoder_adapters import GondiDecoderAdapter
             self._decoder_classes[Platform.GONDI] = GondiDecoderAdapter
             logger.info("Loaded Gondi adapter v1.7.1")
-        except ImportError as e:
-            logger.warning(f"GondiDecoderAdapter not available: {e}")
+        except Exception as e:
+            logger.warning(f"GondiDecoderAdapter not available: {type(e).__name__}: {e}")
 
         # === ZHARTA (v3.0.0 via adapter) ===
         try:
             from .decoder_adapters import ZhartaDecoderAdapter
             self._decoder_classes[Platform.ZHARTA] = ZhartaDecoderAdapter
             logger.info("Loaded Zharta adapter v3.0.0")
-        except ImportError as e:
-            logger.warning(f"ZhartaDecoderAdapter not available: {e}")
+        except Exception as e:
+            logger.warning(f"ZhartaDecoderAdapter not available: {type(e).__name__}: {e}")
 
         # === GENERIC ===
         try:
             from .generic_decoder import GenericDecoder
             self._decoder_classes[Platform.GENERIC] = GenericDecoder
-        except ImportError as e:
-            logger.warning(f"GenericDecoder not available: {e}")
+        except Exception as e:
+            logger.warning(f"GenericDecoder not available: {type(e).__name__}: {e}")
 
         logger.info(f"Initialized decoder registry with {len(self._decoder_classes)} platform decoders")
 

@@ -323,14 +323,16 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
         if not tx_hash:
             return ui.div("No transaction selected", class_="text-muted")
 
-        # Find the transaction in the cache
+        # Find the transaction in the cache (keep both dict and raw object)
         registry = decoder_registry_value.get()
         decoded = None
+        decoded_tx_obj = None  # Raw DecodedTransaction for formatted_journal_df access
 
         if registry and registry.decoded_cache:
             for cached_tx in registry.decoded_cache.values():
                 if cached_tx.tx_hash == tx_hash:
                     decoded = cached_tx.to_dict()
+                    decoded_tx_obj = cached_tx
                     break
 
         # Fallback to legacy cache
@@ -440,8 +442,10 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                 class_="mb-3"
             ),
 
-            # Journal Entries
-            ui.card(
+            # Journal Entries - use formatted_journal_df (37-column) if available
+            _render_formatted_journal_table(decoded_tx_obj)
+            if decoded_tx_obj and decoded_tx_obj.formatted_journal_df is not None and not decoded_tx_obj.formatted_journal_df.empty
+            else ui.card(
                 ui.card_header(f"Journal Entries ({len(journal_entries)})"),
                 *[_render_journal_entry_ui(je, i) for i, je in enumerate(journal_entries)] if journal_entries else [
                     ui.div("No journal entries generated", class_="text-muted p-3")
@@ -458,6 +462,65 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             ),
         )
 
+    def _render_formatted_journal_table(decoded_tx_obj):
+        """Render the 37-column formatted journal DataFrame as a rich table matching single TX tab."""
+        df = decoded_tx_obj.formatted_journal_df
+        display_cols = [
+            ('account_name', 'Account'),
+            ('debit_crypto', 'Debit'),
+            ('credit_crypto', 'Credit'),
+            ('cryptocurrency', 'Currency'),
+            ('debit_USD', 'Debit USD'),
+            ('credit_USD', 'Credit USD'),
+            ('event', 'Event'),
+            ('loan_id', 'Loan ID'),
+            ('fund_role', 'Role'),
+            ('lender', 'Lender'),
+            ('borrower', 'Borrower'),
+        ]
+
+        header_cells = [ui.tags.th(label, class_="small") for _, label in display_cols]
+
+        rows = []
+        for _, row in df.iterrows():
+            cells = []
+            for col, _ in display_cols:
+                val = row.get(col, '')
+                if col in ('debit_crypto', 'credit_crypto'):
+                    val_float = float(val) if val and str(val) != '' else 0
+                    cells.append(ui.tags.td(
+                        f"{val_float:.6f}" if val_float > 0 else '',
+                        class_="text-end small"
+                    ))
+                elif col in ('debit_USD', 'credit_USD'):
+                    val_float = float(val) if val and str(val) != '' else 0
+                    cells.append(ui.tags.td(
+                        f"${val_float:,.2f}" if val_float > 0 else '',
+                        class_="text-end small"
+                    ))
+                elif col in ('lender', 'borrower'):
+                    addr = str(val) if val else ''
+                    display = _get_friendly_name(addr) if addr else ''
+                    cells.append(ui.tags.td(display, class_="small"))
+                else:
+                    cells.append(ui.tags.td(str(val) if val and str(val) != 'nan' else '', class_="small"))
+            rows.append(ui.tags.tr(*cells))
+
+        return ui.card(
+            ui.card_header(f"Journal Entries ({len(df)} rows) - 37-Column Format"),
+            ui.card_body(
+                ui.div(
+                    ui.tags.table(
+                        ui.tags.thead(ui.tags.tr(*header_cells)),
+                        ui.tags.tbody(*rows),
+                        class_="table table-sm table-striped"
+                    ),
+                    style="overflow-x: auto; max-height: 400px; overflow-y: auto;"
+                )
+            ),
+            class_="mb-3"
+        )
+
     def _render_journal_entry_ui(je: Dict, index: int):
         """Helper to render a single journal entry"""
         entries = je.get('entries', [])
@@ -467,7 +530,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                 ui.span(je.get('description', 'N/A')[:100]),
                 ui.span(
                     "Balanced" if je.get('is_balanced') else "IMBALANCED",
-                    class_=f"badge ms-2 bg-{'success' if je.get('is_balanced') else 'danger'}"
+                    class_=f"badge ms-2 bg-{'success' if je.get('is_balanced') else 'warning'}"
                 ),
             ),
             ui.div(
@@ -483,7 +546,7 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
                     ui.tags.tbody(
                         *[ui.tags.tr(
                             ui.tags.td(
-                                ui.span(e.get('type', ''), class_=f"badge bg-{'success' if e.get('type') == 'DEBIT' else 'danger'}")
+                                ui.span(e.get('type', ''), class_=f"badge bg-{'success' if e.get('type') == 'DEBIT' else 'primary'}")
                             ),
                             ui.tags.td(e.get('account', '')),
                             ui.tags.td(f"{float(e.get('amount', 0)):.6f}"),
@@ -681,16 +744,25 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             coa_map = {}
 
         for tx in auto_ready:
+            # Save original statuses for rollback
             for entry in tx.journal_entries:
-                # Save original status for potential rollback
                 original_statuses[entry.entry_id] = entry.posting_status
-                # Optimistic update - mark as POSTED before save
                 entry.posting_status = PostingStatus.POSTED
-                # Pass wallet and COA mappings for proper fund_id and GL account lookup
-                all_entries.extend(entry.to_gl_records(
-                    wallet_to_fund_map=wallet_to_fund_map,
-                    coa_map=coa_map
-                ))
+
+            # Prefer formatted_journal_df (37-column) over JournalEntry.to_gl_records()
+            if tx.formatted_journal_df is not None and not tx.formatted_journal_df.empty:
+                for _, row in tx.formatted_journal_df.iterrows():
+                    row_dict = row.to_dict()
+                    row_dict['row_key'] = _generate_gl_row_key(row_dict)
+                    all_entries.append(row_dict)
+                logger.info(f"Using formatted_journal_df ({len(tx.formatted_journal_df)} rows) for tx {tx.tx_hash[:16]}")
+            else:
+                # Fallback: use JournalEntry.to_gl_records() for non-Gondi platforms
+                for entry in tx.journal_entries:
+                    all_entries.extend(entry.to_gl_records(
+                        wallet_to_fund_map=wallet_to_fund_map,
+                        coa_map=coa_map
+                    ))
 
             # Generate interest accruals for loan repayments
             if tx.category.value == 'LOAN_REPAYMENT' and tx.positions:
@@ -820,110 +892,33 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
             combined_gl = pd.concat([existing_gl, df_to_add], ignore_index=True)
             save_GL_file(combined_gl)
 
-            # Also save to GL2 (new General Ledger 2)
+            # Also save to GL2 (37-column format, same as CSV export)
             try:
-                from datetime import datetime, timezone
-                import re
-                from ...s3_utils import load_COA_file
+                from ...s3_utils import get_gl2_schema_columns
 
-                def extract_account_number(account_name_str):
-                    """Extract account number from account name like '100.30 - ETH Wallet'"""
-                    if not account_name_str:
-                        return ''
-                    # Match patterns like "100.30" or "10030" at the start
-                    match = re.match(r'^(\d+\.?\d*)', str(account_name_str))
-                    if match:
-                        return match.group(1)
-                    return ''
+                # df_to_add is already in 37-column format — just add row_key and pass through
+                gl2_new_df = df_to_add.copy()
+                if 'row_key' not in gl2_new_df.columns:
+                    gl2_new_df['row_key'] = gl2_new_df.apply(
+                        lambda r: _generate_gl_row_key(r.to_dict()), axis=1
+                    )
 
-                # Load COA for account name to number mapping
-                coa_df = load_COA_file()
-                account_name_to_number = {}
-                account_number_to_name = {}
-                if not coa_df.empty:
-                    for _, coa_row in coa_df.iterrows():
-                        try:
-                            acct_num = str(int(coa_row['GL_Acct_Number']))
-                            acct_name = str(coa_row['GL_Acct_Name']).strip()
-                            # Map both ways
-                            account_name_to_number[acct_name.lower()] = acct_num
-                            account_number_to_name[acct_num] = acct_name
-                            # Also map partial names
-                            words = acct_name.lower().split()
-                            if len(words) >= 2:
-                                account_name_to_number[' '.join(words[:2])] = acct_num
-                        except:
-                            continue
+                # Ensure all GL2 schema columns exist
+                for col in get_gl2_schema_columns():
+                    if col not in gl2_new_df.columns:
+                        gl2_new_df[col] = ''
 
-                def lookup_account_number(account_name):
-                    """Look up account number from COA by name"""
-                    if not account_name:
-                        return ''
-                    # First try exact match
-                    name_lower = str(account_name).strip().lower()
-                    if name_lower in account_name_to_number:
-                        return account_name_to_number[name_lower]
-                    # Try partial match
-                    for coa_name, acct_num in account_name_to_number.items():
-                        if coa_name in name_lower or name_lower in coa_name:
-                            return acct_num
-                    # Fallback: try to extract from name
-                    return extract_account_number(account_name)
+                clear_GL2_cache()
+                existing_gl2 = load_GL2_file()
 
-                # Prepare GL2 format records
-                gl2_records = []
-                for _, row in df_to_add.iterrows():
-                    account_name = row.get('account_name', '')
-                    # Try to extract number first, then lookup
-                    account_number = extract_account_number(account_name)
-                    if not account_number:
-                        account_number = lookup_account_number(account_name)
+                # Deduplicate by row_key
+                existing_gl2_keys = set(existing_gl2['row_key'].tolist()) if 'row_key' in existing_gl2.columns and not existing_gl2.empty else set()
+                gl2_to_add = gl2_new_df[~gl2_new_df['row_key'].isin(existing_gl2_keys)]
 
-                    # Format account name properly if we found a number
-                    if account_number and account_number in account_number_to_name:
-                        formatted_name = f"{account_number} - {account_number_to_name[account_number]}"
-                    else:
-                        formatted_name = account_name
-
-                    # Get entry type from transaction_type field
-                    entry_type = row.get('transaction_type', '')
-                    # Determine if this is a DEBIT or CREDIT entry
-                    debit_val = float(row.get('debit_crypto', 0)) if pd.notna(row.get('debit_crypto')) else 0.0
-                    credit_val = float(row.get('credit_crypto', 0)) if pd.notna(row.get('credit_crypto')) else 0.0
-                    line_type = 'DEBIT' if debit_val > 0 else 'CREDIT'
-
-                    gl2_record = {
-                        'tx_hash': row.get('hash', ''),
-                        'entry_type': line_type,
-                        'account_number': account_number,
-                        'account_name': formatted_name,
-                        'debit_crypto': debit_val,
-                        'credit_crypto': credit_val,
-                        'debit_USD': float(row.get('debit_USD', 0)) if pd.notna(row.get('debit_USD')) else 0.0,
-                        'credit_USD': float(row.get('credit_USD', 0)) if pd.notna(row.get('credit_USD')) else 0.0,
-                        'asset': row.get('cryptocurrency', row.get('asset', 'ETH')),
-                        'description': row.get('note', row.get('description', '')),
-                        'category': entry_type,  # Use transaction_type as category
-                        'platform': row.get('platform', 'unknown'),
-                        'timestamp': row.get('date', datetime.now(timezone.utc)),
-                        'posted_date': datetime.now(timezone.utc),
-                        'row_key': _generate_gl_row_key(row.to_dict())
-                    }
-                    gl2_records.append(gl2_record)
-
-                if gl2_records:
-                    gl2_new_df = pd.DataFrame(gl2_records)
-                    clear_GL2_cache()
-                    existing_gl2 = load_GL2_file()
-
-                    # Deduplicate by row_key
-                    existing_gl2_keys = set(existing_gl2['row_key'].tolist()) if 'row_key' in existing_gl2.columns and not existing_gl2.empty else set()
-                    gl2_to_add = gl2_new_df[~gl2_new_df['row_key'].isin(existing_gl2_keys)]
-
-                    if not gl2_to_add.empty:
-                        combined_gl2 = pd.concat([existing_gl2, gl2_to_add], ignore_index=True)
-                        save_GL2_file(combined_gl2)
-                        logger.info(f"Also posted {len(gl2_to_add)} entries to GL2")
+                if not gl2_to_add.empty:
+                    combined_gl2 = pd.concat([existing_gl2, gl2_to_add], ignore_index=True)
+                    save_GL2_file(combined_gl2)
+                    logger.info(f"Also posted {len(gl2_to_add)} entries to GL2")
             except Exception as gl2_err:
                 logger.warning(f"Could not post to GL2: {gl2_err}")
                 # Don't fail the whole operation if GL2 fails
@@ -958,89 +953,89 @@ def register_decoded_transactions_outputs(output, input, session, decoder_regist
 
     @render.download(filename="journal_entries_export.csv")
     def download_decoded_csv():
-        """Download journal entries from decoded transactions as CSV"""
+        """Download journal entries from decoded transactions as CSV (37-column format)"""
+        from ...services.decoders.gondi_decoder import CSV_COLUMNS
+
         transactions = filtered_decoded_transactions()
 
         if not transactions:
-            # Return empty CSV with headers
-            yield "tx_hash,entry_id,date,platform,category,description,posting_status,type,account_key,gl_acct_number,gl_acct_name,amount,asset,eth_usd_price,amount_usd,in_coa\n"
+            yield ','.join(CSV_COLUMNS) + '\n'
             return
 
         try:
-            from ...services.decoders.accounts import COA
+            # Access raw DecodedTransaction objects from registry for formatted_journal_df
+            registry = decoder_registry_value.get()
+            all_formatted_dfs = []
+            fallback_rows = []
 
-            rows = []
-            for tx in transactions:
-                tx_hash = tx.get('tx_hash', '')
-                platform = tx.get('platform', 'unknown')
-                category = tx.get('category', 'UNKNOWN')
-                timestamp = tx.get('timestamp', '')
-                eth_price = float(tx.get('eth_price', 0))
+            for tx_dict in transactions:
+                tx_hash = tx_dict.get('tx_hash', '')
 
-                # Get journal entries
-                journal_entries = tx.get('journal_entries', [])
-                for je in journal_entries:
-                    entry_id = je.get('entry_id', '')
-                    description = je.get('description', '')
-                    posting_status = je.get('posting_status', 'review_queue')
-                    entries = je.get('entries', [])
+                # Try to get formatted_journal_df from the cached DecodedTransaction object
+                decoded_tx = None
+                if registry and registry.decoded_cache:
+                    decoded_tx = registry.decoded_cache.get(tx_hash)
 
-                    for entry in entries:
-                        entry_type = entry.get('type', '')
-                        account_key = entry.get('account', '')
-                        amount = float(entry.get('amount', 0))
-                        asset = entry.get('asset', 'ETH')
+                if decoded_tx and decoded_tx.formatted_journal_df is not None and not decoded_tx.formatted_journal_df.empty:
+                    all_formatted_dfs.append(decoded_tx.formatted_journal_df)
+                else:
+                    # Fallback for non-Gondi or older transactions without formatted_journal_df
+                    _export_legacy_journal_entries(tx_dict, fallback_rows)
 
-                        # Look up GL account info from COA
-                        gl_acct_number = ''
-                        gl_acct_name = ''
-                        in_coa = False
-                        if account_key in COA:
-                            gl_acct_number, gl_acct_name = COA[account_key]
-                            in_coa = True
-                        else:
-                            # Fallback: account_key might already be the name
-                            gl_acct_name = account_key
+            if all_formatted_dfs or fallback_rows:
+                parts = []
+                if all_formatted_dfs:
+                    parts.append(pd.concat(all_formatted_dfs, ignore_index=True))
+                if fallback_rows:
+                    fallback_df = pd.DataFrame(fallback_rows)
+                    for col in CSV_COLUMNS:
+                        if col not in fallback_df.columns:
+                            fallback_df[col] = ''
+                    fallback_df = fallback_df[CSV_COLUMNS]
+                    parts.append(fallback_df)
 
-                        # Calculate USD amount
-                        stablecoins = {'USDC', 'USDT', 'DAI', 'FRAX', 'LUSD'}
-                        if asset.upper() in stablecoins:
-                            amount_usd = amount
-                        else:
-                            amount_usd = amount * eth_price
-
-                        rows.append({
-                            'tx_hash': tx_hash,
-                            'entry_id': entry_id,
-                            'date': timestamp,
-                            'platform': platform,
-                            'category': category,
-                            'description': description,
-                            'posting_status': posting_status,
-                            'type': entry_type,
-                            'account_key': account_key,
-                            'gl_acct_number': gl_acct_number,
-                            'gl_acct_name': gl_acct_name,
-                            'amount': amount,
-                            'asset': asset,
-                            'eth_usd_price': eth_price,
-                            'amount_usd': amount_usd,
-                            'in_coa': in_coa,
-                        })
-
-            if not rows:
-                yield "tx_hash,entry_id,date,platform,category,description,posting_status,type,account_key,gl_acct_number,gl_acct_name,amount,asset,eth_usd_price,amount_usd,in_coa\n"
-                return
-
-            df = pd.DataFrame(rows)
-            yield df.to_csv(index=False)
-            logger.info(f"Exported {len(rows)} journal entry rows to CSV")
+                combined = pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0]
+                yield combined.to_csv(index=False)
+                logger.info(f"Exported {len(combined)} journal entry rows (37-column format)")
+            else:
+                yield ','.join(CSV_COLUMNS) + '\n'
 
         except Exception as e:
-            logger.error(f"Failed to export CSV: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Failed to export CSV: {e}", exc_info=True)
             yield f"Error exporting: {str(e)}\n"
+
+    def _export_legacy_journal_entries(tx_dict: Dict, rows: List):
+        """Fallback export for transactions without formatted_journal_df (non-Gondi platforms)"""
+        tx_hash = tx_dict.get('tx_hash', '')
+        platform = tx_dict.get('platform', 'unknown')
+        category = tx_dict.get('category', 'UNKNOWN')
+        timestamp = tx_dict.get('timestamp', '')
+        eth_price = float(tx_dict.get('eth_price', 0))
+
+        stablecoins = {'USDC', 'USDT', 'DAI', 'FRAX', 'LUSD'}
+
+        for je in tx_dict.get('journal_entries', []):
+            for entry in je.get('entries', []):
+                account_key = entry.get('account', '')
+                amount = float(entry.get('amount', 0))
+                asset = entry.get('asset', 'ETH')
+                entry_type = entry.get('type', '')
+
+                amount_usd = amount if asset.upper() in stablecoins else amount * eth_price
+
+                rows.append({
+                    'date': timestamp,
+                    'transaction_type': category,
+                    'platform': platform,
+                    'hash': tx_hash,
+                    'account_name': account_key,
+                    'debit_crypto': amount if entry_type == 'DEBIT' else 0,
+                    'credit_crypto': amount if entry_type == 'CREDIT' else 0,
+                    'cryptocurrency': asset,
+                    'eth_usd_price': eth_price,
+                    'debit_USD': amount_usd if entry_type == 'DEBIT' else 0,
+                    'credit_USD': amount_usd if entry_type == 'CREDIT' else 0,
+                })
 
     @render.download(filename="raw_transactions_export.csv")
     def download_raw_transactions_csv():

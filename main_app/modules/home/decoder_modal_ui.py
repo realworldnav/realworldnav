@@ -107,7 +107,7 @@ def summary_card_ui(title: str, value: str, subtitle: str = "", icon: str = "", 
         "success": "#198754",
         "info": "#0dcaf0",
         "warning": "#ffc107",
-        "danger": "#dc3545",
+        "danger": "#b45309",
         "light": "#6c757d"
     }
 
@@ -143,7 +143,7 @@ def role_badge_ui(role: str, address: str, friendly_name: str = None):
         "OLD_LENDER": ("warning", '<i class="bi bi-box-arrow-up"></i>'),
         "BORROWER_REPAYING": ("info", '<i class="bi bi-cash-coin"></i>'),
         "LENDER_RECEIVING": ("success", '<i class="bi bi-check-circle"></i>'),
-        "LIQUIDATOR": ("danger", '<i class="bi bi-lightning"></i>'),
+        "LIQUIDATOR": ("dark", '<i class="bi bi-lightning"></i>'),
         "GAS_PAYER": ("secondary", '<i class="bi bi-fuel-pump"></i>'),
         "SENDER": ("warning", '<i class="bi bi-box-arrow-up-right"></i>'),
         "RECEIVER": ("success", '<i class="bi bi-box-arrow-in-down"></i>'),
@@ -248,7 +248,7 @@ def journal_entry_card_ui(entry_num: int, description: str, wallet_role: str,
                     style="font-size: 0.8rem; color: var(--bs-secondary);"
                 ),
                 ui.HTML(
-                    f'<span style="font-size: 0.8rem; font-weight: 600; color: {"var(--bs-success)" if balanced else "var(--bs-danger)"};">'
+                    f'<span style="font-size: 0.8rem; font-weight: 600; color: {"var(--bs-success)" if balanced else "var(--bs-warning)"};">'
                     f'<i class="bi bi-{"check-circle" if balanced else "x-circle"} me-1"></i>'
                     f'{"Balanced" if balanced else "Imbalanced"}</span>'
                 ),
@@ -386,7 +386,7 @@ decoder_modal_styles = ui.tags.style("""
     }
 
     .entry-imbalanced {
-        color: var(--bs-danger);
+        color: var(--bs-warning);
         font-weight: 600;
     }
 

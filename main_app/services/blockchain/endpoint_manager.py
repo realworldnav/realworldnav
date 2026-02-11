@@ -15,7 +15,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from functools import wraps
 
 from web3 import Web3
-from web3.providers import HTTPProvider, WebSocketProvider
+from web3.providers import HTTPProvider
+try:
+    from web3.providers import WebSocketProvider
+except ImportError:
+    from web3.providers import WebsocketProvider as WebSocketProvider
 from web3.exceptions import Web3Exception
 
 logger = logging.getLogger(__name__)

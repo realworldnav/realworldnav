@@ -177,6 +177,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
     error_message = reactive.value("")
     decoded_tx_cache = reactive.value({})  # Cache of decoded transactions
     decoder_registry = reactive.value(None)  # New multi-platform decoder registry
+    decoder_registry_status = reactive.value("")  # Status message for decoder init (empty = no issue)
     registry_init_attempts = reactive.value(0)  # Retry counter for Web3 initialization
     decoded_refresh_trigger = reactive.value(0)  # Increment to force decoded transactions UI refresh
     connection_initiated = reactive.value(False)  # Gate for blockchain service initialization
@@ -901,9 +902,9 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         elif status == "loading":
             return ui.tags.strong("Loading transactions...", style="color: #17a2b8;")
         elif status == "error":
-            return ui.tags.strong("Error", style="color: #dc3545;")
+            return ui.tags.strong("Error", style="color: #b45309;")
         else:
-            return ui.tags.strong("Not Connected", style="color: #dc3545;")
+            return ui.tags.strong("Not Connected", style="color: #b45309;")
 
     @output
     @render.ui
@@ -925,6 +926,58 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             return ui.HTML('<i class="bi bi-arrow-repeat spin-animation" style="color: #17a2b8;"></i> Loading...')
         else:
             return ui.HTML('<i class="bi bi-circle-fill connection-inactive"></i> Offline')
+
+    # Decoder registry status banner (shown in decoded transactions tab)
+    @output
+    @render.ui
+    def decoder_status_banner():
+        status_raw = decoder_registry_status.get()
+        if not status_raw:
+            return ui.div()  # Empty - no status yet
+
+        # Parse "level:message" format
+        if ":" in status_raw:
+            level, message = status_raw.split(":", 1)
+        else:
+            level, message = "info", status_raw
+
+        if level == "error":
+            return ui.div(
+                ui.HTML(f"""
+                    <div class="alert alert-danger d-flex align-items-center mb-2" role="alert">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        <div><strong>Decoder Error:</strong> {message}</div>
+                    </div>
+                """)
+            )
+        elif level == "warning":
+            return ui.div(
+                ui.HTML(f"""
+                    <div class="alert alert-warning d-flex align-items-center mb-2" role="alert">
+                        <i class="bi bi-exclamation-circle-fill me-2"></i>
+                        <div><strong>Decoder Warning:</strong> {message}</div>
+                    </div>
+                """)
+            )
+        elif level == "retrying":
+            return ui.div(
+                ui.HTML(f"""
+                    <div class="alert alert-info d-flex align-items-center mb-2" role="alert">
+                        <i class="bi bi-arrow-repeat spin-animation me-2"></i>
+                        <div>{message}</div>
+                    </div>
+                """)
+            )
+        elif level == "ok":
+            return ui.div(
+                ui.HTML(f"""
+                    <div class="alert alert-success d-flex align-items-center mb-2 py-1" role="alert">
+                        <i class="bi bi-check-circle-fill me-2"></i>
+                        <div>{message}</div>
+                    </div>
+                """)
+            )
+        return ui.div()
 
     # Active wallet display
     @output
@@ -1005,7 +1058,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             if change > 0:
                 return ui.HTML(f'<i class="bi bi-arrow-up-circle-fill text-success"></i> +{change:.1f}% vs yesterday')
             else:
-                return ui.HTML(f'<i class="bi bi-arrow-down-circle-fill text-danger"></i> {change:.1f}% vs yesterday')
+                return ui.HTML(f'<i class="bi bi-arrow-down-circle-fill" style="color: #475569;"></i> {change:.1f}% vs yesterday')
         elif today_count > 0:
             return ui.HTML(f'<i class="bi bi-arrow-up-circle-fill text-success"></i> {today_count} new today')
         else:
@@ -1276,11 +1329,13 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
         DecoderRegistryClass = get_decoder_registry()
         if DecoderRegistryClass is None:
             logger.info("DecoderRegistry not available (import failed), using legacy blur_auto_decoder")
+            decoder_registry_status.set("error:DecoderRegistry import failed — check that all decoder dependencies are installed")
             return
 
         attempts = registry_init_attempts.get()
         if attempts >= MAX_REGISTRY_INIT_ATTEMPTS:
             logger.warning(f"DecoderRegistry init failed after {attempts} attempts, using legacy decoder")
+            decoder_registry_status.set(f"error:Decoder init failed after {attempts} attempts — Web3 connection unavailable")
             return
 
         try:
@@ -1306,6 +1361,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
             if wallet_df.empty:
                 logger.warning("No wallet data available")
+                decoder_registry_status.set("error:No wallet data — check S3 wallet mapper file")
                 return
 
             # Load ALL wallets from mapper - decode any transaction involving our wallets
@@ -1325,6 +1381,7 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
 
             if not fund_wallet_addresses:
                 logger.warning("No wallets found in wallet mapper")
+                decoder_registry_status.set("error:No wallets found in wallet mapper")
                 return
 
             # Log wallet addresses for debugging
@@ -1349,22 +1406,30 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             except Exception as e:
                 logger.debug(f"Could not get Web3 from infura: {e}")
 
-            # Source 2: blur_auto_decoder.w3 (fallback)
+            # Source 2: Direct Web3 from env vars (fallback)
             if w3 is None:
                 try:
-                    from .blur_auto_decoder import w3 as blur_w3
-                    if blur_w3 is not None:
-                        w3 = blur_w3
-                        logger.debug("Got Web3 from blur_auto_decoder")
+                    from web3 import Web3
+                    from ...config.blockchain_config import INFURA_URL, INFURA_API_KEY
+                    if INFURA_API_KEY and INFURA_URL:
+                        fallback_w3 = Web3(Web3.HTTPProvider(INFURA_URL))
+                        if fallback_w3.is_connected():
+                            w3 = fallback_w3
+                            logger.info("Got Web3 from direct Infura HTTP fallback")
+                        else:
+                            logger.debug("Direct Infura HTTP fallback failed to connect")
                 except Exception as e:
-                    logger.debug(f"Could not get Web3 from blur_auto_decoder: {e}")
+                    logger.debug(f"Could not create direct Web3 fallback: {e}")
 
             if w3 is None:
                 logger.warning(f"Web3 not available (attempt {attempts + 1}/{MAX_REGISTRY_INIT_ATTEMPTS}), will retry")
                 # Schedule retry in 5 seconds
-                if attempts < MAX_REGISTRY_INIT_ATTEMPTS - 1:
+                if attempts + 1 < MAX_REGISTRY_INIT_ATTEMPTS:
+                    decoder_registry_status.set(f"retrying:Web3 connection attempt {attempts + 1}/{MAX_REGISTRY_INIT_ATTEMPTS}...")
                     reactive.invalidate_later(5.0)
                     registry_init_attempts.set(attempts + 1)
+                else:
+                    decoder_registry_status.set("error:Web3 connection failed — check INFURA_API_KEY in .env")
                 return
 
             # Verify connection with actual RPC call (is_connected() is unreliable for HTTP)
@@ -1372,11 +1437,14 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
                 chain_id = w3.eth.chain_id
                 logger.info(f"Web3 connected to chain {chain_id}")
             except Exception as e:
-                logger.warning(f"Web3 not connected (attempt {attempts + 1}): {e}")
+                logger.warning(f"Web3 not connected (attempt {attempts + 1}/{MAX_REGISTRY_INIT_ATTEMPTS}): {e}")
                 # Schedule retry
-                if attempts < MAX_REGISTRY_INIT_ATTEMPTS - 1:
+                if attempts + 1 < MAX_REGISTRY_INIT_ATTEMPTS:
+                    decoder_registry_status.set(f"retrying:Web3 RPC verify attempt {attempts + 1}/{MAX_REGISTRY_INIT_ATTEMPTS}...")
                     reactive.invalidate_later(5.0)
                     registry_init_attempts.set(attempts + 1)
+                else:
+                    decoder_registry_status.set(f"error:Web3 RPC call failed — {e}")
                 return
 
             # Create registry with fund_id for GL posting
@@ -1384,15 +1452,23 @@ def register_blockchain_listener_outputs(input, output, session, selected_fund):
             decoder_registry.set(registry)
             registry_init_attempts.set(0)  # Reset counter on success
 
+            # Report decoder availability
+            num_decoders = len(getattr(registry, '_decoder_classes', {}))
+            if num_decoders > 0:
+                decoder_registry_status.set(f"ok:{num_decoders} platform decoders active")
+            else:
+                decoder_registry_status.set("warning:Registry created but no platform decoders loaded")
+
             # Clear local decoded cache to force fresh decoding with new registry
             # This ensures old failed decodes (from before code fixes) are re-tried
             decoded_tx_cache.set({})
 
-            logger.info(f"Initialized DecoderRegistry with {len(fund_wallet_addresses)} wallets (all from mapper)")
+            logger.info(f"Initialized DecoderRegistry with {len(fund_wallet_addresses)} wallets, {num_decoders} decoders")
 
         except Exception as e:
             logger.error(f"Failed to initialize DecoderRegistry: {e}")
-            if attempts < MAX_REGISTRY_INIT_ATTEMPTS - 1:
+            decoder_registry_status.set(f"error:Decoder init failed — {e}")
+            if attempts + 1 < MAX_REGISTRY_INIT_ATTEMPTS:
                 registry_init_attempts.set(attempts + 1)
 
     # Auto-decode transactions in background (uses new registry when available)

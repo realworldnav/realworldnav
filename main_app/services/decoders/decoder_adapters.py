@@ -172,6 +172,7 @@ class BlurDecoderAdapter(BaseDecoderAdapter):
             # Convert to DecodedTransaction
             category = self._determine_category(events)
             journal_entries = []
+            formatted_journal_df = None
 
             if events and self._journal_generator:
                 # Generate journal entries using individual methods
@@ -229,6 +230,15 @@ class BlurDecoderAdapter(BaseDecoderAdapter):
                     combined_df = pd.concat(all_entries, ignore_index=True)
                     journal_entries = self._convert_journal_entries(combined_df)
 
+                    # Generate 37-column formatted DataFrame (same as single TX tab)
+                    try:
+                        from .gondi_decoder import format_journal_entries_csv
+                        formatted_journal_df = format_journal_entries_csv(combined_df, float(eth_price))
+                        logger.info(f"Blur: Generated formatted journal DF: {len(formatted_journal_df)} rows, {len(formatted_journal_df.columns)} columns")
+                    except Exception as fmt_err:
+                        logger.warning(f"Blur: Could not generate formatted journal DF: {fmt_err}")
+                        formatted_journal_df = None
+
             return DecodedTransaction(
                 status="success",
                 tx_hash=tx_hash,
@@ -252,6 +262,7 @@ class BlurDecoderAdapter(BaseDecoderAdapter):
                 ) for e in events] if events else [],
                 wallet_roles={},
                 positions={},
+                formatted_journal_df=formatted_journal_df,
             )
 
         except Exception as e:
@@ -399,7 +410,7 @@ class GondiDecoderAdapter(BaseDecoderAdapter):
                     print(f"[DEBUG] Gondi {version} events: {event_names}")
                 else:
                     failed_abis.append((addr, version))
-                    logger.warning(f"  FAILED to load Gondi {version} ABI for {addr[:16]}...")
+                    logger.warning(f"  Gondi {version} ABI unavailable for {addr[:16]}... (contract unverified on Etherscan)")
 
             if not contracts:
                 self._initialization_error = f"Could not load any Gondi ABIs. Failed: {failed_abis}"
@@ -481,6 +492,7 @@ class GondiDecoderAdapter(BaseDecoderAdapter):
 
             category = self._determine_category(events)
             journal_entries = []
+            formatted_journal_df = None
 
             if events and self._journal_generator:
                 # Pass events list directly - generator expects DecodedGondiEvent objects
@@ -497,6 +509,15 @@ class GondiDecoderAdapter(BaseDecoderAdapter):
                 if all_entries:
                     combined_df = pd.concat(all_entries, ignore_index=True)
                     journal_entries = self._convert_journal_entries(combined_df)
+
+                    # Generate 37-column formatted DataFrame (same as single TX tab)
+                    try:
+                        from .gondi_decoder import format_journal_entries_csv
+                        formatted_journal_df = format_journal_entries_csv(combined_df, float(eth_price))
+                        logger.info(f"Generated formatted journal DF: {len(formatted_journal_df)} rows, {len(formatted_journal_df.columns)} columns")
+                    except Exception as fmt_err:
+                        logger.warning(f"Could not generate formatted journal DF: {fmt_err}")
+                        formatted_journal_df = None
 
             return DecodedTransaction(
                 status="success",
@@ -521,6 +542,7 @@ class GondiDecoderAdapter(BaseDecoderAdapter):
                 ) for e in events] if events else [],
                 wallet_roles={},
                 positions={},
+                formatted_journal_df=formatted_journal_df,
             )
 
         except Exception as e:

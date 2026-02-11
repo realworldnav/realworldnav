@@ -232,6 +232,8 @@ __all__ = [
     # Utility Functions
     'standardize_dataframe',
     'convert_to_human_readable',
+    'format_journal_entries_csv',
+    'CSV_COLUMNS',
     'print_event_details',
     'print_processing_summary',
 ]
@@ -1537,7 +1539,7 @@ class GondiJournalEntryGenerator:
             'borrower': loan.borrower,
             'from': tranche.lender,
             'to': loan.borrower,
-            'contract_address': GONDI_CONTRACT.lower(),
+            'contract_address': event.contract_address or GONDI_CONTRACT.lower(),
             'payable_currency': loan.principalAddress,
             'collateral_address': loan.nftCollateralAddress,
             'token_id': str(loan.nftCollateralTokenId),
@@ -1696,6 +1698,7 @@ class GondiJournalEntryGenerator:
                     'contract_address': event.contract_address,
                     'collateral_address': loan.nftCollateralAddress,
                     'token_id': str(loan.nftCollateralTokenId),
+                    'payable_currency': loan.principalAddress,
                     'loan_due_date': loan_due_date,
                     'fund_role': 'borrower',
                     '_currency_suffix': currency_suffix,
@@ -1710,6 +1713,7 @@ class GondiJournalEntryGenerator:
                     'principal': total_principal,
                     'payoff_amount': total_repayment,
                     'origination_fee': total_fee,
+                    'net_origination_fee': total_fee,
                 })
 
                 # 2) Dr interest_expense (origination fee paid to lenders)
@@ -1722,6 +1726,7 @@ class GondiJournalEntryGenerator:
                         'principal': total_principal,
                         'payoff_amount': total_repayment,
                         'origination_fee': total_fee,
+                        'net_origination_fee': total_fee,
                     })
 
                 # 3) Cr note_payable (principal owed to lenders)
@@ -1733,6 +1738,7 @@ class GondiJournalEntryGenerator:
                     'principal': total_principal,
                     'payoff_amount': total_repayment,
                     'origination_fee': total_fee,
+                    'net_origination_fee': total_fee,
                 })
 
         if not journal_rows:
@@ -1854,8 +1860,10 @@ class GondiJournalEntryGenerator:
                     'from': loan.borrower,
                     'to': 'multiple',
                     'contract_address': event.contract_address,
+                    'payable_currency': loan.principalAddress,
                     'collateral_address': loan.nftCollateralAddress,
                     'token_id': str(loan.nftCollateralTokenId),
+                    'loan_due_date': loan.due_date,
                     'fund_role': 'borrower',
                     '_currency_suffix': currency_suffix,
                 }
@@ -2307,6 +2315,8 @@ class GondiJournalEntryGenerator:
                         'principal': tranche.principalAmount,
                         'accrued_interest': accrued_interest,
                         'payoff_amount': payoff_amount,
+                        'origination_fee': fee_share,
+                        'net_origination_fee': net_fee_income,
                     })
 
                     # 2) Dr interest_receivable (accrued interest paid to old lender)
@@ -2321,6 +2331,8 @@ class GondiJournalEntryGenerator:
                             'principal': tranche.principalAmount,
                             'accrued_interest': accrued_interest,
                             'payoff_amount': payoff_amount,
+                            'origination_fee': fee_share,
+                            'net_origination_fee': net_fee_income,
                         })
 
                     # 3) Cr deemed_cash (total cash disbursed)
@@ -2332,6 +2344,8 @@ class GondiJournalEntryGenerator:
                         'principal': tranche.principalAmount,
                         'accrued_interest': accrued_interest,
                         'payoff_amount': payoff_amount,
+                        'origination_fee': fee_share,
+                        'net_origination_fee': net_fee_income,
                     })
 
                     # 4) Cr interest_income (net fee earned upfront)
@@ -2344,6 +2358,8 @@ class GondiJournalEntryGenerator:
                             'principal': tranche.principalAmount,
                             'accrued_interest': accrued_interest,
                             'payoff_amount': payoff_amount,
+                            'origination_fee': fee_share,
+                            'net_origination_fee': net_fee_income,
                         })
 
             # ============================================================
@@ -2435,9 +2451,9 @@ class GondiJournalEntryGenerator:
 
                     net_cash_books = payoff_dr - origination_cr
 
-                    # Allow small tolerance (10 wei)
+                    # Allow tolerance for integer division rounding in multi-tranche refinances
                     reconciliation_diff = abs(net_cash_books - net_cash_actual)
-                    if reconciliation_diff > 10:
+                    if reconciliation_diff > 1000:  # 1000 wei (~$0.000000003)
                         print(f"[!] CASH RECONCILIATION WARNING for lender {lender_lower[:10]}...")
                         print(f"   net_cash_books:  {net_cash_books} ({net_cash_books/1e18:.6f} ETH)")
                         print(f"   net_cash_actual: {net_cash_actual} ({net_cash_actual/1e18:.6f} ETH)")
@@ -2480,6 +2496,7 @@ class GondiJournalEntryGenerator:
                     'from': old_loan.borrower,
                     'to': 'multiple',
                     'contract_address': event.contract_address,
+                    'payable_currency': old_loan.principalAddress,
                     'collateral_address': old_loan.nftCollateralAddress,
                     'token_id': str(old_loan.nftCollateralTokenId),
                     'fund_role': 'borrower',
@@ -2558,6 +2575,7 @@ class GondiJournalEntryGenerator:
                     'from': 'multiple',
                     'to': new_loan.borrower,
                     'contract_address': event.contract_address,
+                    'payable_currency': new_loan.principalAddress,
                     'collateral_address': new_loan.nftCollateralAddress,
                     'token_id': str(new_loan.nftCollateralTokenId),
                     'loan_due_date': loan_due_date,
@@ -4690,6 +4708,126 @@ def print_journal_summary(results: Dict[str, pd.DataFrame]):
                         print(f"       Cr {acct}: {cr:,.6f}")
 
     print("\n" + "=" * 100)
+
+
+# ============================================================================
+# CSV EXPORT FORMAT (matches perfect_journal_entries.csv)
+# ============================================================================
+
+CSV_COLUMNS = [
+    'date', 'transaction_type', 'platform', 'fund_id', 'counterparty_fund_id',
+    'wallet_id', 'cryptocurrency', 'account_name', 'debit_crypto', 'credit_crypto',
+    'eth_usd_price', 'debit_USD', 'credit_USD', 'hash', 'event', 'loan_id',
+    'lender', 'borrower', 'from', 'to', 'contract_address', 'payable_currency',
+    'collateral_address', 'token_id', 'principal_crypto', 'principal_USD',
+    'payoff_amount_crypto', 'payoff_amount_USD', 'annual_interest_rate',
+    'loan_due_date', 'tranche_floor', 'tranche_index', 'fund_role',
+    'origination_fee', 'net_origination_fee', 'source_file', 'notes',
+]
+
+# Stablecoins where USD value = crypto value (1:1)
+_STABLECOINS = {'USDC', 'USDT', 'DAI', 'FRAX', 'LUSD'}
+
+
+def format_journal_entries_csv(df: pd.DataFrame, eth_usd_price: float) -> pd.DataFrame:
+    """
+    Format journal entries DataFrame for CSV export.
+
+    Converts from the engine's internal format (debit/credit/principal/payoff_amount
+    as Decimal crypto amounts after convert_to_human_readable) to the canonical CSV
+    format matching perfect_journal_entries.csv.
+
+    Args:
+        df: DataFrame with journal entries (after convert_to_human_readable).
+            Expected columns: debit, credit, principal, payoff_amount (Decimal values).
+        eth_usd_price: ETH/USD price at the block timestamp.
+
+    Returns:
+        DataFrame with exact columns and order matching perfect_journal_entries.csv.
+    """
+    if df.empty:
+        return pd.DataFrame(columns=CSV_COLUMNS)
+
+    df = df.copy()
+
+    # --- Rename wei-converted columns to _crypto suffix ---
+    rename_map = {
+        'debit': 'debit_crypto',
+        'credit': 'credit_crypto',
+        'principal': 'principal_crypto',
+        'payoff_amount': 'payoff_amount_crypto',
+    }
+    df = df.rename(columns=rename_map)
+
+    # --- Convert Decimal → float for crypto columns ---
+    crypto_cols = ['debit_crypto', 'credit_crypto', 'principal_crypto', 'payoff_amount_crypto']
+    for col in crypto_cols:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: float(x) if pd.notna(x) else 0.0)
+
+    # --- Add eth_usd_price ---
+    df['eth_usd_price'] = eth_usd_price
+
+    # --- Compute USD columns ---
+    for crypto_col, usd_col in [
+        ('debit_crypto', 'debit_USD'),
+        ('credit_crypto', 'credit_USD'),
+        ('principal_crypto', 'principal_USD'),
+        ('payoff_amount_crypto', 'payoff_amount_USD'),
+    ]:
+        if crypto_col in df.columns:
+            df[usd_col] = df.apply(
+                lambda row, cc=crypto_col: (
+                    float(row[cc])
+                    if str(row.get('cryptocurrency', '')).upper() in _STABLECOINS
+                    else float(row[cc]) * eth_usd_price
+                ),
+                axis=1,
+            )
+
+    # --- Add empty placeholder columns ---
+    for col in ['origination_fee', 'net_origination_fee', 'source_file', 'notes']:
+        if col not in df.columns:
+            df[col] = ''
+
+    # --- Ensure fund_role exists ---
+    if 'fund_role' not in df.columns:
+        df['fund_role'] = ''
+
+    # --- Drop internal / extra columns ---
+    internal_cols = [c for c in df.columns if c.startswith('_')]
+    extra_cols = [
+        'accrued_interest', 'is_continuation', 'v2_inferred',
+        'inferred_old_principal', 'transfer_outflows', 'transfer_proceeds',
+        'accrual_id', 'accrual_date', 'journal_date', 'is_partial_day',
+        'accrual_start_ts', 'accrual_end_ts', 'seconds_in_row',
+        'is_partial_reversal', 'original_accrual_id', 'reversal_fraction',
+        'is_reversal', 'reverses_accrual_id', 'note',
+    ]
+    drop_cols = [c for c in (internal_cols + extra_cols) if c in df.columns]
+    df = df.drop(columns=drop_cols, errors='ignore')
+
+    # --- Fill NaN with '' for string-like columns ---
+    string_cols = [
+        'counterparty_fund_id', 'origination_fee', 'net_origination_fee',
+        'source_file', 'notes', 'fund_role',
+    ]
+    for col in string_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna('')
+
+    # --- Ensure all target columns exist ---
+    for col in CSV_COLUMNS:
+        if col not in df.columns:
+            df[col] = ''
+
+    # --- Reorder to exact target column order ---
+    df = df[CSV_COLUMNS]
+
+    # --- Sort by date ---
+    df = df.sort_values('date').reset_index(drop=True)
+
+    return df
 
 
 # ============================================================================

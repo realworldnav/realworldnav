@@ -403,6 +403,53 @@ class PriceService:
         
         return current_prices
     
+    def get_prices_by_contract(
+        self,
+        contract_addresses: List[str],
+        platform: str = "ethereum",
+        vs_currency: str = "usd",
+    ) -> Dict[str, Decimal]:
+        """Batch-fetch current USD prices by contract address via CoinGecko.
+
+        Uses /simple/token_price/{platform} endpoint.  Up to 100 addresses per
+        call.  Returns ``{lowercase_contract: Decimal_price}`` for every
+        address that CoinGecko recognises; missing addresses are omitted.
+        """
+        if not contract_addresses:
+            return {}
+
+        results: Dict[str, Decimal] = {}
+        # CoinGecko free tier has URL length limits; 25 addresses keeps URLs safe
+        batch_size = 25
+        for i in range(0, len(contract_addresses), batch_size):
+            batch = contract_addresses[i : i + batch_size]
+            addrs_str = ",".join(a.lower() for a in batch)
+
+            cache_key = f"contract_prices:{platform}:{addrs_str}"
+            cached = self.cache.get(cache_key, CACHE_TTL_PRICES)
+            if cached is not None:
+                results.update(cached)
+                continue
+
+            data = self.coingecko._make_request(
+                f"/simple/token_price/{platform}",
+                {
+                    "contract_addresses": addrs_str,
+                    "vs_currencies": vs_currency,
+                },
+            )
+            batch_results: Dict[str, Decimal] = {}
+            if data:
+                for addr, price_info in data.items():
+                    if vs_currency in price_info:
+                        batch_results[addr.lower()] = Decimal(str(price_info[vs_currency]))
+
+            self.cache.set(cache_key, batch_results)
+            results.update(batch_results)
+
+        logger.info(f"Contract price lookup: {len(results)}/{len(contract_addresses)} priced")
+        return results
+
     def clear_cache(self) -> None:
         """Clear all cached data"""
         self.cache.clear()
@@ -441,3 +488,13 @@ def get_current_price(symbol: str, vs_currency: str = 'usd') -> Optional[Decimal
     """Convenience function to get single price"""
     service = get_price_service()
     return service.get_current_price(symbol, vs_currency)
+
+
+def get_prices_by_contract(
+    contract_addresses: List[str],
+    platform: str = "ethereum",
+    vs_currency: str = "usd",
+) -> Dict[str, Decimal]:
+    """Convenience function to get prices by contract address"""
+    service = get_price_service()
+    return service.get_prices_by_contract(contract_addresses, platform, vs_currency)

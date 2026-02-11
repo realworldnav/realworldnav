@@ -51,12 +51,12 @@ def general_ledger_v2_ui():
             }
             /* Bright colors for dark header background */
             .gl2-header .gl2-success { color: #4ade80 !important; }
-            .gl2-header .gl2-danger { color: #f87171 !important; }
+            .gl2-header .gl2-credit { color: #818cf8 !important; }
             .gl2-header .gl2-warning { color: #fbbf24 !important; }
             .gl2-header .gl2-info { color: #38bdf8 !important; }
             /* Standard colors for light backgrounds */
             .gl2-success { color: #16a34a; }
-            .gl2-danger { color: #dc2626; }
+            .gl2-credit { color: #4f46e5; }
             .gl2-warning { color: #d97706; }
             .gl2-info { color: #0284c7; }
             .gl2-toolbar {
@@ -81,10 +81,10 @@ def general_ledger_v2_ui():
                 background-color: rgba(40, 167, 69, 0.05);
             }
             .entry-row-credit {
-                background-color: rgba(220, 53, 69, 0.05);
+                background-color: rgba(79, 70, 229, 0.05);
             }
             .balance-positive { color: #16a34a; font-weight: 600; }
-            .balance-negative { color: #dc2626; font-weight: 600; }
+            .balance-negative { color: #475569; font-weight: 600; }
             .tb-category-header {
                 background-color: #e9ecef;
                 font-weight: 600;
@@ -168,7 +168,7 @@ def general_ledger_v2_ui():
                             class_="gl2-stat-box"
                         ),
                         ui.div(
-                            ui.div(ui.output_text("gl2_header_credits"), class_="gl2-stat-value gl2-danger"),
+                            ui.div(ui.output_text("gl2_header_credits"), class_="gl2-stat-value gl2-credit"),
                             ui.div("Total Credits", class_="gl2-stat-label"),
                             class_="gl2-stat-box"
                         ),
@@ -305,7 +305,7 @@ def journal_entries_tab():
                         ui.input_action_button(
                             "gl2_delete_selected",
                             ui.HTML('<i class="bi bi-trash"></i> Delete Selected'),
-                            class_="btn-outline-danger btn-sm me-2"
+                            class_="btn-outline-dark btn-sm me-2"
                         ),
                         ui.input_action_button(
                             "gl2_reverse_selected",
@@ -387,9 +387,10 @@ def account_ledger_tab():
 
 
 def trial_balance_tab():
-    """Trial Balance tab - beautiful professional TB format."""
+    """Trial Balance tab - production-grade TB with pivot/flat/wallet views.
+    Ported from production notebook: realworld_nav_drip_capital_TB_production_v1.ipynb"""
     return ui.div(
-        # Custom CSS for beautiful Trial Balance
+        # Custom CSS for Trial Balance
         ui.tags.style("""
             .tb-container {
                 background: #fff;
@@ -468,11 +469,12 @@ def trial_balance_tab():
                 font-weight: 700;
             }
             .tb-summary-value.debit { color: #059669; }
-            .tb-summary-value.credit { color: #dc2626; }
+            .tb-summary-value.credit { color: #4f46e5; }
             .tb-summary-value.balanced { color: #059669; }
-            .tb-summary-value.unbalanced { color: #dc2626; }
+            .tb-summary-value.unbalanced { color: #b45309; }
             .tb-table-container {
                 padding: 0;
+                overflow-x: auto;
             }
             .tb-table {
                 width: 100%;
@@ -489,8 +491,10 @@ def trial_balance_tab():
                 text-transform: uppercase;
                 font-size: 0.75rem;
                 letter-spacing: 0.5px;
+                white-space: nowrap;
             }
-            .tb-table thead th.text-right {
+            .tb-table thead th.text-right,
+            .tb-table thead th[style*="text-align: right"] {
                 text-align: right;
             }
             .tb-table tbody tr {
@@ -502,6 +506,7 @@ def trial_balance_tab():
             }
             .tb-table tbody td {
                 padding: 12px 20px;
+                white-space: nowrap;
             }
             .tb-table tbody td.text-right {
                 text-align: right;
@@ -531,8 +536,11 @@ def trial_balance_tab():
                 font-weight: 500;
             }
             .tb-account-row td.credit-value {
-                color: #dc2626;
+                color: #4f46e5;
                 font-weight: 500;
+            }
+            .tb-account-row td.fw-bold {
+                font-weight: 700;
             }
             .tb-total-row {
                 background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
@@ -575,8 +583,8 @@ def trial_balance_tab():
                 color: #059669;
             }
             .tb-balanced-badge.unbalanced {
-                background: #fee2e2;
-                color: #dc2626;
+                background: #fef3c7;
+                color: #b45309;
             }
         """),
 
@@ -592,24 +600,30 @@ def trial_balance_tab():
             # Controls
             ui.div(
                 ui.div(
-                    ui.span("As of Date", class_="tb-control-label"),
-                    ui.input_date("gl2_tb_as_of_date", None, value=date.today()),
+                    ui.span("Period", class_="tb-control-label"),
+                    ui.input_select("gl2_tb_period", None, choices={}, width="180px"),
                     class_="tb-control-group"
                 ),
                 ui.div(
-                    ui.span("Group By", class_="tb-control-label"),
-                    ui.input_select("gl2_tb_grouping", None, choices={
-                        "account": "Individual Accounts",
-                        "category": "Account Category"
-                    }, selected="account", width="180px"),
+                    ui.span("Fund", class_="tb-control-label"),
+                    ui.input_select("gl2_tb_fund", None, choices={"": "All Funds"}, width="220px"),
+                    class_="tb-control-group"
+                ),
+                ui.div(
+                    ui.span("View", class_="tb-control-label"),
+                    ui.input_select("gl2_tb_view", None, choices={
+                        "pivot": "Pivot (Funds as Columns)",
+                        "flat": "Flat Account Detail",
+                        "wallet": "By Wallet Breakdown"
+                    }, selected="pivot", width="200px"),
                     class_="tb-control-group"
                 ),
                 ui.div(
                     ui.span("Currency", class_="tb-control-label"),
                     ui.input_select("gl2_tb_currency", None, choices={
-                        "crypto": "Crypto Units",
+                        "crypto": "Crypto",
                         "usd": "USD"
-                    }, selected="crypto", width="140px"),
+                    }, selected="crypto", width="120px"),
                     class_="tb-control-group"
                 ),
                 ui.div(style="flex: 1;"),
@@ -641,17 +655,23 @@ def trial_balance_tab():
                 class_="tb-summary"
             ),
 
+            # Fund balance cards
+            ui.output_ui("gl2_tb_fund_balance_cards"),
+
             # Table
             ui.div(
                 ui.output_ui("gl2_trial_balance_display"),
                 class_="tb-table-container"
             ),
 
+            # Unnatural balance alerts
+            ui.output_ui("gl2_tb_unnatural_alerts"),
+
             # Footer
             ui.div(
                 ui.div(
                     ui.HTML('<i class="bi bi-info-circle me-1"></i>'),
-                    "Accounts with zero balance are included for completeness",
+                    "Cumulative month-end trial balance",
                     class_="tb-footer-info"
                 ),
                 ui.output_ui("gl2_tb_balance_badge"),
@@ -736,7 +756,7 @@ def new_entry_tab():
                         ),
                         ui.div(
                             ui.tags.small("Total Credits", class_="text-muted d-block"),
-                            ui.span(class_="fs-4 fw-bold gl2-danger"),
+                            ui.span(class_="fs-4 fw-bold gl2-credit"),
                             ui.output_text("gl2_new_entry_total_credits", inline=True),
                             class_="text-center"
                         ),

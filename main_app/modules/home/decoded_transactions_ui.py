@@ -56,7 +56,7 @@ PLATFORM_COLORS = {
     "arcade": "success",
     "nftfi": "info",
     "gondi": "warning",
-    "zharta": "danger",
+    "zharta": "dark",
     "generic": "secondary",
     "unknown": "dark",
 }
@@ -80,6 +80,9 @@ CATEGORY_NAMES = {
 def decoded_transactions_ui():
     """Decoded Transactions tab with compact card grid"""
     return ui.div(
+        # Decoder init status banner (shows errors/warnings/retrying)
+        ui.output_ui("decoder_status_banner"),
+
         # Stats row
         ui.layout_columns(
             ui.value_box(
@@ -336,17 +339,21 @@ def transaction_card_ui(decoded: Dict[str, Any]) -> ui.Tag:
     else:
         posting_status = 'review_queue'
 
-    # Calculate display value from journal entries (actual amounts, not tx.value)
-    # Sum up all debit amounts from journal entries as the transaction amount
+    # Use formatted_journal_summary if available (richer data from 37-column format)
+    fj_summary = decoded.get('formatted_journal_summary')
     display_value = 0.0
-    display_asset = "ETH"  # Default asset
-    if journal_entries:
+    display_asset = "ETH"
+
+    if fj_summary:
+        display_value = fj_summary.get('total_debit', 0)
+        display_asset = fj_summary.get('cryptocurrency', 'ETH')
+    elif journal_entries:
+        # Fallback: calculate from JournalEntry entries
         for je in journal_entries:
             entries = je.get('entries', [])
             for entry in entries:
                 if entry.get('type') == 'DEBIT':
                     display_value += float(entry.get('amount', 0))
-                    # Get asset from the entry (prefer non-ETH assets for display)
                     entry_asset = entry.get('asset', 'ETH')
                     if entry_asset and entry_asset != 'ETH':
                         display_asset = entry_asset

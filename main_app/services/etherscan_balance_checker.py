@@ -29,7 +29,7 @@ class EtherscanBalanceChecker:
         """Initialize with Etherscan API key."""
         self.api_key = api_key
         self.session = requests.Session()
-        self.rate_limit_delay = 0.2  # 200ms between requests to respect rate limits
+        self.rate_limit_delay = 0.35  # ~3 requests per second (Etherscan free tier limit)
         
     def get_eth_balance(self, wallet_address: str) -> Decimal:
         """
